@@ -1377,6 +1377,8 @@ gc.$(OBJEXT): {$(VPATH)}missing.h
 gc.$(OBJEXT): {$(VPATH)}node.h
 gc.$(OBJEXT): {$(VPATH)}oniguruma.h
 gc.$(OBJEXT): {$(VPATH)}probes.h
+gc.$(OBJEXT): {$(VPATH)}pool_alloc.h
+gc.$(OBJEXT): {$(VPATH)}pool_alloc.inc.h
 gc.$(OBJEXT): {$(VPATH)}re.h
 gc.$(OBJEXT): {$(VPATH)}regenc.h
 gc.$(OBJEXT): {$(VPATH)}regex.h
@@ -2075,6 +2077,7 @@ st.$(OBJEXT): {$(VPATH)}internal.h
 st.$(OBJEXT): {$(VPATH)}io.h
 st.$(OBJEXT): {$(VPATH)}missing.h
 st.$(OBJEXT): {$(VPATH)}oniguruma.h
+st.$(OBJEXT): {$(VPATH)}pool_alloc.h
 st.$(OBJEXT): {$(VPATH)}st.c
 st.$(OBJEXT): {$(VPATH)}st.h
 st.$(OBJEXT): {$(VPATH)}subst.h

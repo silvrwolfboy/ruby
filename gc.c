@@ -21,6 +21,7 @@
 #include "eval_intern.h"
 #include "vm_core.h"
 #include "gc.h"
+#include "pool_alloc.h"
 #include "constant.h"
 #include "ruby_atomic.h"
 #include "probes.h"
@@ -454,6 +455,23 @@ enum gc_stat {
     gc_stat_sweeping
 };
 
+#ifdef POOL_ALLOC_API
+#define POOL_ALLOC_PART 1
+#include "pool_alloc.inc.h"
+#undef POOL_ALLOC_PART
+
+typedef struct pool_layout_t pool_layout_t;
+struct pool_layout_t {
+    pool_header
+	p6,   /* st_table && st_table_entry */
+	p11;  /* st_table.bins init size */
+} pool_layout = {
+    INIT_POOL(void*[6]),
+    INIT_POOL(void*[11])
+};
+static void pool_finalize_header(pool_header *header);
+#endif
+
 typedef struct rb_objspace {
     struct {
 	size_t limit;
@@ -484,6 +502,10 @@ typedef struct rb_objspace {
 
     rb_heap_t eden_heap;
     rb_heap_t tomb_heap; /* heap for zombies and ghosts */
+
+#ifdef POOL_ALLOC_API
+    pool_layout_t *pool_headers;
+#endif
 
     struct {
 	rb_atomic_t finalizing;
@@ -667,7 +689,12 @@ struct heap_page {
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 #define rb_objspace (*GET_VM()->objspace)
 #else
-static rb_objspace_t rb_objspace = {{GC_MALLOC_LIMIT_MIN}};
+static rb_objspace_t rb_objspace = {
+    {GC_MALLOC_LIMIT_MIN}
+#ifdef POOL_ALLOC_API
+    , &pool_layout
+#endif
+};
 #endif
 
 #define ruby_initial_gc_stress	gc_params.gc_stress
@@ -1199,6 +1226,10 @@ rb_objspace_alloc(void)
     rb_objspace_t *objspace = calloc(1, sizeof(rb_objspace_t));
     malloc_limit = gc_params.malloc_limit_min;
 
+#ifdef POOL_ALLOC_API
+    objspace->pool_headers = (pool_layout_t*) malloc(sizeof(pool_layout));
+    memcpy(objspace->pool_headers, &pool_layout, sizeof(pool_layout));
+#endif
     return objspace;
 }
 #endif
@@ -1238,6 +1269,13 @@ rb_objspace_free(rb_objspace_t *objspace)
 	objspace->eden_heap.pages = NULL;
     }
     free_stack_chunks(&objspace->mark_stack);
+#ifdef POOL_ALLOC_API
+    if (objspace->pool_headers) {
+        pool_finalize_header(&objspace->pool_headers->p6);
+        pool_finalize_header(&objspace->pool_headers->p11);
+        free(objspace->pool_headers);
+    }
+#endif
     free(objspace);
 }
 #endif
@@ -7534,6 +7572,28 @@ ruby_mimfree(void *ptr)
 #endif
     free(mem);
 }
+
+#ifdef POOL_ALLOC_API
+#define POOL_ALLOC_PART 2
+#include "pool_alloc.inc.h"
+#undef POOL_ALLOC_PART
+#endif
+
+void
+ruby_xpool_free(void *ptr)
+{
+    pool_free_entry((void**)ptr);
+}
+
+#define DEFINE_POOL_MALLOC(pnts) \
+    void * \
+    ruby_xpool_malloc_##pnts##p() \
+    { \
+	return pool_alloc_entry(&rb_objspace.pool_headers->p##pnts); \
+    }
+DEFINE_POOL_MALLOC(6)
+DEFINE_POOL_MALLOC(11)
+#undef DEFINE_POOL_MALLOC
 
 #if MALLOC_ALLOCATED_SIZE
 /*
