@@ -2267,7 +2267,12 @@ rb_enc_cr_str_buf_cat(VALUE str, const char *ptr, long len,
     if (ptr_cr_ret)
         *ptr_cr_ret = ptr_cr;
 
-    if (str_encindex != ptr_encindex &&
+    if (rb_encoding_compat &&
+        ((str_encindex == rb_utf8_encindex() && ptr_encindex == rb_ascii8bit_encindex()) ||
+         (str_encindex == rb_ascii8bit_encindex() && ptr_encindex == rb_utf8_encindex()))) {
+        /* fall through to conditional below */
+    }
+    else if (str_encindex != ptr_encindex &&
         str_cr != ENC_CODERANGE_7BIT &&
         ptr_cr != ENC_CODERANGE_7BIT) {
 	str_enc = rb_enc_from_index(str_encindex);
@@ -2277,7 +2282,14 @@ rb_enc_cr_str_buf_cat(VALUE str, const char *ptr, long len,
 		 rb_enc_name(str_enc), rb_enc_name(ptr_enc));
     }
 
-    if (str_cr == ENC_CODERANGE_UNKNOWN) {
+    if (rb_encoding_compat &&
+        str_encindex != ptr_encindex &&
+        str_cr != ENC_CODERANGE_7BIT && ptr_cr != ENC_CODERANGE_7BIT) {
+        /* from fall through above */
+        res_encindex = rb_ascii8bit_encindex();
+        res_cr = ENC_CODERANGE_VALID;
+    }
+    else if (str_cr == ENC_CODERANGE_UNKNOWN) {
         res_encindex = str_encindex;
         res_cr = ENC_CODERANGE_UNKNOWN;
     }
@@ -2471,6 +2483,8 @@ rb_str_hash(VALUE str)
     if (e && rb_enc_str_coderange(str) == ENC_CODERANGE_7BIT) {
 	e = 0;
     }
+    if (rb_encoding_compat && (e == rb_utf8_encindex() || e == rb_ascii8bit_encindex()))
+      e = 0;
     return rb_memhash((const void *)RSTRING_PTR(str), RSTRING_LEN(str)) ^ e;
 }
 
@@ -2526,6 +2540,11 @@ rb_str_comparable(VALUE str1, VALUE str2)
     if (rc2 == ENC_CODERANGE_7BIT) {
 	if (rb_enc_asciicompat(rb_enc_from_index(idx1)))
 	    return TRUE;
+    }
+    if (rb_encoding_compat &&
+        ((idx1 == rb_utf8_encindex() && idx2 == rb_ascii8bit_encindex()) ||
+         (idx1 == rb_ascii8bit_encindex() && idx2 == rb_utf8_encindex()))) {
+        return TRUE;
     }
     return FALSE;
 }
@@ -6469,7 +6488,8 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
 	char *sptr = RSTRING_PTR(spat);
 	long slen = RSTRING_LEN(spat);
 
-	mustnot_broken(str);
+	if (!(rb_encoding_compat && STR_ENC_GET(str) == rb_utf8_encoding()))
+	    mustnot_broken(str);
 	mustnot_broken(spat);
 	enc = rb_enc_check(str, spat);
 	while (ptr < eptr &&
