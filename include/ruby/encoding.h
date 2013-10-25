@@ -108,6 +108,7 @@ rb_enc_coderange_clean_p(int cr)
 #define ENCODING_CODERANGE_SET(obj, encindex, cr) RB_ENCODING_CODERANGE_SET(obj, encindex, cr)
 
 typedef const OnigEncodingType rb_encoding;
+extern int rb_encoding_compat;
 
 int rb_char_to_option_kcode(int c, int *option, int *kcode);
 
