@@ -2307,6 +2307,7 @@ rb_get_method_state_version()
 void
 rb_inc_method_state_version()
 {
+    fprintf(stderr, "GLOBAL METHOD CACHE INVALIDATION at %s:%d\n", rb_sourcefile(), rb_sourceline());
     ruby_method_global_state_version++;
 }
 
@@ -2319,6 +2320,7 @@ rb_get_constant_state_version()
 void
 rb_inc_constant_state_version()
 {
+    fprintf(stderr, "GLOBAL CONSTANT CACHE INVALIDATION at %s:%d\n", rb_sourcefile(), rb_sourceline());
     ruby_constant_global_state_version++;
 }
 
