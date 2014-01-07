@@ -642,6 +642,8 @@ class TestRingServer < Test::Unit::TestCase
       v6mc = @rs.make_socket('ff02::1')
     rescue Errno::EADDRNOTAVAIL
       return # IPv6 address for multicast not available
+    rescue Errno::ENODEV
+      return # no multicast (http://www-mice.cs.ucl.ac.uk/multimedia/software/documentation/ipv6.html#mroute)
     end
 
     if Socket.const_defined?(:SO_REUSEPORT) then
@@ -678,6 +680,8 @@ class TestRingServer < Test::Unit::TestCase
       @rs = Rinda::RingServer.new(@ts, [['ff02::1', '::1', 0]], @port)
     rescue Errno::EADDRNOTAVAIL
       return # IPv6 address for multicast not available
+    rescue Errno::ENODEV
+      return # no multicast (http://www-mice.cs.ucl.ac.uk/multimedia/software/documentation/ipv6.html#mroute)
     end
 
     v6mc = @rs.instance_variable_get('@sockets').first
