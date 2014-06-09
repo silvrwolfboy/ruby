@@ -1196,6 +1196,20 @@ heap_add_pages(rb_objspace_t *objspace, rb_heap_t *heap, size_t add)
     heap_pages_increment = 0;
 }
 
+static size_t
+heap_extend_pages(rb_objspace_t *objspace)
+{
+    size_t used = heap_pages_used - heap_tomb->page_length;
+    size_t next_used_limit = (size_t)(used * gc_params.growth_factor);
+
+    if (gc_params.growth_max_slots > 0) {
+        size_t max_used_limit = (size_t)(used + gc_params.growth_max_slots/HEAP_OBJ_LIMIT);
+        if (next_used_limit > max_used_limit) next_used_limit = max_used_limit;
+    }
+
+    return next_used_limit - used;
+}
+
 static void
 heap_set_increment(rb_objspace_t *objspace, size_t minimum_limit)
 {
