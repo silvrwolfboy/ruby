@@ -1938,7 +1938,7 @@ rb_iseq_clone(VALUE iseqval, VALUE newcbase)
     }
     if (newcbase) {
 	ISEQ_SET_CREF(iseq1, NEW_CREF(newcbase));
-	RB_OBJ_WRITE_COMPRESSED(iseq1->cref_stack, NODE_GET_REFINEMENTS_ADDR(iseq1->cref_stack), NODE_GET_REFINEMENTS(iseq0->cref_stack));
+	RB_OBJ_WRITE_REFINEMENTS(iseq1->cref_stack, NODE_GET_REFINEMENTS_ADDR(iseq1->cref_stack), NODE_GET_REFINEMENTS(iseq0->cref_stack));
 	iseq1->cref_stack->nd_visi = iseq0->cref_stack->nd_visi;
 	if (iseq0->cref_stack->nd_next) {
 	    RB_OBJ_WRITE(iseq1->cref_stack, &iseq1->cref_stack->nd_next, iseq0->cref_stack->nd_next);

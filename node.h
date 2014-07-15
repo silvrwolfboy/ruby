@@ -237,8 +237,12 @@ enum node_type {
 };
 
 typedef struct RNode {
-    uint32_t flags;
+    rb_flags_t flags;
+#if RUBY_GC_COMPRESSED_OBJECTS
     VALUE_COMPRESSED nd_reserved;		/* ex nd_file */
+#else
+    VALUE nd_reserved;                          /* ex nd_file */
+#endif
     union {
 	struct RNode *node;
 	ID id;
@@ -289,9 +293,16 @@ typedef struct RNode {
 #define nd_set_line(n,l) \
     RNODE(n)->flags=((RNODE(n)->flags&~(-1<<NODE_LSHIFT))|(((l)&NODE_LMASK)<<NODE_LSHIFT))
 
-#define NODE_GET_REFINEMENTS(nd) (UNCOMPRESS_VALUE(nd->nd_reserved))
 #define NODE_GET_REFINEMENTS_ADDR(nd) (&nd->nd_reserved)
+#if RUBY_GC_COMPRESSED_OBJECTS
+#define NODE_GET_REFINEMENTS(nd) (UNCOMPRESS_VALUE(nd->nd_reserved))
 #define NODE_SET_REFINEMENTS(nd, val) (nd->nd_reserved = COMPRESS_VALUE(val))
+#define RB_OBJ_WRITE_REFINEMENTS RB_OBJ_WRITE_COMPRESSED
+#else
+#define NODE_GET_REFINEMENTS(nd) (nd->nd_reserved)
+#define NODE_SET_REFINEMENTS(nd, val) (nd->nd_reserved = (val))
+#define RB_OBJ_WRITE_REFINEMENTS RB_OBJ_WRITE
+#endif
 
 #define nd_head  u1.node
 #define nd_alen  u2.argc

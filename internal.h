@@ -617,16 +617,27 @@ VALUE rb_obj_equal(VALUE obj1, VALUE obj2);
 
 struct RBasicRaw {
     rb_flags_t flags;
+#if RUBY_GC_COMPRESSED_OBJECTS
     VALUE_COMPRESSED klass;
+#else
+    VALUE klass;
+#endif
 };
 
 #define RBASIC_CLEAR_CLASS(obj)        (((struct RBasicRaw *)((VALUE)(obj)))->klass = 0)
+#if RUBY_GC_COMPRESSED_OBJECTS
 #define RBASIC_SET_CLASS_RAW(obj, cls) (((struct RBasicRaw *)((VALUE)(obj)))->klass = COMPRESS_VALUE(cls))
 #define RBASIC_SET_CLASS(obj, cls)     do { \
     VALUE _obj_ = (obj); \
     RB_OBJ_WRITE_COMPRESSED(_obj_, &((struct RBasicRaw *)(_obj_))->klass, cls); \
 } while (0)
-
+#else
+#define RBASIC_SET_CLASS_RAW(obj, cls) (((struct RBasicRaw *)((VALUE)(obj)))->klass = (cls))
+#define RBASIC_SET_CLASS(obj, cls)     do { \
+    VALUE _obj_ = (obj); \
+    RB_OBJ_WRITE(_obj_, &((struct RBasicRaw *)(_obj_))->klass, cls); \
+} while (0)
+#endif
 /* parse.y */
 VALUE rb_parser_get_yydebug(VALUE);
 VALUE rb_parser_set_yydebug(VALUE, VALUE);

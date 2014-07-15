@@ -3885,6 +3885,17 @@ else
 fi
 AC_SUBST(USE_RUBYGEMS)
 
+AS_CASE(["$target_os"],
+    [linux*], [
+	AC_ARG_ENABLE(compressed-objects,
+	    AS_HELP_STRING([--enable-compressed-objects], [enable compressed ruby heap objects]),
+	    [
+		AC_DEFINE(RUBY_GC_HEAP_SLAB_ALLOCATOR, 1)
+		AC_DEFINE(RUBY_GC_COMPRESSED_OBJECTS, 1)
+	    ])
+    ],
+    [])
+
 arch_hdrdir="${EXTOUT}/include/${arch}/ruby"
 AS_MKDIR_P("${arch_hdrdir}")
 config_h="${arch_hdrdir}/config.h"

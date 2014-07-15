@@ -744,16 +744,26 @@ VALUE rb_obj_setup(VALUE obj, VALUE klass, VALUE type);
 #define RGENGC_WB_PROTECTED_NODE_CREF 1
 #endif
 
+#ifdef RUBY_GC_COMPRESSED_OBJECTS
 typedef uint32_t rb_flags_t;
 typedef uint32_t VALUE_COMPRESSED;
+typedef VALUE_COMPRESSED rb_rbasic_class_t;
 
 /* We expect that VALUEs are 32-byte aligned and at an address < 0x2000000000 (2^37)*/
 #define COMPRESS_VALUE(v) ((VALUE_COMPRESSED) (v == Qnil ? Qnil : ((VALUE)(v) >> 5)))
 #define UNCOMPRESS_VALUE(v) (v == Qnil ? Qnil : ((VALUE) v << 5))
 
+#define RBASIC_CLASS(obj) UNCOMPRESS_VALUE(RBASIC(obj)->klass)
+#else
+typedef VALUE rb_flags_t;
+typedef VALUE rb_rbasic_class_t;
+
+#define RBASIC_CLASS(obj) (RBASIC(obj)->klass)
+#endif
+
 struct RBasic {
     rb_flags_t flags;
-    const VALUE_COMPRESSED klass;
+    rb_rbasic_class_t klass;
 }
 #ifdef __GNUC__
     __attribute__((aligned(sizeof(VALUE))))
@@ -762,8 +772,6 @@ struct RBasic {
 
 VALUE rb_obj_hide(VALUE obj);
 VALUE rb_obj_reveal(VALUE obj, VALUE klass); /* do not use this API to change klass information */
-
-#define RBASIC_CLASS(obj) UNCOMPRESS_VALUE(RBASIC(obj)->klass)
 
 #define ROBJECT_EMBED_LEN_MAX 3
 struct RObject {
@@ -1219,7 +1227,9 @@ void rb_gc_writebarrier_unprotect_promoted(VALUE obj);
  *       correctly.
  */
 #define RB_OBJ_WRITE(a, slot, b)       rb_obj_write((VALUE)(a), (void *)(slot), (VALUE)(b), 0, __FILE__, __LINE__)
+#if RUBY_GC_COMPRESSED_OBJECTS
 #define RB_OBJ_WRITE_COMPRESSED(a, slot, b)       rb_obj_write((VALUE)(a), (void *)(slot), (VALUE)(b), 1, __FILE__, __LINE__)
+#endif
 #define RB_OBJ_WRITTEN(a, oldv, b)     rb_obj_written((VALUE)(a), (VALUE)(oldv), (VALUE)(b), __FILE__, __LINE__)
 
 #ifndef USE_RGENGC_LOGGING_WB_UNPROTECT
@@ -1274,9 +1284,11 @@ rb_obj_write(VALUE a, void *slot, VALUE b, int compressed, RB_UNUSED_VAR(const c
     RGENGC_LOGGING_WRITE(a, slot, b, filename, line);
 #endif
 
+#if RUBY_GC_COMPRESSED_OBJECTS
     if (compressed)
 	*((VALUE_COMPRESSED *) slot) = COMPRESS_VALUE(b);
     else
+#endif
 	*((VALUE *) slot) = b;
 
 #if USE_RGENGC

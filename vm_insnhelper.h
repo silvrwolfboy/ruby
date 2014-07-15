@@ -174,7 +174,7 @@ enum vm_regan_acttype {
 /**********************************************************/
 
 #define COPY_CREF_OMOD(c1, c2) do {  \
-  RB_OBJ_WRITE_COMPRESSED((c1), NODE_GET_REFINEMENTS_ADDR((c1)), NODE_GET_REFINEMENTS((c2))); \
+  RB_OBJ_WRITE_REFINEMENTS((c1), NODE_GET_REFINEMENTS_ADDR((c1)), NODE_GET_REFINEMENTS((c2))); \
   if (!NIL_P(NODE_GET_REFINEMENTS((c2)))) { \
       (c1)->flags |= NODE_FL_CREF_OMOD_SHARED; \
       (c2)->flags |= NODE_FL_CREF_OMOD_SHARED; \
