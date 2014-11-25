@@ -124,6 +124,7 @@ void *xcalloc(size_t,size_t) RUBY_ATTR_ALLOC_SIZE((1,2));
 void *xrealloc(void*,size_t) RUBY_ATTR_ALLOC_SIZE((2));
 void *xrealloc2(void*,size_t,size_t) RUBY_ATTR_ALLOC_SIZE((2,3));
 void xfree(void*);
+void ruby_memnotify(void*,size_t,size_t);
 
 #define STRINGIZE(expr) STRINGIZE0(expr)
 #ifndef STRINGIZE0

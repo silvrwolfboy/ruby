@@ -6192,6 +6192,21 @@ objspace_xfree(rb_objspace_t *objspace, void *ptr, size_t old_size)
     objspace_malloc_increase(objspace, ptr, 0, old_size, MEMOP_TYPE_FREE);
 }
 
+void
+ruby_memnotify(void *mem, size_t new_size, size_t old_size)
+{
+    enum memop_type t;
+
+    if (new_size == 0)
+        t = MEMOP_TYPE_FREE;
+    else if (old_size == 0)
+        t = MEMOP_TYPE_MALLOC;
+    else
+        t = MEMOP_TYPE_REALLOC;
+
+    objspace_malloc_increase(&rb_objspace, mem, new_size, old_size, t);
+}
+
 void *
 ruby_xmalloc(size_t size)
 {
