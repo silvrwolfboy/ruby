@@ -969,8 +969,8 @@ rb_hash_index(VALUE hash, VALUE value)
     return rb_hash_key(hash, value);
 }
 
-VALUE
-rb_hash_delete(VALUE hash, VALUE key)
+static VALUE
+hash_delete(VALUE hash, VALUE key)
 {
     st_data_t ktmp = (st_data_t)key, val;
 
@@ -985,6 +985,17 @@ rb_hash_delete(VALUE hash, VALUE key)
     else if (st_delete(RHASH(hash)->ntbl, &ktmp, &val))
 	return (VALUE)val;
     return Qundef;
+}
+
+VALUE
+rb_hash_delete(VALUE hash, VALUE key)
+{
+    VALUE val;
+
+    rb_hash_modify_check(hash);
+    val = hash_delete(hash, key);
+    if (val != Qundef) return val;
+    return Qnil;
 }
 
 /*
@@ -1011,7 +1022,7 @@ rb_hash_delete_m(VALUE hash, VALUE key)
     VALUE val;
 
     rb_hash_modify_check(hash);
-    val = rb_hash_delete(hash, key);
+    val = hash_delete(hash, key);
     if (val != Qundef) return val;
     if (rb_block_given_p()) {
 	return rb_yield(key);
