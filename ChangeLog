@@ -1,3 +1,26 @@
+Thu Jan  1 08:29:55 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* cygwin/GNUmakefile.in (EXTOBJS): override to add resource files
+	  always.  [ruby-core:67153] [Bug #10657]
+
+Wed Dec 31 15:26:46 2014  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (f_kwrest, new_args_tail_gen): unnamed rest keyword and
+	  keywords bits arguments should be unique.  since internal IDs
+	  depend on the local variable index in the current scope, new ID
+	  should be made before popping those vtables.
+	  [ruby-core:67157] [Bug #10659]
+
+Wed Dec 31 14:11:58 2014  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
+
+	* ext/tk/lib/tkextlib/tcllib/plotchart.rb: fix to invoke correct function
+	  of tcllib. Patch by @zalt50 [fix GH-787]
+
+Wed Dec 31 13:26:22 2014  Eric Wong  <e@80x24.org>
+
+	* vm_core.h (rb_vm_living_threads_insert): preserve order
+	  [Bug #10660] [ruby-core:67154] [ruby-core:67159]
+
 Fri Dec 26 15:42:27 2014  NAKAMURA Usaku  <usa@ruby-lang.org>
 
 	* tool/rbinstall.rb: skip installing bundle gems if zlib is unavailable.
