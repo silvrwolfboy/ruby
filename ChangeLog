@@ -1,8 +1,30 @@
+Fri Jan 16 16:49:04 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
+
+	* lib/net/http.rb (Net::HTTP#send_request): there is no response body
+	  with HEAD request. Patch by @rodrigosaito [fix GH-520]
+
+Fri Jan 16 16:49:04 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
+
+	* test/net/http/test_http.rb (_test_send_request__HEAD): Added
+	  failing test for send_request with HEAD method.
+
+Fri Jan 16 14:56:08 2015  Eric Wong  <e@80x24.org>
+
+	* symbol.c (rb_gc_free_dsymbol): delete from global fstr hash
+	* test/ruby/test_symbol.rb (test_symbol_fstr_leak): test for bug
+	  [ruby-core:67268] [Bug #10686]
+
+Fri Jan 16 14:20:52 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* vm_args.c (keyword_hash_p): fix non-symbol keys hash.
+	  rb_extract_keywords() returns 0 not Qnil when no symbol keys is
+	  included.
+
 Fri Jan 16 11:06:17 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
 
 	* lib/unicode_normalize.rb: typo fix. [ci skip]
 	  [ruby-dev:48794][misc #10675]
-
+	  included.  [ruby-core:67264] [Bug #10685]
 Fri Jan 16 11:04:35 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
 
 	* re.c (unescape_nonascii): append excape sequence as-is not
