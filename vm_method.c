@@ -743,12 +743,17 @@ get_original_method_entry(VALUE refinements,
 			  const rb_method_entry_t *me,
 			  VALUE *defined_class_ptr)
 {
+    VALUE super;
+
     if (me->def->body.orig_me) {
 	return me->def->body.orig_me;
     }
+    else if (!(super = RCLASS_SUPER(me->klass))) {
+	return 0;
+    }
     else {
 	rb_method_entry_t *tmp_me;
-	tmp_me = rb_method_entry(RCLASS_SUPER(me->klass), me->called_id,
+	tmp_me = rb_method_entry(super, me->called_id,
 				 defined_class_ptr);
 	return rb_resolve_refined_method(refinements, tmp_me,
 					 defined_class_ptr);
@@ -900,7 +905,9 @@ rb_export_method(VALUE klass, ID name, rb_method_flag_t noex)
 	me = search_method(rb_cObject, name, &defined_class);
     }
 
-    if (UNDEFINED_METHOD_ENTRY_P(me)) {
+    if (UNDEFINED_METHOD_ENTRY_P(me) ||
+	(me->def->type == VM_METHOD_TYPE_REFINED &&
+	 UNDEFINED_METHOD_ENTRY_P(me->def->body.orig_me))) {
 	rb_print_undef(klass, name, 0);
     }
 
@@ -1346,7 +1353,9 @@ rb_alias(VALUE klass, ID name, ID def)
   again:
     orig_me = search_method(klass, def, &defined_class);
 
-    if (UNDEFINED_METHOD_ENTRY_P(orig_me)) {
+    if (UNDEFINED_METHOD_ENTRY_P(orig_me) ||
+	(orig_me->def->type == VM_METHOD_TYPE_REFINED &&
+	 UNDEFINED_METHOD_ENTRY_P(orig_me->def->body.orig_me))) {
 	if ((!RB_TYPE_P(klass, T_MODULE)) ||
 	    (orig_me = search_method(rb_cObject, def, 0),
 	     UNDEFINED_METHOD_ENTRY_P(orig_me))) {

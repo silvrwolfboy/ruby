@@ -670,8 +670,8 @@ class Resolv
         timelimit = start + tout
         begin
           sender.send
-        rescue Errno::EHOSTUNREACH
-          # multi-homed IPv6 may generate this
+        rescue Errno::EHOSTUNREACH, # multi-homed IPv6 may generate this
+               Errno::ENETUNREACH
           raise ResolvTimeout
         end
         while true
@@ -1236,7 +1236,8 @@ class Resolv
 
       def ==(other) # :nodoc:
         return false unless Name === other
-        return @labels.join == other.to_a.join && @absolute == other.absolute?
+        return false unless @absolute == other.absolute?
+        return @labels == other.to_a
       end
 
       alias eql? == # :nodoc:

@@ -1163,6 +1163,58 @@ class TestRefinement < Test::Unit::TestCase
 
     assert_raise(NoMethodError, bug10106) {Object.new.foo}
     end;
+
+    assert_separately([], <<-"end;")
+    bug10707 = '[ruby-core:67389] [Bug #10707]'
+    module RefinementBug
+      refine BasicObject do
+        def foo
+        end
+      end
+    end
+
+    assert(methods, bug10707)
+    assert_raise(NameError, bug10707) {method(:foo)}
+    end;
+  end
+
+  def test_change_refined_new_method_visibility
+    assert_separately([], <<-"end;")
+    bug10706 = '[ruby-core:67387] [Bug #10706]'
+    module RefinementBug
+      refine Object do
+        def foo
+        end
+      end
+    end
+
+    assert_raise(NameError, bug10706) {private(:foo)}
+    end;
+  end
+
+  def test_alias_refined_method
+    assert_separately([], <<-"end;")
+    bug10731 = '[ruby-core:67523] [Bug #10731]'
+
+    class C
+    end
+
+    module RefinementBug
+      refine C do
+        def foo
+        end
+
+        def bar
+        end
+      end
+    end
+
+    assert_raise(NameError, bug10731) do
+      class C
+        alias foo bar
+      end
+    end
+    end;
   end
 
   private

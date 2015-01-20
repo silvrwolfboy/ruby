@@ -1,3 +1,133 @@
+Tue Jan 20 14:05:08 2015  Masaki Suketa <masaki.suketa@nifty.ne.jp>
+
+	* ext/win32ole/win32ole.c (ole_invoke): avoid SEGV when VT_RECORD
+	  variable is passed by reference. [ruby-dev:48803] [Bug #10697] 
+
+Mon Jan 19 15:45:33 2015  Seiei Higa  <hanachin@gmail.com>
+
+	* vm_method.c (rb_method_entry): if no super class, no original
+	  method entry.  [ruby-core:67389] [Bug #10707]
+
+Mon Jan 19 12:03:59 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* vm_dump.c (rb_vm_bugreport): check by configured result instead
+	  of system name for old FreeBSD.  based on a patch by Steve Wills
+	  at [ruby-core:67655].  [Bug #10752]
+
+Mon Jan 19 12:00:51 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* configure.in: get rid of pattern substitution, which is not
+	  supported by ash, and ash on NetBSD parses whole source first
+	  and fails to start.  [ruby-dev:48823] [Bug #10750]
+
+Mon Jan 19 11:57:14 2015  Vit Ondruch  <vondruch@redhat.com>
+
+	* configure.in (RUBY_SETJMP_TYPE): Remove superfluous semicolon
+	  which causes a syntax error with autoconf 2.63.
+	  [ruby-core:67429] [Bug #10716]
+
+Mon Jan 19 11:44:52 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/rdoc/text.rb (expand_tabs): get rid of infinite loop with
+	  CR.  should check if substitution occurred too.
+	  [ruby-dev:48813] [Bug #10732]
+
+Sun Jan 18 00:59:41 2015  Eric Wong  <e@80x24.org>
+
+	* numeric.c (bit_coerce): use original value for error message
+	  [ruby-core:67405] [Bug #10711]
+	* test/ruby/test_numeric.rb (test_coerce): check error message
+
+Sun Jan 18 00:53:38 2015  Seiei Higa  <hanachin@gmail.com>
+
+	* vm_method.c (rb_alias): raise a NameError when creating alias to
+	  a refined method if the original method of the refined method is
+	  not defined.  [ruby-core:67523] [Bug #10731]
+
+Sat Jan 17 22:25:50 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* dir.c (need_normalization): not only HFS+, CIFS (SMB) is also
+	  decomposed.  [Bug #10704]
+
+	* dir.c (NORMALIZE_UTF8PATH): Unicode decomposition seems to
+	  perform in an upper layer than file systems on OSX, as all path
+	  names are always decomposed regardless of file system types.
+
+Sat Jan 17 17:56:45 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (assocs, assoc): eliminate splatting empty literal
+	  hashes.  [ruby-core:67446] [Bug #10719]
+
+	* compile.c (compile_array_): supprt splatted hash in hash type.
+
+Sat Jan 17 16:49:49 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* ext/readline/readline.c (readline_s_refresh_line): initialize
+	  before rl_refresh_line(), as some function make the internal
+	  state non-clean but rl_refresh_line() does not re-initialize it.
+	  [ruby-core:43957] [Bug #6232]
+
+Sat Jan 17 16:47:20 2015  NAKAMURA Usaku  <usa@ruby-lang.org>
+
+	* eval_error.c (error_print): pos and len parameters of rb_str_substr()
+	  are counted by characters, not bytes.  use rb_str_subseq() instead.
+	  [Bug #10727] [ruby-core:67473]
+
+Sat Jan 17 16:35:59 2015  Seiei Higa  <hanachin@gmail.com>
+
+	* vm_method.c (rb_export_method): bail out if the original method
+	  is undefined when the method is refined.
+	  [ruby-core:67387] [Bug #10706]
+
+Sat Jan 17 16:16:14 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* dir.c (glob_helper): match in case-folding only if the directory
+	  resides on a case-insensitve file system, on OSX.
+	  [ruby-core:67364] [Bug #10700]
+
+Sat Jan 17 02:04:01 2015  Eric Wong  <e@80x24.org>
+
+	* lib/resolv.rb: consider ENETUNREACH as ResolvTimeout
+	  [ruby-core:67411] [Bug #10712]
+
+Sat Jan 17 01:57:57 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
+
+	* ext/zlib/zlib.c: fix document of method signatures.
+	  [Bug #10668][ruby-core:67186][ci skip]
+
+Sat Jan 17 01:52:42 2015  Tanaka Akira  <akr@fsij.org>
+
+	* time.c (timelocalw): Set tm_isdst field -1 if vtm->isdst is
+	  VTM_ISDST_INITVAL.  This bug is introduced at packing struct
+	  vtm (r45155).
+	  [ruby-core:67345] [Bug #10698] Reported by Boris Ruf.
+
+Fri Jan 16 21:17:34 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
+
+	* test/ruby/test_io.rb: added timeout for AIX environment.
+	  [ruby-core:62983][Bug #9917]
+
+Fri Jan 16 18:25:57 2015  Tanaka Akira  <akr@fsij.org>
+
+	* lib/resolv.rb (Resolv::DNS::Name#==): Compare an array of Label:Str
+	  objects.  Label#Str#== is case-insensitive.
+
+Fri Jan 16 18:25:57 2015  Ben Miller  <bmiller@rackspace.com>
+
+	* lib/resolv.rb (Resolv::DNS::Name#==): DNS is case-insensitive, so the
+	  comparison should be case-insensitive as well.
+	  [ruby-core:66498] [Bug #10550]
+
+Fri Jan 16 18:25:57 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* lib/resolv.rb (Resolv::DNS::Name): names with different dots
+	  should be different.
+
+Fri Jan 16 17:34:57 2015  Nobuyoshi Nakada  <nobu@ruby-lang.org>
+
+	* parse.y (f_label): return tLABEL value as it is.
+	  [ruby-core:67315] [Bug #10693]
+
 Fri Jan 16 16:49:04 2015  SHIBATA Hiroshi  <shibata.hiroshi@gmail.com>
 
 	* lib/net/http.rb (Net::HTTP#send_request): there is no response body

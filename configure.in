@@ -2306,7 +2306,7 @@ if test ${setjmp_prefix+set}; then
     if test "${setjmp_prefix}" && eval test '$ac_cv_func_'${setjmp_prefix}setjmp${setjmp_suffix} = no; then
 	AC_MSG_ERROR(${setjmp_prefix}setjmp${setjmp_suffix} is not available)
     fi
-elif { AS_CASE("$ac_cv_func___builtin_setjmp", [yes*], [true], [false]); }; then
+elif { AS_CASE("$ac_cv_func___builtin_setjmp", [yes*], [true], [false]) }; then
     setjmp_cast=`expr "$ac_cv_func___builtin_setjmp" : "yes with cast (\(.*\))"`
     setjmp_prefix=__builtin_
     setjmp_suffix=
@@ -3018,7 +3018,7 @@ if test "$with_dln_a_out" != yes; then
 	  "-undefined dynamic_lookup" \
 	  "-multiply_defined suppress" \
 	  ; do
-	  test "x${linker_flag}" = x || flag="${linker_flag}${flag// /,}"
+	  test "x${linker_flag}" = x || flag="${linker_flag}`echo ${flag} | tr ' ' ,`"
 	  RUBY_TRY_LDFLAGS([$flag], [], [flag=])
 	  if test "x$flag" != x; then
 	    RUBY_APPEND_OPTIONS(DLDFLAGS, [$flag])
