@@ -1823,6 +1823,9 @@ ruby_vm_destruct(rb_vm_t *vm)
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 	struct rb_objspace *objspace = vm->objspace;
 #endif
+	if (vm->require_cache.write)
+	    fclose(vm->require_cache.out);
+
 	rb_gc_force_recycle(vm->self);
 	vm->main_thread = 0;
 	if (th) {

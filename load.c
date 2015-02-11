@@ -944,6 +944,7 @@ rb_require_safe(VALUE fname, int safe)
 {
     volatile VALUE result = Qnil;
     rb_thread_t *th = GET_THREAD();
+    rb_vm_t *vm = GET_VM();
     volatile VALUE errinfo = th->errinfo;
     int state;
     struct {
@@ -960,9 +961,11 @@ rb_require_safe(VALUE fname, int safe)
     PUSH_TAG();
     saved.safe = rb_safe_level();
     if ((state = EXEC_TAG()) == 0) {
-	VALUE path;
+	VALUE ipath, path;
 	long handle;
 	int found;
+	st_data_t key, val;
+	char *vals;
 
 	rb_set_safe_level_force(safe);
 	FilePathValue(fname);
@@ -974,8 +977,26 @@ rb_require_safe(VALUE fname, int safe)
 					   rb_sourceline());
 	}
 
-	path = rb_str_encode_ospath(fname);
-	found = search_required(path, &path, safe);
+	ipath = rb_str_encode_ospath(fname);
+	if (vm->require_cache.read && RSTRING_PTR(ipath)[0] != '/') {
+	    key = (st_data_t)RSTRING_PTR(ipath);
+	    if (st_delete(vm->require_cache.tbl, &key, &val)) {
+		vals = (char *)val;
+		if ((found = vals[0])) {
+		    //fprintf(stderr, "FOUND '%s' => '%s'\n", (char *)key, vals);
+		    path = rb_str_new_cstr(vals+1);
+		}
+		xfree(vals);
+	    } else {
+		found = search_required(ipath, &path, safe);
+	    }
+	} else {
+	    found = search_required(ipath, &path, safe);
+	}
+	if (vm->require_cache.write && RSTRING_PTR(ipath)[0] != '/' && path) {
+	    fprintf(vm->require_cache.out, "%s\n%c%s\n", RSTRING_PTR(ipath), found ? found : '\0', found ? RSTRING_PTR(path) : "");
+	    fsync(fileno(vm->require_cache.out));
+	}
 
 	if (RUBY_DTRACE_FIND_REQUIRE_RETURN_ENABLED()) {
 	    RUBY_DTRACE_FIND_REQUIRE_RETURN(StringValuePtr(fname),
@@ -1155,6 +1176,34 @@ rb_f_autoload_p(VALUE obj, VALUE sym)
 }
 
 void
+require_cache_setup()
+{
+    rb_vm_t *vm = GET_VM();
+    FILE *file;
+    char *env, line1[PATH_MAX+3], line2[PATH_MAX+3];
+
+    if ((env = getenv("REQUIRE_CACHE_READ"))) {
+	file = fopen(env, "r");
+	if (!file) return;
+
+	vm->require_cache.read = 1;
+	vm->require_cache.tbl = st_init_strtable();
+	while (1) {
+	    if (!fgets(line1, PATH_MAX+2, file)) break;
+	    if (!fgets(line2, PATH_MAX+2, file)) break;
+	    line1[strlen(line1)-1] = 0;
+	    line2[strlen(line2)-1] = 0;
+	    //fprintf(stderr, "INSERTING '%s' => '%s'\n", line1, line2);
+	    st_insert(vm->require_cache.tbl, (st_data_t)ruby_strdup(line1), (st_data_t)ruby_strdup(line2));
+	}
+	fclose(file);
+    } else if ((env = getenv("REQUIRE_CACHE_WRITE"))) {
+	vm->require_cache.write = 1;
+	vm->require_cache.out = fopen(env, "w");
+    }
+}
+
+void
 Init_load()
 {
 #undef rb_intern
@@ -1187,4 +1236,6 @@ Init_load()
 
     ruby_dln_librefs = rb_ary_tmp_new(0);
     rb_gc_register_mark_object(ruby_dln_librefs);
+
+    require_cache_setup();
 }

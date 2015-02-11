@@ -377,6 +377,12 @@ typedef struct rb_vm_struct {
     VALUE loaded_features_snapshot;
     struct st_table *loaded_features_index;
     struct st_table *loading_table;
+    struct {
+	unsigned int read:1;
+	struct st_table *tbl;
+	unsigned int write:1;
+	FILE *out;
+    } require_cache;
 
     /* signal */
     struct {
