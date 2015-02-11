@@ -961,7 +961,7 @@ rb_require_safe(VALUE fname, int safe)
     PUSH_TAG();
     saved.safe = rb_safe_level();
     if ((state = EXEC_TAG()) == 0) {
-	VALUE ipath, path;
+	VALUE ipath, path = 0;
 	long handle;
 	int found;
 	st_data_t key, val;
@@ -982,19 +982,29 @@ rb_require_safe(VALUE fname, int safe)
 	    key = (st_data_t)RSTRING_PTR(ipath);
 	    if (st_delete(vm->require_cache.tbl, &key, &val)) {
 		vals = (char *)val;
-		if ((found = vals[0])) {
-		    //fprintf(stderr, "FOUND '%s' => '%s'\n", (char *)key, vals);
+		found = vals[0];
+		if (found) {
+		    /*fprintf(stderr, "FOUND '%s' => '%s'\n", (char *)key, vals);*/
 		    path = rb_str_new_cstr(vals+1);
 		}
 		xfree(vals);
 	    } else {
 		found = search_required(ipath, &path, safe);
+		/*if (found && path)
+		    fprintf(stderr, "MISSING '%s' => '%s'\n", RSTRING_PTR(ipath), RSTRING_PTR(path));*/
 	    }
 	} else {
 	    found = search_required(ipath, &path, safe);
+	    /*if (found && RSTRING_PTR(ipath)[0] != '/')
+		fprintf(stderr, "SEARCHING '%s'\n", RSTRING_PTR(ipath));*/
 	}
-	if (vm->require_cache.write && RSTRING_PTR(ipath)[0] != '/' && path) {
-	    fprintf(vm->require_cache.out, "%s\n%c%s\n", RSTRING_PTR(ipath), found ? found : '\0', found ? RSTRING_PTR(path) : "");
+	if (vm->require_cache.write && RSTRING_PTR(ipath)[0] != '/' && (!found || (found && path))) {
+	    /*fprintf(stderr, "WRITING '%s' => '%s'\n", RSTRING_PTR(ipath), found ? RSTRING_PTR(path) : "");*/
+	    fprintf(vm->require_cache.out, "%s\n", RSTRING_PTR(ipath));
+	    if (found)
+		fprintf(vm->require_cache.out, "%c%s\n", found, RSTRING_PTR(path));
+	    else
+		fprintf(vm->require_cache.out, "%s\n", "");
 	    fsync(fileno(vm->require_cache.out));
 	}
 
@@ -1193,7 +1203,7 @@ require_cache_setup()
 	    if (!fgets(line2, PATH_MAX+2, file)) break;
 	    line1[strlen(line1)-1] = 0;
 	    line2[strlen(line2)-1] = 0;
-	    //fprintf(stderr, "INSERTING '%s' => '%s'\n", line1, line2);
+	    /*fprintf(stderr, "INSERTING '%s' => '%s'\n", line1, line2);*/
 	    st_insert(vm->require_cache.tbl, (st_data_t)ruby_strdup(line1), (st_data_t)ruby_strdup(line2));
 	}
 	fclose(file);
