@@ -980,14 +980,14 @@ rb_require_safe(VALUE fname, int safe)
 	ipath = rb_str_encode_ospath(fname);
 	if (vm->require_cache.read && RSTRING_PTR(ipath)[0] != '/') {
 	    key = (st_data_t)RSTRING_PTR(ipath);
-	    if (st_delete(vm->require_cache.tbl, &key, &val)) {
+	    if (st_lookup(vm->require_cache.tbl, key, &val)) {
 		vals = (char *)val;
 		found = vals[0];
 		if (found) {
 		    /*fprintf(stderr, "FOUND '%s' => '%s'\n", (char *)key, vals);*/
 		    path = rb_str_new_cstr(vals+1);
+                    vals[1] = 0;
 		}
-		xfree(vals);
 	    } else {
 		found = search_required(ipath, &path, safe);
 		/*if (found && path)
