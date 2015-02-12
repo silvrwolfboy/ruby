@@ -1208,6 +1208,7 @@ require_cache_setup()
 	}
 	fclose(file);
     } else if ((env = getenv("REQUIRE_CACHE_WRITE"))) {
+	unsetenv("REQUIRE_CACHE_WRITE", "");
 	vm->require_cache.write = 1;
 	vm->require_cache.out = fopen(env, "w");
     }
