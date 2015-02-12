@@ -995,8 +995,8 @@ rb_require_safe(VALUE fname, int safe)
 	    }
 	} else {
 	    found = search_required(ipath, &path, safe);
-	    /*if (found && RSTRING_PTR(ipath)[0] != '/')
-		fprintf(stderr, "SEARCHING '%s'\n", RSTRING_PTR(ipath));*/
+	    /*if (found && path)
+		fprintf(stderr, "SEARCHING '%s' found '%s'\n", RSTRING_PTR(ipath), RSTRING_PTR(path));*/
 	}
 	if (vm->require_cache.write && RSTRING_PTR(ipath)[0] != '/' && (!found || (found && path))) {
 	    /*fprintf(stderr, "WRITING '%s' => '%s'\n", RSTRING_PTR(ipath), found ? RSTRING_PTR(path) : "");*/
