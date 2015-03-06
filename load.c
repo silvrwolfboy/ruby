@@ -952,6 +952,9 @@ rb_require_safe(VALUE fname, int safe)
     } volatile saved;
     char *volatile ftptr = 0;
 
+    if (strncmp(StringValuePtr(fname), "enumerator", 11) == 0)
+	return Qfalse;
+
     if (RUBY_DTRACE_REQUIRE_ENTRY_ENABLED()) {
 	RUBY_DTRACE_REQUIRE_ENTRY(StringValuePtr(fname),
 				  rb_sourcefile(),
