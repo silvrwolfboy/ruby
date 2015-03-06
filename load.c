@@ -1195,7 +1195,11 @@ require_cache_setup()
     FILE *file;
     char *env, line1[PATH_MAX+3], line2[PATH_MAX+3];
 
-    if ((env = getenv("REQUIRE_CACHE_READ"))) {
+    if ((env = getenv("REQUIRE_CACHE_WRITE"))) {
+	unsetenv("REQUIRE_CACHE_WRITE", "");
+	vm->require_cache.write = 1;
+	vm->require_cache.out = fopen(env, "w");
+    } else if ((env = getenv("REQUIRE_CACHE_READ"))) {
 	file = fopen(env, "r");
 	if (!file) return;
 
@@ -1210,10 +1214,6 @@ require_cache_setup()
 	    st_insert(vm->require_cache.tbl, (st_data_t)ruby_strdup(line1), (st_data_t)ruby_strdup(line2));
 	}
 	fclose(file);
-    } else if ((env = getenv("REQUIRE_CACHE_WRITE"))) {
-	unsetenv("REQUIRE_CACHE_WRITE", "");
-	vm->require_cache.write = 1;
-	vm->require_cache.out = fopen(env, "w");
     }
 }
 
