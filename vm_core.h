@@ -233,7 +233,9 @@ struct rb_iseq_struct {
     size_t line_info_size;
 
     ID *local_table;		/* must free */
+    VALUE *local_class_table;	/* must free */
     int local_table_size;
+    VALUE return_class;
 
     /* sizeof(vars) + 1 */
     int local_size;

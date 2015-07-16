@@ -81,11 +81,15 @@ setlocal
 {
     int i, lev = (int)level;
     VALUE *ep = GET_EP();
+    rb_iseq_t *iseq = GET_CFP()->iseq;
 
     for (i = 0; i < lev; i++) {
 	ep = GET_PREV_EP(ep);
+	iseq = iseq->parent_iseq;
     }
     *(ep - idx) = val;
+
+    track_local_class(iseq, ep, iseq->local_table_size - (idx - 2) - 1);
 }
 
 /**
@@ -864,6 +868,17 @@ trace
         }
     }
 
+    // track argument types
+    {
+	int i;
+	rb_iseq_t *iseq = GET_CFP()->iseq;
+	VALUE *ep = GET_EP();
+
+	for (i = 0; i < iseq->arg_size; i++) {
+	    track_local_class(iseq, ep, i);
+	}
+    }
+
     EXEC_EVENT_HOOK(th, flag, GET_SELF(), 0, 0 /* id and klass are resolved at callee */,
 		    (flag & (RUBY_EVENT_RETURN | RUBY_EVENT_B_RETURN)) ? TOPN(0) : Qundef);
 }
@@ -1082,6 +1097,14 @@ leave
 (VALUE val)
 (VALUE val)
 {
+    rb_iseq_t *iseq = GET_CFP()->iseq;
+
+    if (iseq->return_class == Qundef) {
+	RB_OBJ_WRITE(iseq->self, &iseq->return_class, CLASS_OF(val));
+    } else {
+	RB_OBJ_WRITE(iseq->self, &iseq->return_class, class_lca(iseq->return_class, CLASS_OF(val)));
+    }
+
     if (OPT_CHECKED_RUN) {
 	if (reg_cfp->sp != vm_base_ptr(reg_cfp)) {
 	    rb_bug("Stack consistency error (sp: %"PRIdPTRDIFF", bp: %"PRIdPTRDIFF")",

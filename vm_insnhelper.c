@@ -2421,3 +2421,35 @@ vm_once_clear(VALUE data)
     is->once.running_thread = NULL;
     return Qnil;
 }
+
+static VALUE
+class_lca(VALUE a, VALUE b)
+{
+    VALUE k;
+
+    for (k = b; k; k = RCLASS_SUPER(k)) {
+	if (k == a) {
+	    return k;
+	}
+    }
+
+    return class_lca(RCLASS_SUPER(a), b);
+}
+
+static void
+track_local_class(rb_iseq_t *iseq, VALUE *ep, int local_index)
+{
+    VALUE value = ep[local_index - iseq->local_size];
+
+    VALUE *slot = &iseq->local_class_table[local_index];
+
+    VALUE klass;
+
+    if (*slot == Qundef) {
+	klass = CLASS_OF(value);
+    } else {
+	klass = class_lca(*slot, CLASS_OF(value));
+    }
+
+    RB_OBJ_WRITE(iseq->self, slot, klass);
+}

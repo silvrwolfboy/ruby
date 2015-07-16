@@ -81,6 +81,7 @@ iseq_free(void *ptr)
 	    RUBY_FREE_UNLESS_NULL(iseq->iseq);
 	    RUBY_FREE_UNLESS_NULL(iseq->line_info_table);
 	    RUBY_FREE_UNLESS_NULL(iseq->local_table);
+	    RUBY_FREE_UNLESS_NULL(iseq->local_class_table);
 	    RUBY_FREE_UNLESS_NULL(iseq->is_entries);
 	    RUBY_FREE_UNLESS_NULL(iseq->callinfo_entries);
 	    RUBY_FREE_UNLESS_NULL(iseq->catch_table);
@@ -96,6 +97,8 @@ iseq_free(void *ptr)
 static void
 iseq_mark(void *ptr)
 {
+    int i;
+
     RUBY_MARK_ENTER("iseq");
 
     if (ptr) {
@@ -120,6 +123,12 @@ iseq_mark(void *ptr)
 	    RUBY_MARK_UNLESS_NULL(compile_data->err_info);
 	    RUBY_MARK_UNLESS_NULL(compile_data->catch_table_ary);
 	}
+
+	for (i = 0; i < iseq->local_table_size; i++) {
+	    RUBY_MARK_UNLESS_NULL(iseq->local_class_table[i]);
+	}
+	
+	RUBY_MARK_UNLESS_NULL(iseq->return_class);
     }
     RUBY_MARK_LEAVE("iseq");
 }
@@ -140,6 +149,7 @@ iseq_memsize(const void *ptr)
 	    size += iseq->iseq_size * sizeof(VALUE);
 	    size += iseq->line_info_size * sizeof(struct iseq_line_info_entry);
 	    size += iseq->local_table_size * sizeof(ID);
+	    size += iseq->local_table_size * sizeof(VALUE);
 	    size += iseq->catch_table_size * sizeof(struct iseq_catch_table_entry);
 	    size += iseq->arg_opts * sizeof(VALUE);
 	    size += iseq->is_size * sizeof(union iseq_inline_storage_entry);
@@ -176,7 +186,9 @@ static VALUE
 iseq_alloc(VALUE klass)
 {
     rb_iseq_t *iseq;
-    return TypedData_Make_Struct(klass, rb_iseq_t, &iseq_data_type, iseq);
+    VALUE v = TypedData_Make_Struct(klass, rb_iseq_t, &iseq_data_type, iseq);
+    iseq->return_class = Qundef;
+    return v;
 }
 
 static rb_iseq_location_t *
@@ -2253,6 +2265,44 @@ rb_iseq_line_trace_specify(VALUE iseqval, VALUE pos, VALUE set)
     return data.prev == 1 ? Qtrue : Qfalse;
 }
 
+static VALUE
+iseq_local_classes(VALUE viseq)
+{
+    int i;
+    VALUE hash;
+    rb_iseq_t *iseq;
+
+    GetISeqPtr(viseq, iseq);
+
+    hash = rb_hash_new();
+
+    for (i = 0; i < iseq->local_table_size; i++) {
+	ID name = iseq->local_table[i];
+	VALUE klass = iseq->local_class_table[i];
+
+	if (klass == Qundef) {
+	    klass = Qnil;
+	}
+	
+	rb_hash_aset(hash, ID2SYM(name), klass);
+    }
+
+    return hash;
+}
+
+static VALUE
+iseq_return_class(VALUE viseq)
+{
+    rb_iseq_t *iseq;
+    GetISeqPtr(viseq, iseq);
+
+    if (iseq->return_class == Qundef) {
+	return Qnil;
+    } else {
+	return iseq->return_class;
+    }
+}
+
 /*
  *  Document-class: RubyVM::InstructionSequence
  *
@@ -2284,6 +2334,9 @@ Init_ISeq(void)
     rb_define_method(rb_cISeq, "disassemble", rb_iseq_disasm, 0);
     rb_define_method(rb_cISeq, "to_a", iseq_to_a, 0);
     rb_define_method(rb_cISeq, "eval", iseq_eval, 0);
+
+    rb_define_method(rb_cISeq, "local_classes", iseq_local_classes, 0);
+    rb_define_method(rb_cISeq, "return_class", iseq_return_class, 0);
 
     /* location APIs */
     rb_define_method(rb_cISeq, "path", rb_iseq_path, 0);
