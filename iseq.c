@@ -2283,6 +2283,10 @@ iseq_local_classes(VALUE viseq)
 	if (klass == Qundef) {
 	    klass = Qnil;
 	}
+
+	if (rb_id2str(name) == 0) {
+	    continue;
+	}
 	
 	rb_hash_aset(hash, ID2SYM(name), klass);
     }
