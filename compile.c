@@ -4889,7 +4889,11 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *ret, NODE * node, int poped)
 	node->nd_lit = rb_fstring(node->nd_lit);
 	debugp_param("nd_lit", node->nd_lit);
 	if (!poped) {
-	    ADD_INSN1(ret, line, putstring, node->nd_lit);
+	    if (iseq->compile_data->option->frozen_string_literals) {
+		ADD_INSN1(ret, line, putobject, node->nd_lit);
+	    } else {
+		ADD_INSN1(ret, line, putstring, node->nd_lit);
+	    }
 	}
 	break;
       }
