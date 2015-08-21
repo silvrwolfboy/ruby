@@ -57,7 +57,7 @@ class RubyLex
     @post_symbeg = false
 
     @continue = false
-    @line = ""
+    @line = "".dup
 
     @skip_space = false
     @readed_auto_clean_up = false
@@ -223,7 +223,7 @@ class RubyLex
 
     prompt
 
-    @line = ""
+    @line = "".dup
     @exp_line_no = @line_no
   end
 
@@ -247,7 +247,7 @@ class RubyLex
 	    yield @line, @exp_line_no
 	  end
 	  break unless l
-	  @line = ''
+	  @line = ''.dup
 	  @exp_line_no = @line_no
 
 	  @indent = 0
@@ -770,7 +770,7 @@ class RubyLex
   end
 
   def identify_identifier
-    token = ""
+    token = "".dup
     if peek(0) =~ /[$@]/
       token.concat(c = getc)
       if c == "@" and peek(0) == "@"
