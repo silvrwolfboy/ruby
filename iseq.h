@@ -45,6 +45,7 @@ struct rb_compile_option_struct {
     int stack_caching;
     int trace_instruction;
     int debug_level;
+    int frozen_string_literals;
 };
 
 struct iseq_line_info_entry {
