@@ -4468,7 +4468,14 @@ type_cpath	: tCOLON3 tCONSTANT
 		    }
 		;
 
+types		: type
+		| types ',' type
+		;
+
 type		: type_cpath
+		| type_cpath '[' types ']'
+		| '|' types '|' tASSOC type
+		| tOROP tASSOC type
 		;
 
 opt_return_sig	: none
