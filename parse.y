@@ -778,6 +778,7 @@ static void token_info_pop(struct parser_params*, const char *token);
 %type <node> command_asgn mrhs mrhs_arg superclass block_call block_command
 %type <node> f_block_optarg f_block_opt
 %type <node> f_arglist f_args f_arg f_arg_item f_optarg f_marg f_marg_list f_margs
+%type <node> type_cpath type
 %type <node> assoc_list assocs assoc undef_list backref string_dvar for_var
 %type <node> block_param opt_block_param block_param_def f_opt
 %type <node> f_kwarg f_kw f_block_kwarg f_block_kw
@@ -4440,11 +4441,41 @@ f_arglist	: '(' f_args rparen
 		    }
 		;
 
-type		: cpath
+type_cpath	: tCOLON3 tCONSTANT
+		    {
+		    /*%%%*/
+			$$ = NEW_COLON3($2);
+		    /*%
+			$$ = dispatch1(top_const_ref, $2);
+		    %*/
+		    }
+		| tCONSTANT
+		    {
+		    /*%%%*/
+			$$ = NEW_COLON2(0, $$);
+		    /*%
+			$$ = dispatch1(const_ref, $1);
+		    %*/
+		    }
+		| type_cpath tCOLON2 tCONSTANT
+		    {
+		    /*%%%*/
+			$$ = NEW_COLON2($1, $3);
+		    /*%
+			$$ = dispatch2(const_path_ref, $1, $3);
+		    %*/
+		    }
+		;
+
+type		: type_cpath
 		;
 
 opt_return_sig	: none
 		| tASSOC type
+		;
+
+opt_arg_sig	: none
+		| ':' type
 		;
 
 args_tail	: f_kwarg ',' f_kwrest opt_f_block_arg
@@ -4584,7 +4615,7 @@ f_norm_arg	: f_bad_arg
 		    }
 		;
 
-f_arg_item	: f_norm_arg
+f_arg_item	: f_norm_arg opt_arg_sig
 		    {
 			arg_var(get_id($1));
 		    /*%%%*/
