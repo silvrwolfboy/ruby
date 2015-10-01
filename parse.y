@@ -4879,7 +4879,7 @@ blkarg_mark	: '&'
 		| tAMPER
 		;
 
-f_block_arg	: blkarg_mark tIDENTIFIER
+f_block_arg	: blkarg_mark tIDENTIFIER opt_arg_sig
 		    {
 		    /*%%%*/
 			if (!is_local_id($2))
