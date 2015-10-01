@@ -4416,25 +4416,35 @@ superclass	: term
 
 f_arglist	: '(' f_args rparen
 		    {
+			lex_state = EXPR_BEG;
+			command_start = TRUE;
+		    }
+		    opt_return_sig
+		    {
 		    /*%%%*/
 			$$ = $2;
 		    /*%
 			$$ = dispatch1(paren, $2);
 		    %*/
-			lex_state = EXPR_BEG;
-			command_start = TRUE;
 		    }
 		|   {
 			$<num>$ = parser->parser_in_kwarg;
 			parser->parser_in_kwarg = 1;
 		    }
-		    f_args term
+		    f_args opt_return_sig term
 		    {
 			parser->parser_in_kwarg = $<num>1;
 			$$ = $2;
 			lex_state = EXPR_BEG;
 			command_start = TRUE;
 		    }
+		;
+
+type		: cpath
+		;
+
+opt_return_sig	: none
+		| tASSOC type
 		;
 
 args_tail	: f_kwarg ',' f_kwrest opt_f_block_arg
