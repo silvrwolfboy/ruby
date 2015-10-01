@@ -2962,17 +2962,18 @@ primary		: literal
 			in_def++;
 			local_push(0);
 		    }
+		  opt_type_args
 		  f_arglist
 		  bodystmt
 		  k_end
 		    {
 		    /*%%%*/
-			NODE *body = remove_begin($5);
+			NODE *body = remove_begin($6);
 			reduce_nodes(&body);
-			$$ = NEW_DEFN($2, $4, body, NOEX_PRIVATE);
+			$$ = NEW_DEFN($2, $5, body, NOEX_PRIVATE);
 			nd_set_line($$, $<num>1);
 		    /*%
-			$$ = dispatch3(def, $2, $4, $5);
+			$$ = dispatch3(def, $2, $5, $6);
 		    %*/
 			local_pop();
 			in_def--;
@@ -4476,6 +4477,10 @@ opt_return_sig	: none
 
 opt_arg_sig	: none
 		| ':' type
+		;
+
+opt_type_args	: none
+		| '[' types ']'
 		;
 
 args_tail	: f_kwarg ',' f_kwrest opt_f_block_arg
