@@ -1,4 +1,5 @@
 # coding: utf-8
+$:.unshift(File.expand_path("../../lib", __dir__))
 require 'test/unit'
 
 class BinaryUTF8CompatTest < Test::Unit::TestCase
