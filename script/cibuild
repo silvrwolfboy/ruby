@@ -4,6 +4,9 @@ if [ -z "$CORES" ]; then
   CORES=64
 fi
 
+# Ruby 2.3 needs a relatively recent version of Ruby to bootstrap itself:
+export PATH=/usr/share/rbenv/versions/2.2.3/bin:$PATH
+
 git clean -f -x
 autoconf
 ./configure --disable-install-doc
