@@ -34,6 +34,8 @@ void rb_encdb_set_unicode(int index);
 #endif
 
 int rb_encoding_compat;
+static VALUE rb_encoding_compat_tracer; 
+static ID id_encoding_compat_trace;
 
 static ID id_encoding;
 VALUE rb_cEncoding;
@@ -909,10 +911,12 @@ rb_enc_compatible(VALUE str1, VALUE str2)
 	    }
             if (rb_encoding_compat) {
 	        if (idx1 == ENCINDEX_UTF_8 && idx2 == ENCINDEX_ASCII) {
-	            return enc2;
+                rb_encoding_compat_trace(str1, str2);
+                return enc2;
 	        }
 	        else if (idx1 == ENCINDEX_ASCII && idx2 == ENCINDEX_UTF_8) {
-	            return enc1;
+                rb_encoding_compat_trace(str1, str2);
+                return enc1;
 	        }
 	    }
 	}
@@ -1497,6 +1501,26 @@ get_default_internal(VALUE klass)
     return rb_enc_default_internal();
 }
 
+void rb_encoding_compat_trace_(const char *tracepoint, VALUE str1, VALUE str2)
+{
+	static int are_we_tracing = 0;
+
+	if (!are_we_tracing && !NIL_P(rb_encoding_compat_tracer)) {
+		are_we_tracing = 1;
+		rb_funcall(rb_encoding_compat_tracer, id_encoding_compat_trace, 3,
+				rb_str_new2(tracepoint), str1, str2);
+		are_we_tracing = 0;
+	}
+}
+
+static VALUE
+rb_enc_compat_mode_set_tracer(VALUE klass, VALUE tracer)
+{
+	rb_encoding_compat_tracer = tracer;
+	rb_gc_register_mark_object(rb_encoding_compat_tracer);
+	return Qnil;
+}
+
 static VALUE
 rb_enc_compat_mode_enabled_p(VALUE klass)
 {
@@ -1933,6 +1957,9 @@ Init_Encoding(void)
 
     rb_const_set(rb_cEncoding, rb_intern_const("COMPAT_MODE_AVAILABLE"), Qtrue);
     rb_define_singleton_method(rb_cEncoding, "compat_mode_enabled?", rb_enc_compat_mode_enabled_p, 0);
+    rb_define_singleton_method(rb_cEncoding, "compat_mode_tracer=", rb_enc_compat_mode_set_tracer, 1);
+	rb_encoding_compat_tracer = Qnil;
+	id_encoding_compat_trace = rb_intern("encoding_mismatch");
 }
 
 /* locale insensitive ctype functions */

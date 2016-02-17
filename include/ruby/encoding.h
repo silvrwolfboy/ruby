@@ -69,6 +69,8 @@ RUBY_SYMBOL_EXPORT_BEGIN
     } while (0)
 
 extern int rb_encoding_compat;
+extern void rb_encoding_compat_trace_(const char *tracepoint, VALUE str1, VALUE str2);
+#define rb_encoding_compat_trace(str1, str2) rb_encoding_compat_trace_(__FUNCTION__, str1, str2)
 typedef OnigEncodingType rb_encoding;
 
 int rb_char_to_option_kcode(int c, int *option, int *kcode);

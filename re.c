@@ -1307,6 +1307,7 @@ rb_reg_prepare_enc(VALUE re, VALUE str, int warn)
     enc = rb_enc_get(str);
 
     if (rb_enc_str_coderange(str) == ENC_CODERANGE_BROKEN) {
+		rb_encoding_compat_trace(re, str);
         if (!(rb_encoding_compat && enc == rb_utf8_encoding()))
             rb_raise(rb_eArgError,
                 "invalid byte sequence in %s",
@@ -1326,6 +1327,7 @@ rb_reg_prepare_enc(VALUE re, VALUE str, int warn)
             if (rb_encoding_compat &&
                 ((RREGEXP(re)->ptr->enc == rb_ascii8bit_encoding() && enc == rb_utf8_encoding()) ||
                  (enc == rb_ascii8bit_encoding() && RREGEXP(re)->ptr->enc == rb_utf8_encoding()))) {
+				rb_encoding_compat_trace(re, str);
                 return rb_ascii8bit_encoding();
             }
 	    reg_enc_error(re, str);
