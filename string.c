@@ -488,16 +488,22 @@ str_alloc(VALUE klass)
 static inline VALUE
 empty_str_alloc(VALUE klass)
 {
+    rb_thread_t *th = GET_THREAD();
+    VALUE str;
+
     if (RUBY_DTRACE_STRING_CREATE_ENABLED()) {
 	RUBY_DTRACE_STRING_CREATE(0, rb_sourcefile(), rb_sourceline());
     }
-    return str_alloc(klass);
+    str = str_alloc(klass);
+    EXEC_EVENT_HOOK(th, RUBY_INTERNAL_EVENT_NEWSTR, th->cfp->self, 0, 0, str);
+    return str;
 }
 
 static VALUE
 str_new0(VALUE klass, const char *ptr, long len, int termlen)
 {
     VALUE str;
+    rb_thread_t *th = GET_THREAD();
 
     if (len < 0) {
 	rb_raise(rb_eArgError, "negative string size (or size too big)");
@@ -521,6 +527,9 @@ str_new0(VALUE klass, const char *ptr, long len, int termlen)
     }
     STR_SET_LEN(str, len);
     TERM_FILL(RSTRING_PTR(str) + len, termlen);
+
+    EXEC_EVENT_HOOK(th, RUBY_INTERNAL_EVENT_NEWSTR, th->cfp->self, 0, 0, str);
+
     return str;
 }
 
@@ -1067,11 +1076,16 @@ rb_str_dup(VALUE str)
 VALUE
 rb_str_resurrect(VALUE str)
 {
+    VALUE dup;
+    rb_thread_t *th = GET_THREAD();
+
     if (RUBY_DTRACE_STRING_CREATE_ENABLED()) {
 	RUBY_DTRACE_STRING_CREATE(RSTRING_LEN(str),
 				  rb_sourcefile(), rb_sourceline());
     }
-    return str_duplicate(rb_cString, str);
+    dup = str_duplicate(rb_cString, str);
+    EXEC_EVENT_HOOK(th, RUBY_INTERNAL_EVENT_NEWSTR, th->cfp->self, 0, 0, dup);
+    return dup;
 }
 
 /*

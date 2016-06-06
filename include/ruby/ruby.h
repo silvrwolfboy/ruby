@@ -1737,6 +1737,7 @@ int ruby_native_thread_p(void);
 #define RUBY_INTERNAL_EVENT_GC_END_SWEEP   0x1000000
 #define RUBY_INTERNAL_EVENT_OBJSPACE_MASK  0x1f00000
 #define RUBY_INTERNAL_EVENT_MASK          0xfffe0000
+#define RUBY_INTERNAL_EVENT_NEWSTR   0x2000000
 
 typedef unsigned long rb_event_flag_t;
 typedef void (*rb_event_hook_func_t)(rb_event_flag_t evflag, VALUE data, VALUE self, ID mid, VALUE klass);

@@ -189,6 +189,30 @@ trace_object_allocations_start(VALUE self)
 }
 
 /*
+ * call-seq: trace_string_allocations_start
+ *
+ * Starts tracing string allocations.
+ *
+ */
+static VALUE
+trace_string_allocations_start(VALUE self)
+{
+    struct traceobj_arg *arg = get_traceobj_arg();
+
+    if (arg->running++ > 0) {
+	/* do nothing */
+    }
+    else {
+	if (arg->newobj_trace == 0) {
+	    arg->newobj_trace = rb_tracepoint_new(0, RUBY_INTERNAL_EVENT_NEWSTR, newobj_i, arg);
+	}
+	rb_tracepoint_enable(arg->newobj_trace);
+    }
+
+    return Qnil;
+}
+
+/*
  * call-seq: trace_object_allocations_stop
  *
  * Stop tracing object allocations.
@@ -477,6 +501,7 @@ Init_object_tracing(VALUE rb_mObjSpace)
 
     rb_define_module_function(rb_mObjSpace, "trace_object_allocations", trace_object_allocations, 0);
     rb_define_module_function(rb_mObjSpace, "trace_object_allocations_start", trace_object_allocations_start, 0);
+    rb_define_module_function(rb_mObjSpace, "trace_string_allocations_start", trace_object_allocations_start, 0);
     rb_define_module_function(rb_mObjSpace, "trace_object_allocations_stop", trace_object_allocations_stop, 0);
     rb_define_module_function(rb_mObjSpace, "trace_object_allocations_clear", trace_object_allocations_clear, 0);
 
