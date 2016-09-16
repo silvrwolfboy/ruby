@@ -21,6 +21,7 @@
 #include "objspace.h"
 
 static VALUE sym_output, sym_stdout, sym_string, sym_file;
+static VALUE sym_include_pages, sym_include_none;
 
 struct dump_config {
     VALUE type;
@@ -31,6 +32,9 @@ struct dump_config {
     VALUE cur_obj;
     VALUE cur_obj_klass;
     size_t cur_obj_references;
+    int include_pages;
+    int include_none;
+    int pages_seen;
 };
 
 PRINTF_ARGS(static void dump_append(struct dump_config *, const char *, ...), 2, 3);
@@ -191,6 +195,18 @@ dump_append_string_content(struct dump_config *dc, VALUE obj)
 }
 
 static void
+dump_empty(VALUE obj, struct dump_config *dc)
+{
+    dump_append(dc, "{\"address\":\"%p\", ", (void *)obj);
+    dump_append(dc, "\"type\":\"NONE\"");
+
+    if (dc->include_pages)
+	dump_append(dc, ", \"page_number\":%d", dc->pages_seen);
+    dump_append(dc, "}\n");
+    return;
+}
+
+static void
 dump_object(VALUE obj, struct dump_config *dc)
 {
     size_t memsize;
@@ -215,6 +231,8 @@ dump_object(VALUE obj, struct dump_config *dc)
 
     if (dc->cur_obj_klass)
 	dump_append(dc, ", \"class\":\"%p\"", (void *)dc->cur_obj_klass);
+    if (dc->include_pages)
+	dump_append(dc, ", \"page_number\":%d", dc->pages_seen);
     if (rb_obj_frozen_p(obj))
 	dump_append(dc, ", \"frozen\":true");
 
@@ -321,8 +339,11 @@ heap_i(void *vstart, void *vend, size_t stride, void *data)
     VALUE v = (VALUE)vstart;
     for (; v != (VALUE)vend; v += stride) {
 	if (RBASIC(v)->flags)
-	    dump_object(v, data);
+	    dump_object(v, dc);
+	else if (dc->include_none && T_NONE == BUILTIN_TYPE(v))
+	    dump_empty(v, dc);
     }
+    dc->pages_seen++;
     return 0;
 }
 
@@ -347,8 +368,19 @@ dump_output(struct dump_config *dc, VALUE opts, VALUE output, const char *filena
 {
     VALUE tmp;
 
-    if (RTEST(opts))
+    dc->pages_seen = 0;
+    dc->include_pages = 0;
+    dc->include_none = 0;
+
+    if (RTEST(opts)) {
 	output = rb_hash_aref(opts, sym_output);
+
+	if (Qtrue == rb_hash_lookup2(opts, sym_include_pages, Qfalse))
+	    dc->include_pages = 1;
+
+	if (Qtrue == rb_hash_lookup2(opts, sym_include_none, Qfalse))
+	    dc->include_none = 1;
+    }
 
     if (output == sym_stdout) {
 	dc->stream = stdout;
@@ -474,6 +506,8 @@ Init_objspace_dump(VALUE rb_mObjSpace)
     sym_stdout = ID2SYM(rb_intern("stdout"));
     sym_string = ID2SYM(rb_intern("string"));
     sym_file   = ID2SYM(rb_intern("file"));
+    sym_include_pages = ID2SYM(rb_intern("include_pages"));
+    sym_include_none = ID2SYM(rb_intern("include_none"));
 
     /* force create static IDs */
     rb_obj_gc_flags(rb_mObjSpace, 0, 0);
