@@ -32,6 +32,7 @@
 #include <stdarg.h>
 #include <setjmp.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 #include "ruby_assert.h"
 
 #undef rb_data_object_wrap
@@ -639,8 +640,6 @@ typedef struct rb_objspace {
 #if GC_DEBUG_STRESS_TO_CLASS
     VALUE stress_to_class;
 #endif
-
-    gc_writebarrier wb;
 } rb_objspace_t;
 
 
@@ -817,6 +816,8 @@ int ruby_gc_debug_indent = 0;
 VALUE rb_mGC;
 int ruby_disable_gc = 0;
 
+static void
+gc_init_write_barrier_func_hax();
 static void
 gc_set_incremental_marking(rb_objspace_t *objspace, int incremental);
 void rb_iseq_mark(const rb_iseq_t *iseq);
@@ -1315,6 +1316,7 @@ rb_objspace_alloc(void)
 #else
     rb_objspace_t *objspace = &rb_objspace;
 #endif
+    gc_init_write_barrier_func_hax();
     gc_set_incremental_marking(objspace, is_incremental_marking(objspace));
     malloc_limit = gc_params.malloc_limit_min;
 
@@ -5902,14 +5904,47 @@ gc_non_incremental_wb(VALUE a, VALUE b, rb_objspace_t *objspace)
     }
 }
 
+static void __attribute__((noinline))
+gc_write_barrier_func(VALUE a, VALUE b, rb_objspace_t *objspace)
+{
+    __asm__("int3");
+}
+
+static void
+gc_init_write_barrier_func_hax()
+{
+    intptr_t addr = (intptr_t)&gc_write_barrier_func;
+
+    addr &= ~(PAGE_SIZE - 1);
+
+    if (mprotect((void*)addr, PAGE_SIZE, PROT_WRITE | PROT_EXEC)) {
+	perror("gc_init_write_barrier_func_hax: mprotect");
+	exit(1);
+    }
+}
+
 static void
 gc_set_incremental_marking(rb_objspace_t *objspace, int incremental)
 {
+    intptr_t func;
+
     if(incremental) {
-	objspace->wb = gc_writebarrier_incremental;
+	func = (intptr_t)&gc_writebarrier_incremental;
     } else {
-	objspace->wb = gc_non_incremental_wb;
+	func = (intptr_t)&gc_non_incremental_wb;
     }
+
+    uint8_t* code = (uint8_t*)&gc_write_barrier_func;
+
+    intptr_t jmp_base = (intptr_t)code + 5;
+
+    intptr_t offset = func - jmp_base;
+
+    code[0] = 0xe9;
+    code[1] = offset & 0xff;
+    code[2] = (offset >> 8) & 0xff;
+    code[3] = (offset >> 16) & 0xff;
+    code[4] = (offset >> 24) & 0xff;
 
     objspace->flags.during_incremental_marking = incremental;
 }
@@ -5926,7 +5961,7 @@ rb_gc_writebarrier(VALUE a, VALUE b)
     if (RGENGC_CHECK_MODE && SPECIAL_CONST_P(a)) rb_bug("rb_gc_writebarrier: a is special const");
     if (RGENGC_CHECK_MODE && SPECIAL_CONST_P(b)) rb_bug("rb_gc_writebarrier: b is special const");
 
-    (*objspace->wb)(a, b, objspace);
+    gc_write_barrier_func(a, b, objspace);
 }
 
 void
