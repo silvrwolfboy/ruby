@@ -574,7 +574,7 @@ struct RHash {
     struct RBasic basic;
     struct st_table *ntbl;      /* possibly 0 */
     int iter_lev;
-    const VALUE ifnone;
+    VALUE ifnone;
 };
 
 #define RHASH(obj)   (R_CAST(RHash)(obj))
