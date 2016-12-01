@@ -540,8 +540,8 @@ struct RBignum {
 
 struct RRational {
     struct RBasic basic;
-    const VALUE num;
-    const VALUE den;
+    VALUE num;
+    VALUE den;
 };
 
 #define RRATIONAL(obj) (R_CAST(RRational)(obj))
