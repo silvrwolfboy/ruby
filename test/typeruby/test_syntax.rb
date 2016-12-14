@@ -71,4 +71,16 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo => { String => String }; end
     RUBY
   end
+
+  def test_lambda_type
+    assert_parses <<-RUBY
+      def foo => ->(String) => String; end
+
+      def foo => ->(Fixnum, String) => String; end
+
+      def foo => -> => String; end
+
+      def foo(->(Fixnum) => String &bk); end
+    RUBY
+  end
 end
