@@ -860,7 +860,7 @@ static void token_info_pop(struct parser_params*, const char *token, size_t len)
 %type <node> lambda f_larglist lambda_body
 %type <node> brace_block cmd_brace_block do_block lhs none fitem
 %type <node> mlhs mlhs_head mlhs_basic mlhs_item mlhs_node mlhs_post mlhs_inner
-%type <node> tr_cpath tr_type tr_argsig tr_returnsig
+%type <node> tr_cpath tr_type tr_argsig tr_returnsig tr_types tr_largtypes
 %type <id>   fsym keyword_variable user_variable sym symbol operation operation2 operation3
 %type <id>   cname fname op f_rest_arg f_block_arg opt_f_block_arg f_norm_arg f_bad_arg
 %type <id>   f_kwrest f_label f_arg_asgn call_op call_op2
@@ -5219,6 +5219,50 @@ tr_cpath	: tCOLON3 tCONSTANT
 		    }
 		;
 
+tr_types	: tr_types ',' tr_type
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		| tr_type
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		;
+
+tr_largtypes	: '(' tr_types ')'
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		| '(' ')'
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		|
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		;
+
 tr_type		: tr_cpath
 		    {
 		    /*%%%*/
@@ -5236,6 +5280,14 @@ tr_type		: tr_cpath
 		    %*/
 		    }
 		| tLBRACE tr_type tASSOC tr_type '}'
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		| tLAMBDA tr_largtypes tASSOC tr_type
 		    {
 		    /*%%%*/
 			$$ = 0;
