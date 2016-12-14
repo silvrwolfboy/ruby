@@ -5227,6 +5227,22 @@ tr_type		: tr_cpath
 			$$ = Qnil;
 		    %*/
 		    }
+		| tLBRACK tr_type rbracket
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		| tLBRACE tr_type tASSOC tr_type '}'
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
 		;
 
 tr_argsig	: tr_type

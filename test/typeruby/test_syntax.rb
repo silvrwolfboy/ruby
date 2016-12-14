@@ -59,4 +59,16 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo(Proc &bk) end
     RUBY
   end
+
+  def test_array_type
+    assert_parses <<-RUBY
+      def foo => [String]; end
+    RUBY
+  end
+
+  def test_hash_type
+    assert_parses <<-RUBY
+      def foo => { String => String }; end
+    RUBY
+  end
 end
