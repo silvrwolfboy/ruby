@@ -35,4 +35,12 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo(String a, String b) end
     RUBY
   end
+
+  def test_optarg_signatures
+    assert_parses <<-RUBY
+      def foo(Fixnum a = 123) end
+
+      def foo(Fixnum a = 123, Fixnum b = 123) end
+    RUBY
+  end
 end
