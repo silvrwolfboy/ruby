@@ -83,4 +83,12 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo(->(Fixnum) => String &bk); end
     RUBY
   end
+
+  def test_anonymous_block_arg_syntax
+    assert_parses <<-RUBY
+      def foo(&); end
+
+      def foo(Proc &); end
+    RUBY
+  end
 end

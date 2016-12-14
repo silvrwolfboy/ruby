@@ -4960,6 +4960,14 @@ f_block_arg	: tr_argsig blkarg_mark tIDENTIFIER
 			$$ = dispatch1(blockarg, $3);
 		    %*/
 		    }
+		| tr_argsig blkarg_mark
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qundef;
+		    %*/
+		    }
 		;
 
 opt_f_block_arg	: ',' f_block_arg
