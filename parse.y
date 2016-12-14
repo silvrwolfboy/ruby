@@ -5056,6 +5056,8 @@ tr_cpath	: tCOLON3 tCONSTANT
 		;
 
 tr_type		: tr_cpath
+		| tLBRACK tr_type rbracket
+		| tLBRACE tr_type tASSOC tr_type '}'
 		;
 
 tr_argsig	: tr_type
