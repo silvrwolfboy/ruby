@@ -53,4 +53,10 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo(Fixnum a: 123, Fixnum b:, Fixnum c: 456) end
     RUBY
   end
+
+  def test_block_signatures
+    assert_parses <<-RUBY
+      def foo(Proc &bk) end
+    RUBY
+  end
 end

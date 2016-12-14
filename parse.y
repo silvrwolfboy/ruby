@@ -4945,19 +4945,19 @@ blkarg_mark	: '&'
 		| tAMPER
 		;
 
-f_block_arg	: blkarg_mark tIDENTIFIER
+f_block_arg	: tr_argsig blkarg_mark tIDENTIFIER
 		    {
 		    /*%%%*/
-			if (!is_local_id($2))
+			if (!is_local_id($3))
 			    yyerror("block argument must be local variable");
-			else if (!dyna_in_block() && local_id($2))
+			else if (!dyna_in_block() && local_id($3))
 			    yyerror("duplicated block argument name");
 		    /*% %*/
-			arg_var(shadowing_lvar(get_id($2)));
+			arg_var(shadowing_lvar(get_id($3)));
 		    /*%%%*/
-			$$ = $2;
+			$$ = $3;
 		    /*%
-			$$ = dispatch1(blockarg, $2);
+			$$ = dispatch1(blockarg, $3);
 		    %*/
 		    }
 		;
