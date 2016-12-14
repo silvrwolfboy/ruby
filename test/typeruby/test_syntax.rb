@@ -43,4 +43,14 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def foo(Fixnum a = 123, Fixnum b = 123) end
     RUBY
   end
+
+  def test_kwarg_signatures
+    assert_parses <<-RUBY
+      def foo(Fixnum a:) end
+
+      def foo(Fixnum a: 123, Fixnum b:) end
+
+      def foo(Fixnum a: 123, Fixnum b:, Fixnum c: 456) end
+    RUBY
+  end
 end

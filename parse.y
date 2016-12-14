@@ -4746,20 +4746,20 @@ f_label 	: tLABEL
 		    }
 		;
 
-f_kw		: f_label arg_value
+f_kw		: tr_argsig f_label arg_value
 		    {
 			current_arg = 0;
-			$$ = assignable($1, $2);
+			$$ = assignable($2, $3);
 		    /*%%%*/
 			$$ = new_kw_arg($$);
 		    /*%
-			$$ = rb_assoc_new($$, $2);
+			$$ = rb_assoc_new($$, $3);
 		    %*/
 		    }
-		| f_label
+		| tr_argsig f_label
 		    {
 			current_arg = 0;
-			$$ = assignable($1, (NODE *)-1);
+			$$ = assignable($2, (NODE *)-1);
 		    /*%%%*/
 			$$ = new_kw_arg($$);
 		    /*%
