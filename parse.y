@@ -4639,17 +4639,7 @@ f_args		: f_arg ',' f_optarg ',' f_rest_arg opt_args_tail
 		    }
 		;
 
-f_bad_arg	: tCONSTANT
-		    {
-		    /*%%%*/
-			yyerror("formal argument cannot be a constant");
-			$$ = 0;
-		    /*%
-			$$ = dispatch1(param_error, $1);
-			ripper_error();
-		    %*/
-		    }
-		| tIVAR
+f_bad_arg	: tIVAR
 		    {
 		    /*%%%*/
 			yyerror("formal argument cannot be an instance variable");
@@ -4689,12 +4679,12 @@ f_norm_arg	: f_bad_arg
 		    }
 		;
 
-f_arg_asgn	: f_norm_arg
+f_arg_asgn	: tr_argsig f_norm_arg
 		    {
-			ID id = get_id($1);
+			ID id = get_id($2);
 			arg_var(id);
 			current_arg = id;
-			$$ = $1;
+			$$ = $2;
 		    }
 		;
 
