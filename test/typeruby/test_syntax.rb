@@ -7,7 +7,9 @@ class TestTypeRubySyntax < Test::Unit::TestCase
   end
 
   def assert_parses(code)
-    BINDING.eval code
+    loc = caller_locations[0]
+    BINDING.eval code, loc.path, loc.lineno + 1
+    assert true
   end
 
   def test_return_signatures
