@@ -25,4 +25,12 @@ class TestTypeRubySyntax < Test::Unit::TestCase
       def self.foo => String; end
     RUBY
   end
+
+  def test_arg_signatures
+    assert_parses <<-RUBY
+      def foo(String s) end
+
+      def foo(String a, String b) end
+    RUBY
+  end
 end
