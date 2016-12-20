@@ -5076,6 +5076,7 @@ tr_type		: tr_cpath
 		| tLBRACK tr_type rbracket
 		| tLBRACE tr_type tASSOC tr_type '}'
 		| tLAMBDA tr_largtypes tASSOC tr_type
+		| '?' tr_type
 		;
 
 tr_argsig	: tr_type
