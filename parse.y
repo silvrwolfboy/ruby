@@ -26,6 +26,7 @@
 #include "ruby/encoding.h"
 #include "internal.h"
 #include "node.h"
+#include "type.h"
 #include "parse.h"
 #include "symbol.h"
 #include "regenc.h"
@@ -5204,7 +5205,7 @@ none		: /* none */
 tr_cpath	: tCOLON3 tCONSTANT
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_COLON3($2);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5212,7 +5213,7 @@ tr_cpath	: tCOLON3 tCONSTANT
 		| tCONSTANT
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_COLON2(0, $1);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5220,17 +5221,17 @@ tr_cpath	: tCOLON3 tCONSTANT
 		| tr_cpath tCOLON2 tCONSTANT
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_COLON2($1, $3);
 		    /*%
 			$$ = Qnil;
 		    %*/
 		    }
 		;
 
-tr_types	: tr_types ',' tr_type
+tr_types	: tr_type ',' tr_types
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPELIST($1, $3);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5238,7 +5239,7 @@ tr_types	: tr_types ',' tr_type
 		| tr_type
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPELIST($1, NULL);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5248,7 +5249,7 @@ tr_types	: tr_types ',' tr_type
 tr_largtypes	: '(' tr_types ')'
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = $2;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5256,7 +5257,7 @@ tr_largtypes	: '(' tr_types ')'
 		| '(' ')'
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NULL;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5264,7 +5265,7 @@ tr_largtypes	: '(' tr_types ')'
 		|
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NULL;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5274,7 +5275,7 @@ tr_largtypes	: '(' tr_types ')'
 tr_type		: tr_cpath
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = $1;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5282,7 +5283,7 @@ tr_type		: tr_cpath
 		| tLBRACK tr_type rbracket
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_ARRAY($2);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5290,7 +5291,7 @@ tr_type		: tr_cpath
 		| tLBRACE tr_type tASSOC tr_type '}'
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_HASH($2, $4);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5298,7 +5299,15 @@ tr_type		: tr_cpath
 		| tLAMBDA tr_largtypes tASSOC tr_type
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_PROC($2, $4);
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
+		| keyword_nil
+		    {
+		    /*%%%*/
+			$$ = NEW_TYPE_NIL;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5306,7 +5315,7 @@ tr_type		: tr_cpath
 		| '?' tr_type
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NEW_TYPE_NILLABLE($2);
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5316,7 +5325,7 @@ tr_type		: tr_cpath
 tr_argsig	: tr_type
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = $1;
 		    /*%
 			$$ = Qnil;
 		    %*/
@@ -5324,7 +5333,7 @@ tr_argsig	: tr_type
 		|
 		    {
 		    /*%%%*/
-			$$ = 0;
+			$$ = NULL;
 		    /*%
 			$$ = Qnil;
 		    %*/

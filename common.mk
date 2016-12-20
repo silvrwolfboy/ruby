@@ -99,6 +99,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		symbol.$(OBJEXT) \
 		time.$(OBJEXT) \
 		transcode.$(OBJEXT) \
+		type.$(OBJEXT) \
 		util.$(OBJEXT) \
 		variable.$(OBJEXT) \
 		version.$(OBJEXT) \
@@ -1774,6 +1775,7 @@ node.$(OBJEXT): {$(VPATH)}st.h
 node.$(OBJEXT): {$(VPATH)}subst.h
 node.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
 node.$(OBJEXT): {$(VPATH)}thread_native.h
+node.$(OBJEXT): {$(VPATH)}type.h
 node.$(OBJEXT): {$(VPATH)}vm_core.h
 node.$(OBJEXT): {$(VPATH)}vm_debug.h
 node.$(OBJEXT): {$(VPATH)}vm_opts.h
@@ -1846,6 +1848,7 @@ parse.$(OBJEXT): {$(VPATH)}regex.h
 parse.$(OBJEXT): {$(VPATH)}st.h
 parse.$(OBJEXT): {$(VPATH)}subst.h
 parse.$(OBJEXT): {$(VPATH)}symbol.h
+parse.$(OBJEXT): {$(VPATH)}type.h
 parse.$(OBJEXT): {$(VPATH)}util.h
 parse.$(OBJEXT): {$(VPATH)}vm_opts.h
 prelude.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
@@ -2333,6 +2336,9 @@ transcode.$(OBJEXT): {$(VPATH)}st.h
 transcode.$(OBJEXT): {$(VPATH)}subst.h
 transcode.$(OBJEXT): {$(VPATH)}transcode.c
 transcode.$(OBJEXT): {$(VPATH)}transcode_data.h
+type.$(OBJEXT): $(hdrdir)/ruby/ruby.h
+type.$(OBJEXT): {$(VPATH)}node.h
+type.$(OBJEXT): {$(VPATH)}type.h
 util.$(OBJEXT): $(hdrdir)/ruby/ruby.h
 util.$(OBJEXT): $(top_srcdir)/include/ruby.h
 util.$(OBJEXT): {$(VPATH)}config.h

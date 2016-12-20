@@ -11,6 +11,7 @@
 
 #include "ruby/ruby.h"
 #include "vm_core.h"
+#include "type.h"
 
 #define A(str) rb_str_cat2(buf, (str))
 #define AR(str) rb_str_concat(buf, (str))
@@ -1089,6 +1090,10 @@ rb_gc_mark_node(NODE *obj)
 	rb_gc_mark_locations((VALUE*)RNODE(obj)->u1.value,
 			     (VALUE*)RNODE(obj)->u1.value + RNODE(obj)->u3.cnt);
 	rb_gc_mark(RNODE(obj)->u2.value);
+	break;
+
+      case NODE_RTYPE:
+	rb_gc_mark_type((struct RType*)obj);
 	break;
 
       default:		/* unlisted NODE */

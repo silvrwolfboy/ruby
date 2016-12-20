@@ -228,6 +228,8 @@ enum node_type {
 #define NODE_PRELUDE     NODE_PRELUDE
     NODE_LAMBDA,
 #define NODE_LAMBDA      NODE_LAMBDA
+    NODE_RTYPE,
+#define NODE_RTYPE NODE_RTYPE
     NODE_LAST
 #define NODE_LAST        NODE_LAST
 };
