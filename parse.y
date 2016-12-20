@@ -5303,6 +5303,14 @@ tr_type		: tr_cpath
 			$$ = Qnil;
 		    %*/
 		    }
+		| '?' tr_type
+		    {
+		    /*%%%*/
+			$$ = 0;
+		    /*%
+			$$ = Qnil;
+		    %*/
+		    }
 		;
 
 tr_argsig	: tr_type
