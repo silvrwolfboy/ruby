@@ -209,7 +209,7 @@ static ruby_gc_params_t gc_params = {
  *  enable to embed GC debugging information.
  */
 #ifndef GC_DEBUG
-#define GC_DEBUG 1
+#define GC_DEBUG 0
 #endif
 
 #if USE_RGENGC
@@ -628,6 +628,12 @@ typedef struct rb_objspace {
 	size_t error_count;
 #endif
     } rgengc;
+
+    struct {
+	size_t considered_count_table[T_MASK];
+	size_t moved_count_table[T_MASK];
+    } rcompactor;
+
 #if GC_ENABLE_INCREMENTAL_MARK
     struct {
 	size_t pooled_slots;
@@ -6858,13 +6864,13 @@ struct heap_cursor {
 };
 
 static void
-advance_cursor(struct heap_cursor *free)
+advance_cursor(struct heap_cursor *free, struct heap_page **page_list)
 {
     rb_objspace_t *objspace = free->objspace;
 
     if (free->slot == free->page->start + free->page->total_slots - 1) {
 	free->index++;
-	free->page = heap_pages_sorted[free->index];
+	free->page = page_list[free->index];
 	free->slot = free->page->start;
     } else {
 	free->slot++;
@@ -6872,13 +6878,13 @@ advance_cursor(struct heap_cursor *free)
 }
 
 static void
-retreat_cursor(struct heap_cursor *scan)
+retreat_cursor(struct heap_cursor *scan, struct heap_page **page_list)
 {
     rb_objspace_t *objspace = scan->objspace;
 
     if (scan->slot == scan->page->start) {
 	scan->index--;
-	scan->page = heap_pages_sorted[scan->index];
+	scan->page = page_list[scan->index];
 	scan->slot = scan->page->start + scan->page->total_slots - 1;
     } else {
 	scan->slot--;
@@ -6898,17 +6904,17 @@ not_met(struct heap_cursor *free, struct heap_cursor *scan)
 }
 
 static void
-init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_cursor *scan)
+init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_cursor *scan, struct heap_page **page_list)
 {
     struct heap_page *page;
-    page = heap_pages_sorted[0];
+    page = page_list[0];
 
     free->index = 0;
     free->page = page;
     free->slot = page->start;
     free->objspace = objspace;
 
-    page = heap_pages_sorted[heap_allocated_pages - 1];
+    page = page_list[heap_allocated_pages - 1];
     scan->index = heap_allocated_pages - 1;
     scan->page = page;
     scan->slot = page->start + page->total_slots - 1;
@@ -6917,29 +6923,66 @@ init_cursors(rb_objspace_t *objspace, struct heap_cursor *free, struct heap_curs
 
 void print_pages(int i, RVALUE *free, RVALUE *scan);
 
+int count_pinned(struct heap_page *page)
+{
+    RVALUE *pstart = page->start;
+    RVALUE *pend = pstart + page->total_slots;
+    int pinned = 0;
+
+    VALUE v = (VALUE)pstart;
+    for(; v != (VALUE)pend; v += sizeof(RVALUE)) {
+	if (RBASIC(v)->flags && RVALUE_PINNED(v)) {
+	    pinned++;
+	}
+    }
+
+    return pinned;
+}
+
+int compare_pinned(const void *left, const void *right)
+{
+    int left_count = count_pinned(*(struct heap_page * const *)left);
+    int right_count = count_pinned(*(struct heap_page * const *)right);
+    return right_count - left_count;
+}
+
 static void
 gc_compact_page(rb_objspace_t *objspace)
 {
     struct heap_cursor free_cursor;
     struct heap_cursor scan_cursor;
+    int number_considered;
+    struct heap_page **page_list;
 
-    init_cursors(objspace, &free_cursor, &scan_cursor);
+    memset(objspace->rcompactor.considered_count_table, 0, T_MASK);
+    memset(objspace->rcompactor.moved_count_table, 0, T_MASK);
+
+    page_list = calloc(heap_allocated_pages, sizeof(struct heap_page *));
+    memcpy(page_list, heap_pages_sorted, heap_allocated_pages * sizeof(struct heap_page *));
+    qsort(page_list, heap_allocated_pages, sizeof(struct heap_page *), compare_pinned);
+
+    init_cursors(objspace, &free_cursor, &scan_cursor, page_list);
 
     while (not_met(&free_cursor, &scan_cursor)) {
 	while(BUILTIN_TYPE(free_cursor.slot) != T_NONE) {
-	    advance_cursor(&free_cursor);
+	    advance_cursor(&free_cursor, page_list);
 	}
 
+	objspace->rcompactor.considered_count_table[BUILTIN_TYPE((VALUE)scan_cursor.slot)]++;
+
 	while(!gc_is_moveable_obj(objspace, (VALUE)scan_cursor.slot) && not_met(&free_cursor, &scan_cursor)) {
-	    retreat_cursor(&scan_cursor);
+	    retreat_cursor(&scan_cursor, page_list);
+	    objspace->rcompactor.considered_count_table[BUILTIN_TYPE((VALUE)scan_cursor.slot)]++;
 	}
 
 	if (not_met(&free_cursor, &scan_cursor)) {
+	    objspace->rcompactor.moved_count_table[BUILTIN_TYPE((VALUE)scan_cursor.slot)]++;
 	    gc_move(objspace, (VALUE)scan_cursor.slot, (VALUE)free_cursor.slot);
-	    advance_cursor(&free_cursor);
-	    retreat_cursor(&scan_cursor);
+	    advance_cursor(&free_cursor, page_list);
+	    retreat_cursor(&scan_cursor, page_list);
 	}
     }
+    free(page_list);
 }
 
 static void
@@ -7371,6 +7414,33 @@ void print_pages(int i, RVALUE *free, RVALUE *scan)
     printf("\n");
     usleep(50000);
 }
+
+static VALUE type_sym(int type);
+
+static VALUE
+rb_gc_compact_stats(VALUE mod)
+{
+    int i;
+
+    rb_objspace_t *objspace = &rb_objspace;
+    VALUE h = rb_hash_new();
+    VALUE considered = rb_hash_new();
+    VALUE moved = rb_hash_new();
+
+    for (i=0; i<T_MASK; i++) {
+	rb_hash_aset(considered, type_sym(i), SIZET2NUM(objspace->rcompactor.considered_count_table[i]));
+    }
+
+    for (i=0; i<T_MASK; i++) {
+	rb_hash_aset(moved, type_sym(i), SIZET2NUM(objspace->rcompactor.moved_count_table[i]));
+    }
+
+    rb_hash_aset(h, ID2SYM(rb_intern("considered")), considered);
+    rb_hash_aset(h, ID2SYM(rb_intern("moved")), moved);
+
+    return h;
+}
+
 static VALUE
 rb_gc_compact(VALUE mod)
 {
@@ -7415,7 +7485,7 @@ rb_gc_compact(VALUE mod)
     gc_ref_update_array(ary);
     */
 
-    return Qnil;
+    return rb_gc_compact_stats(mod);
 }
 
 VALUE
@@ -9902,6 +9972,57 @@ gc_profile_disable(void)
 /*
   ------------------------------ DEBUG ------------------------------
 */
+
+/* Stolen from ko1's allocation_tracer gem */
+
+static VALUE
+type_sym(int type)
+{
+    static VALUE syms[T_MASK] = {0};
+
+    if (syms[0] == 0) {
+	int i;
+	for (i=0; i<T_MASK; i++) {
+	    switch (i) {
+#define TYPE_NAME(t) case (t): syms[i] = ID2SYM(rb_intern(#t)); break;
+		TYPE_NAME(T_NONE);
+		TYPE_NAME(T_OBJECT);
+		TYPE_NAME(T_CLASS);
+		TYPE_NAME(T_MODULE);
+		TYPE_NAME(T_FLOAT);
+		TYPE_NAME(T_STRING);
+		TYPE_NAME(T_REGEXP);
+		TYPE_NAME(T_ARRAY);
+		TYPE_NAME(T_HASH);
+		TYPE_NAME(T_STRUCT);
+		TYPE_NAME(T_BIGNUM);
+		TYPE_NAME(T_FILE);
+		TYPE_NAME(T_MATCH);
+		TYPE_NAME(T_COMPLEX);
+		TYPE_NAME(T_RATIONAL);
+		TYPE_NAME(T_NIL);
+		TYPE_NAME(T_TRUE);
+		TYPE_NAME(T_FALSE);
+		TYPE_NAME(T_SYMBOL);
+		TYPE_NAME(T_FIXNUM);
+		TYPE_NAME(T_UNDEF);
+#ifdef T_IMEMO /* introduced from Rub 2.3 */
+		TYPE_NAME(T_IMEMO);
+#endif
+		TYPE_NAME(T_NODE);
+		TYPE_NAME(T_ICLASS);
+		TYPE_NAME(T_ZOMBIE);
+		TYPE_NAME(T_DATA);
+	      default:
+		syms[i] = ID2SYM(rb_intern("unknown"));
+		break;
+#undef TYPE_NAME
+	    }
+	}
+    }
+
+    return syms[type];
+}
 
 static const char *
 type_name(int type, VALUE obj)
