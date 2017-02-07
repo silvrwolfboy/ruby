@@ -5056,6 +5056,22 @@ none		: /* none */
 		    %*/
 		    }
 		;
+
+tr_cpath	: tCOLON3 tCONSTANT
+		| tCONSTANT
+		| tr_cpath tCOLON2 tCONSTANT
+		;
+
+tr_type		: tr_cpath
+		;
+
+tr_argsig	: tr_type
+		|
+		;
+
+tr_returnsig	: tASSOC tr_type
+		|
+		;
 %%
 # undef parser
 # undef yylex
