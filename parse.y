@@ -5077,6 +5077,7 @@ tr_type		: tr_cpath
 		| tLBRACE tr_type tASSOC tr_type '}'
 		| tLAMBDA tr_largtypes tASSOC tr_type
 		| '?' tr_type
+		| keyword_nil
 		;
 
 tr_argsig	: tr_type
