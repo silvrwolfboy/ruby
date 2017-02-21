@@ -7208,6 +7208,23 @@ update_const_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
 }
 
 static void
+update_subclass_entries(rb_objspace_t *objspace, rb_subclass_entry_t *entry)
+{
+    while (entry) {
+	UPDATE_IF_MOVED(objspace, entry->klass);
+	entry = entry->next;
+    }
+}
+
+static void
+update_class_ext(rb_objspace_t *objspace, rb_classext_t *ext)
+{
+    UPDATE_IF_MOVED(objspace, ext->origin_);
+    UPDATE_IF_MOVED(objspace, ext->refined_class);
+    update_subclass_entries(objspace, ext->subclasses);
+}
+
+static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
@@ -7223,6 +7240,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_MODULE:
 	    update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    if (!RCLASS_EXT(obj)) break;
+	    update_class_ext(objspace, RCLASS_EXT(obj));
 	    update_const_tbl(objspace, RCLASS_CONST_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;
@@ -7232,6 +7250,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 		update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    }
 	    if (!RCLASS_EXT(obj)) break;
+	    update_class_ext(objspace, RCLASS_EXT(obj));
 	    update_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
 	    break;

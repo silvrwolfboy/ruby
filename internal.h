@@ -683,7 +683,7 @@ struct rb_classext_struct {
      */
     rb_subclass_entry_t **module_subclasses;
     rb_serial_t class_serial;
-    const VALUE origin_;
+    VALUE origin_;
     VALUE refined_class;
     rb_alloc_func_t allocator;
 };
