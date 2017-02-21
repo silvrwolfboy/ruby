@@ -6858,7 +6858,7 @@ gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct hea
 
 struct heap_cursor {
     RVALUE *slot;
-    int index;
+    size_t index;
     struct heap_page *page;
     rb_objspace_t * objspace;
 };
