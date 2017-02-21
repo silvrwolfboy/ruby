@@ -94,7 +94,7 @@ class TestTypeRubySyntax < Test::Unit::TestCase
 
   def test_nillable_type
     assert_parses <<-RUBY
-      def foo => ?String; end
+      def foo => ~String; end
     RUBY
   end
 end
