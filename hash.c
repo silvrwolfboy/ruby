@@ -3382,9 +3382,18 @@ check_envname(const char *name)
 }
 #endif
 
+static void
+check_running_threads(void)
+{
+    if (!rb_thread_alone())
+        rb_raise(rb_eRuntimeError, "cannot setenv() in a multi-threaded program");
+}
+
 void
 ruby_setenv(const char *name, const char *value)
 {
+    check_running_threads();
+
 #if defined(_WIN32)
 # if defined(MINGW_HAS_SECURE_API) || RUBY_MSVCRT_VERSION >= 80
 #   define HAVE__WPUTENV_S 1
