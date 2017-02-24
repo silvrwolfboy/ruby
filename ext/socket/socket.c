@@ -991,6 +991,7 @@ sock_sockaddr(struct sockaddr *addr, socklen_t len)
 static VALUE
 sock_s_gethostbyname(VALUE obj, VALUE host)
 {
+	rb_raise(rb_eSocket, "gethostbyname is disabled (%s)", StringValueCStr(host));
     struct rb_addrinfo *res =
 	rsock_addrinfo(host, Qnil, AF_UNSPEC, SOCK_STREAM, AI_CANONNAME);
     return rsock_make_hostent(host, res, sock_sockaddr);
