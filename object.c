@@ -3597,7 +3597,10 @@ InitVM_Object(void)
     rb_cData = rb_define_class("Data", rb_cObject);
     rb_undef_alloc_func(rb_cData);
 
-    rb_cTrueClass = rb_define_class("TrueClass", rb_cObject);
+    VALUE Boolean = rb_define_class("Boolean", rb_cObject);
+    rb_undef_alloc_func(Boolean);
+
+    rb_cTrueClass = rb_define_class("TrueClass", Boolean);
     rb_define_method(rb_cTrueClass, "to_s", true_to_s, 0);
     rb_define_alias(rb_cTrueClass, "inspect", "to_s");
     rb_define_method(rb_cTrueClass, "&", true_and, 1);
@@ -3612,7 +3615,7 @@ InitVM_Object(void)
     rb_define_global_const("TRUE", Qtrue);
     rb_deprecate_constant(rb_cObject, "TRUE");
 
-    rb_cFalseClass = rb_define_class("FalseClass", rb_cObject);
+    rb_cFalseClass = rb_define_class("FalseClass", Boolean);
     rb_define_method(rb_cFalseClass, "to_s", false_to_s, 0);
     rb_define_alias(rb_cFalseClass, "inspect", "to_s");
     rb_define_method(rb_cFalseClass, "&", false_and, 1);
