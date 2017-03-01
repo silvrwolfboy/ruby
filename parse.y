@@ -1910,6 +1910,18 @@ cpath		: tCOLON3 cname
 			$$ = dispatch2(const_path_ref, $1, $3);
 		    %*/
 		    }
+		| primary_value tCOLON2 '[' tr_gendeclargs rbracket
+		    {
+		    /*%%%*/
+			if (nd_type($1) == NODE_CONST) {
+			    $$ = NEW_COLON2(0, $1->nd_vid);
+			} else {
+			    $$ = $1;
+			}
+		    /*%
+			$$ = $1;
+		    %*/
+		    }
 		;
 
 fname		: tIDENTIFIER
@@ -5086,6 +5098,10 @@ tr_argsig	: tr_type
 
 tr_returnsig	: tASSOC tr_type
 		|
+		;
+
+tr_gendeclargs	: tr_gendeclargs ',' tCONSTANT
+		| tCONSTANT
 		;
 %%
 # undef parser
