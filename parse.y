@@ -2696,6 +2696,10 @@ primary		: literal
 			$$ = dispatch1(paren, $2);
 		    %*/
 		    }
+		| tLPAREN expr ':' tr_type ')'
+		    {
+			$$ = $2;
+		    }
 		| primary_value tCOLON2 tCONSTANT
 		    {
 		    /*%%%*/
