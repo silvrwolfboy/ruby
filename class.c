@@ -781,6 +781,7 @@ rb_define_module(const char *name)
     }
     module = rb_define_module_id(id);
     rb_vm_add_root_module(id, module);
+    rb_gc_register_mark_object(module);
     rb_const_set(rb_cObject, id, module);
 
     return module;
