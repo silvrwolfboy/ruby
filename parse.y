@@ -5084,6 +5084,7 @@ tr_type		: tr_cpath
 		| tLBRACE tr_type tASSOC tr_type '}'
 		| '~' tr_type
 		| keyword_nil
+		| symbol
 		;
 
 tr_argsig	: tr_type
