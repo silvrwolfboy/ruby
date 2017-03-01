@@ -4774,20 +4774,20 @@ restarg_mark	: '*'
 		| tSTAR
 		;
 
-f_rest_arg	: restarg_mark tIDENTIFIER
+f_rest_arg	: tr_argsig restarg_mark tIDENTIFIER
 		    {
 		    /*%%%*/
-			if (!is_local_id($2))
+			if (!is_local_id($3))
 			    yyerror("rest argument must be local variable");
 		    /*% %*/
-			arg_var(shadowing_lvar(get_id($2)));
+			arg_var(shadowing_lvar(get_id($3)));
 		    /*%%%*/
-			$$ = $2;
+			$$ = $3;
 		    /*%
-			$$ = dispatch1(rest_param, $2);
+			$$ = dispatch1(rest_param, $3);
 		    %*/
 		    }
-		| restarg_mark
+		| tr_argsig restarg_mark
 		    {
 		    /*%%%*/
 			$$ = internal_id();
