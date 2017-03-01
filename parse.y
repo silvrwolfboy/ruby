@@ -3425,6 +3425,10 @@ opt_block_param	: none
 		    {
 			command_start = TRUE;
 		    }
+		  tr_returnsig
+		    {
+			$$ = $1;
+		    }
 		;
 
 block_param_def	: '|' opt_bv_decl '|'
