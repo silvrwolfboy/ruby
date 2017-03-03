@@ -2498,6 +2498,7 @@ internal_object_p(VALUE obj)
     if (p->as.basic.flags) {
 	switch (BUILTIN_TYPE(p)) {
 	  case T_NONE:
+	  case T_MOVED:
 	  case T_IMEMO:
 	  case T_ICLASS:
 	  case T_NODE:
@@ -4012,34 +4013,30 @@ ruby_stack_check(void)
 
 ATTRIBUTE_NO_ADDRESS_SAFETY_ANALYSIS
 static void
-mark_locations_array(rb_objspace_t *objspace, register const VALUE *x, register long n, int pin)
+mark_locations_array(rb_objspace_t *objspace, register const VALUE *x, register long n)
 {
     VALUE v;
     while (n--) {
         v = *x;
-	if (pin) {
-	    gc_mark_and_pin_maybe(objspace, v);
-	} else {
-	    gc_mark_maybe(objspace, v);
-	}
+	gc_mark_and_pin_maybe(objspace, v);
 	x++;
     }
 }
 
 static void
-gc_mark_locations(rb_objspace_t *objspace, const VALUE *start, const VALUE *end, int pin)
+gc_mark_locations(rb_objspace_t *objspace, const VALUE *start, const VALUE *end)
 {
     long n;
 
     if (end <= start) return;
     n = end - start;
-    mark_locations_array(objspace, start, n, pin);
+    mark_locations_array(objspace, start, n);
 }
 
 void
 rb_gc_mark_locations(const VALUE *start, const VALUE *end)
 {
-    gc_mark_locations(&rb_objspace, start, end, 1);
+    gc_mark_locations(&rb_objspace, start, end);
 }
 
 static void
@@ -4234,7 +4231,7 @@ mark_current_machine_context(rb_objspace_t *objspace, rb_thread_t *th)
     SET_STACK_END;
     GET_STACK_BOUNDS(stack_start, stack_end, 1);
 
-    mark_locations_array(objspace, save_regs_gc_mark.v, numberof(save_regs_gc_mark.v), 0);
+    mark_locations_array(objspace, save_regs_gc_mark.v, numberof(save_regs_gc_mark.v));
 
     mark_stack_locations(objspace, th, stack_start, stack_end);
 }
@@ -4254,16 +4251,16 @@ mark_stack_locations(rb_objspace_t *objspace, rb_thread_t *th,
 		     const VALUE *stack_start, const VALUE *stack_end)
 {
 
-    gc_mark_locations(objspace, stack_start, stack_end, 0);
+    gc_mark_locations(objspace, stack_start, stack_end);
 #ifdef __ia64
     gc_mark_locations(objspace,
 		      th->machine.register_stack_start,
-		      th->machine.register_stack_end, 0);
+		      th->machine.register_stack_end);
 #endif
 #if defined(__mc68000__)
     gc_mark_locations(objspace,
 		      (VALUE*)((char*)stack_start + 2),
-		      (VALUE*)((char*)stack_end - 2), 0);
+		      (VALUE*)((char*)stack_end - 2));
 #endif
 }
 
