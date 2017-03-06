@@ -4646,18 +4646,18 @@ f_kw		: tr_argsig f_label arg_value
 		    }
 		;
 
-f_block_kw	: f_label primary_value
+f_block_kw	: tr_argsig f_label primary_value
 		    {
-			$$ = assignable($1, $2);
+			$$ = assignable($2, $3);
 		    /*%%%*/
 			$$ = new_kw_arg($$);
 		    /*%
-			$$ = rb_assoc_new($$, $2);
+			$$ = rb_assoc_new($$, $3);
 		    %*/
 		    }
-		| f_label
+		| tr_argsig f_label
 		    {
-			$$ = assignable($1, (NODE *)-1);
+			$$ = assignable($2, (NODE *)-1);
 		    /*%%%*/
 			$$ = new_kw_arg($$);
 		    /*%
