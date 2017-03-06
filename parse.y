@@ -4398,7 +4398,7 @@ superclass	: '<'
 		    }
 		;
 
-f_arglist	: '(' f_args rparen
+f_arglist	: tr_methodgenargs '(' f_args rparen
 		    {
 			SET_LEX_STATE(EXPR_BEG);
 			command_start = TRUE;
@@ -4406,20 +4406,21 @@ f_arglist	: '(' f_args rparen
 		    tr_returnsig
 		    {
 		    /*%%%*/
-			$$ = $2;
+			$$ = $3;
 		    /*%
-			$$ = dispatch1(paren, $2);
+			$$ = dispatch1(paren, $3);
 		    %*/
 		    }
-		|   {
+		| tr_methodgenargs
+		    {
 			$<num>$ = parser->in_kwarg;
 			parser->in_kwarg = 1;
 			lex_state |= EXPR_LABEL; /* force for args */
 		    }
 		    f_args tr_returnsig term
 		    {
-			parser->in_kwarg = !!$<num>1;
-			$$ = $2;
+			parser->in_kwarg = !!$<num>2;
+			$$ = $3;
 			SET_LEX_STATE(EXPR_BEG);
 			command_start = TRUE;
 		    }
@@ -5108,6 +5109,11 @@ tr_returnsig	: tASSOC tr_type
 tr_gendeclargs	: tr_gendeclargs ',' tCONSTANT
 		| tCONSTANT
 		;
+
+tr_methodgenargs: '[' tr_gendeclargs rbracket
+		|
+		;
+
 %%
 # undef parser
 # undef yylex
