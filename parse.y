@@ -5091,6 +5091,7 @@ tr_types	: tr_types ',' tr_type
 tr_type		: tr_cpath
 		| tr_cpath tCOLON2 '[' tr_types rbracket
 		| tLBRACK tr_type rbracket
+		| tLBRACK tr_type ',' tr_types rbracket
 		| tLBRACE tr_type tASSOC tr_type '}'
 		| tLBRACE block_param_def tr_returnsig '}'
 		| '~' tr_type
