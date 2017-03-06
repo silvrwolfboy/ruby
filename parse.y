@@ -5093,7 +5093,7 @@ tr_type		: tr_cpath
 		| tLBRACK tr_type rbracket
 		| tLBRACK tr_type ',' tr_types rbracket
 		| tLBRACE tr_type tASSOC tr_type '}'
-		| tLBRACE block_param_def tr_returnsig '}'
+		| tLBRACE tr_blockproto tr_returnsig '}'
 		| '~' tr_type
 		| keyword_nil
 		| symbol
@@ -5116,6 +5116,11 @@ tr_gendeclargs	: tr_gendeclargs ',' tCONSTANT
 
 tr_methodgenargs: '[' tr_gendeclargs rbracket
 		|
+		;
+
+tr_blockproto	: { $<vars>$ = dyna_push(); }
+		  block_param_def
+		  { dyna_pop($<vars>1); }
 		;
 
 %%
