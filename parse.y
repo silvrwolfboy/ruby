@@ -5099,6 +5099,9 @@ tr_type		: tr_cpath
 		;
 
 tr_argsig	: tr_type
+		    {
+			SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
+		    }
 		|
 		;
 
