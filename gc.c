@@ -7485,6 +7485,7 @@ rb_gc_compact(VALUE mod)
     gc_mode_transition(objspace, gc_mode_none);
 
     rb_clear_method_cache_by_class(rb_cObject);
+    rb_clear_constant_cache();
 
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
