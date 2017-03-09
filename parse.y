@@ -1320,6 +1320,10 @@ stmt		: keyword_alias fitem {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
 			$$ = dispatch2(massign, $1, $3);
 		    %*/
 		    }
+		| k_def tIVAR ':' tr_type
+		    {
+			$$ = 0;
+		    }
 		| expr
 		;
 
