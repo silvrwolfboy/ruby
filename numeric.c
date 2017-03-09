@@ -552,18 +552,38 @@ num_sadded(VALUE x, VALUE name)
     UNREACHABLE;
 }
 
+#if 0
 /*
- * Numerics are immutable values, which should not be copied.
+ *  call-seq:
+ *     num.clone(freeze: true) -> num
  *
- * Any attempt to use this method on a Numeric will raise a TypeError.
+ *  Returns the receiver.
+ *  _freeze_ cannot be +false+.
  */
 static VALUE
-num_init_copy(VALUE x, VALUE y)
+num_clone(int argc, VALUE *argv, VALUE x)
 {
-    rb_raise(rb_eTypeError, "can't copy %"PRIsVALUE, rb_obj_class(x));
-
-    UNREACHABLE;
+    return rb_immutable_obj_clone(argc, argv, x);
 }
+#else
+# define num_clone rb_immutable_obj_clone
+#endif
+
+#if 0
+/*
+ *  call-seq:
+ *     num.dup -> num
+ *
+ *  Returns the receiver.
+ */
+static VALUE
+num_dup(VALUE x)
+{
+    return x;
+}
+#else
+# define num_dup num_uplus
+#endif
 
 /*
  *  call-seq:
@@ -1398,8 +1418,8 @@ num_equal(VALUE x, VALUE y)
  *
  */
 
-static VALUE
-flo_eq(VALUE x, VALUE y)
+VALUE
+rb_float_equal(VALUE x, VALUE y)
 {
     volatile double a, b;
 
@@ -1421,6 +1441,8 @@ flo_eq(VALUE x, VALUE y)
 #endif
     return (a == b)?Qtrue:Qfalse;
 }
+
+#define flo_eq rb_float_equal
 
 /*
  * call-seq:
@@ -3458,15 +3480,7 @@ static VALUE
 fix_plus(VALUE x, VALUE y)
 {
     if (FIXNUM_P(y)) {
-	long a, b, c;
-	VALUE r;
-
-	a = FIX2LONG(x);
-	b = FIX2LONG(y);
-	c = a + b;
-	r = LONG2NUM(c);
-
-	return r;
+	return rb_fix_plus_fix(x, y);
     }
     else if (RB_TYPE_P(y, T_BIGNUM)) {
 	return rb_big_plus(y, x);
@@ -3513,15 +3527,7 @@ static VALUE
 fix_minus(VALUE x, VALUE y)
 {
     if (FIXNUM_P(y)) {
-	long a, b, c;
-	VALUE r;
-
-	a = FIX2LONG(x);
-	b = FIX2LONG(y);
-	c = a - b;
-	r = LONG2NUM(c);
-
-	return r;
+	return rb_fix_minus_fix(x, y);
     }
     else if (RB_TYPE_P(y, T_BIGNUM)) {
 	x = rb_int2big(FIX2LONG(x));
@@ -3639,7 +3645,7 @@ rb_int_fdiv_double(VALUE x, VALUE y)
  *  call-seq:
  *     integer.fdiv(numeric)  ->  float
  *
- *  Returns the floating point result of dividing +fix+ by +numeric+.
+ *  Returns the floating point result of dividing +integer+ by +numeric+.
  *
  *     654321.fdiv(13731)      #=> 47.6528293642124
  *     654321.fdiv(13731.24)   #=> 47.6519964693647
@@ -3909,6 +3915,8 @@ int_pow(long x, unsigned long y)
 		VALUE v;
 	      bignum:
 		v = rb_big_pow(rb_int2big(x), LONG2NUM(y));
+		if (RB_FLOAT_TYPE_P(v)) /* infinity due to overflow */
+		    return v;
 		if (z != 1) v = rb_big_mul(rb_int2big(neg ? -z : z), v);
 		return v;
 	    }
@@ -4638,7 +4646,7 @@ rb_int_abs(VALUE num)
  *  call-seq:
  *     int.size  ->  int
  *
- *  Returns the number of bytes in the machine representation of +fix+.
+ *  Returns the number of bytes in the machine representation of +int+.
  *
  *     1.size            #=> 4
  *     -1.size           #=> 4
@@ -5122,6 +5130,107 @@ int_truncate(int argc, VALUE* argv, VALUE num)
     return rb_int_truncate(num, ndigits);
 }
 
+#define DEFINE_INT_SQRT(rettype, prefix, argtype) \
+rettype \
+prefix##_isqrt(argtype n) \
+{ \
+    if (!argtype##_IN_DOUBLE_P(n)) { \
+	unsigned int b = bit_length(n); \
+	argtype t; \
+	rettype x = (rettype)(n >> (b/2+1)); \
+	x |= ((rettype)1LU << (b-1)/2); \
+	while ((t = n/x) < (argtype)x) x = (rettype)((x + t) >> 1); \
+	return x; \
+    } \
+    return (rettype)sqrt(argtype##_TO_DOUBLE(n)); \
+}
+
+#if SIZEOF_LONG*CHAR_BIT > DBL_MANT_DIG
+# define RB_ULONG_IN_DOUBLE_P(n) ((n) < (1UL << DBL_MANT_DIG))
+#else
+# define RB_ULONG_IN_DOUBLE_P(n) 1
+#endif
+#define RB_ULONG_TO_DOUBLE(n) (double)(n)
+#define RB_ULONG unsigned long
+DEFINE_INT_SQRT(unsigned long, rb_ulong, RB_ULONG)
+
+#if 2*SIZEOF_BDIGIT > SIZEOF_LONG
+# if 2*SIZEOF_BDIGIT*CHAR_BIT > DBL_MANT_DIG
+#   define BDIGIT_DBL_IN_DOUBLE_P(n) ((n) < ((BDIGIT_DBL)1UL << DBL_MANT_DIG))
+# else
+#   define BDIGIT_DBL_IN_DOUBLE_P(n) 1
+# endif
+# ifdef ULL_TO_DOUBLE
+#   define BDIGIT_DBL_TO_DOUBLE(n) ULL_TO_DOUBLE(n)
+# else
+#   define BDIGIT_DBL_TO_DOUBLE(n) (double)(n)
+# endif
+DEFINE_INT_SQRT(BDIGIT, rb_bdigit_dbl, BDIGIT_DBL)
+#endif
+
+#define domain_error(msg) \
+    rb_raise(rb_eMathDomainError, "Numerical argument is out of domain - " #msg)
+
+VALUE rb_big_isqrt(VALUE);
+
+/*
+ *  Document-method: Integer::sqrt
+ *  call-seq:
+ *     Integer.sqrt(n)  ->  integer
+ *
+ *  Returns the integer square root of the non-negative integer +n+,
+ *  i.e. the largest non-negative integer less than or equal to the
+ *  square root of +n+.
+ *
+ *    Integer.sqrt(0)        #=> 0
+ *    Integer.sqrt(1)        #=> 1
+ *    Integer.sqrt(24)       #=> 4
+ *    Integer.sqrt(25)       #=> 5
+ *    Integer.sqrt(10**400)  #=> 10**200
+ *
+ *  Equivalent to <code>Math.sqrt(n).floor</code>, except that
+ *  the result of the latter code may differ from the true value
+ *  due to the limited precision of floating point arithmetic.
+ *
+ *    Integer.sqrt(10**46)     #=> 100000000000000000000000
+ *    Math.sqrt(10**46).floor  #=>  99999999999999991611392 (!)
+ *
+ *  If +n+ is not an Integer, it is converted to an Integer first.
+ *  If +n+ is negative, a Math::DomainError is raised.
+ */
+
+static VALUE
+rb_int_s_isqrt(VALUE self, VALUE num)
+{
+    unsigned long n, sq;
+    num = rb_to_int(num);
+    if (FIXNUM_P(num)) {
+	if (FIXNUM_NEGATIVE_P(num)) {
+	    domain_error("isqrt");
+	}
+	n = FIX2ULONG(num);
+	sq = rb_ulong_isqrt(n);
+	return LONG2FIX(sq);
+    }
+    else {
+	size_t biglen;
+	if (RBIGNUM_NEGATIVE_P(num)) {
+	    domain_error("isqrt");
+	}
+	biglen = BIGNUM_LEN(num);
+	if (biglen == 0) return INT2FIX(0);
+#if SIZEOF_BDIGIT <= SIZEOF_LONG
+	/* short-circuit */
+	if (biglen == 1) {
+	    n = BIGNUM_DIGITS(num)[0];
+	    sq = rb_ulong_isqrt(n);
+	    return ULONG2NUM(sq);
+	}
+#endif
+	return rb_big_isqrt(num);
+    }
+}
+
 /*
  *  Document-class: ZeroDivisionError
  *
@@ -5238,8 +5347,9 @@ Init_Numeric(void)
 
     rb_define_method(rb_cNumeric, "singleton_method_added", num_sadded, 1);
     rb_include_module(rb_cNumeric, rb_mComparable);
-    rb_define_method(rb_cNumeric, "initialize_copy", num_init_copy, 1);
     rb_define_method(rb_cNumeric, "coerce", num_coerce, 1);
+    rb_define_method(rb_cNumeric, "clone", num_clone, -1);
+    rb_define_method(rb_cNumeric, "dup", num_dup, 0);
 
     rb_define_method(rb_cNumeric, "i", num_imaginary, 0);
     rb_define_method(rb_cNumeric, "+@", num_uplus, 0);
@@ -5274,6 +5384,7 @@ Init_Numeric(void)
     rb_cInteger = rb_define_class("Integer", rb_cNumeric);
     rb_undef_alloc_func(rb_cInteger);
     rb_undef_method(CLASS_OF(rb_cInteger), "new");
+    rb_define_singleton_method(rb_cInteger, "sqrt", rb_int_s_isqrt, 1);
 
     rb_define_method(rb_cInteger, "to_s", int_to_s, -1);
     rb_define_alias(rb_cInteger, "inspect", "to_s");

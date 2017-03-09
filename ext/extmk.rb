@@ -538,6 +538,8 @@ build_complete: $(build_complete)
 $(build_complete): $(TARGET_SO)
 	$(Q) $(TOUCH) $@
 
+clean-so::
+	-$(Q)$(RM) $(build_complete)
 }
       conf
     end
@@ -721,9 +723,12 @@ begin
       fails.each do |d, n, err|
         d = "#{d}:#{n}:"
         if err
-          d << " " << err
+          err.scan(/.+/) do |ee|
+            mf.puts %Q<\t@echo "#{d} #{ee.gsub(/["`$^]/, '\\\\\\&')}">
+          end
+        else
+          mf.puts %Q<\t@echo "#{d}">
         end
-        mf.puts %Q<\t@echo "#{d}">
       end
       mf.puts %Q<\t@echo "*** Fix the problems, then remove these directories and try again if you want.">
     end

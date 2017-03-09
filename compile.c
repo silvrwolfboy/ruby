@@ -559,7 +559,7 @@ validate_label(st_data_t name, st_data_t label, st_data_t arg)
 	do {
 	    COMPILE_ERROR(iseq, lobj->position,
 			  "%"PRIsVALUE": undefined label",
-			  rb_id2str((ID)name));
+			  rb_sym2str((VALUE)name));
 	} while (0);
     }
     return ST_CONTINUE;
@@ -1307,7 +1307,7 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
 
     iseq->body->param.flags.has_kw = TRUE;
     iseq->body->param.keyword = keyword = ZALLOC_N(struct rb_iseq_param_keyword, 1);
-    keyword->bits_start = get_dyna_var_idx_at_raw(iseq, args->kw_rest_arg->nd_vid);
+    keyword->bits_start = get_dyna_var_idx_at_raw(iseq, args->kw_rest_arg->nd_cflag);
 
     while (node) {
 	NODE *val_node = node->nd_body->nd_value;
@@ -1346,8 +1346,8 @@ iseq_set_arguments_keywords(rb_iseq_t *iseq, LINK_ANCHOR *const optargs,
 
     keyword->num = kw;
 
-    if (args->kw_rest_arg->nd_cflag != 0) {
-	keyword->rest_start =  get_dyna_var_idx_at_raw(iseq, args->kw_rest_arg->nd_cflag);
+    if (args->kw_rest_arg->nd_vid != 0) {
+	keyword->rest_start =  get_dyna_var_idx_at_raw(iseq, args->kw_rest_arg->nd_vid);
 	iseq->body->param.flags.has_kwrest = TRUE;
     }
     keyword->required_num = rkw;
@@ -1642,6 +1642,12 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
     list = FIRST_ELEMENT(anchor);
     line_info_index = code_index = sp = 0;
 
+#define BADINSN_ERROR \
+    (dump_disasm_list(list), \
+     xfree(generated_iseq), \
+     xfree(line_info_table), \
+     COMPILE_ERROR)
+
     while (list) {
 	switch (list->type) {
 	  case ISEQ_ELEMENT_INSN:
@@ -1653,6 +1659,11 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 
 		/* update sp */
 		sp = calc_sp_depth(sp, iobj);
+		if (sp < 0) {
+		    BADINSN_ERROR(iseq, iobj->line_no,
+				  "argument stack underflow (%d)", sp);
+		    return COMPILE_NG;
+		}
 		if (sp > stack_max) {
 		    stack_max = sp;
 		}
@@ -1667,10 +1678,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 		/* operand check */
 		if (iobj->operand_size != len - 1) {
 		    /* printf("operand size miss! (%d, %d)\n", iobj->operand_size, len); */
-		    dump_disasm_list(list);
-		    xfree(generated_iseq);
-		    xfree(line_info_table);
-		    COMPILE_ERROR(iseq, iobj->line_no,
+		    BADINSN_ERROR(iseq, iobj->line_no,
 				  "operand size miss! (%d for %d)",
 				  iobj->operand_size, len - 1);
 		    return COMPILE_NG;
@@ -1685,7 +1693,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			    /* label(destination position) */
 			    LABEL *lobj = (LABEL *)operands[j];
 			    if (!lobj->set) {
-				COMPILE_ERROR(iseq, iobj->line_no,
+				BADINSN_ERROR(iseq, iobj->line_no,
 					      "unknown label");
 				return COMPILE_NG;
 			    }
@@ -1778,9 +1786,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			generated_iseq[code_index + 1 + j] = operands[j];
 			break;
 		      default:
-			xfree(generated_iseq);
-			xfree(line_info_table);
-			COMPILE_ERROR(iseq, iobj->line_no,
+			BADINSN_ERROR(iseq, iobj->line_no,
 				      "unknown operand type: %c", type);
 			return COMPILE_NG;
 		    }
@@ -1854,6 +1860,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
     iseq->body->iseq_encoded = (void *)generated_iseq;
     iseq->body->iseq_size = code_index;
     iseq->body->stack_max = stack_max;
+
+    /* get rid of memory leak when REALLOC failed */
+    iseq->body->line_info_table = line_info_table;
 
     REALLOC_N(line_info_table, struct iseq_line_info_entry, line_info_index);
     iseq->body->line_info_table = line_info_table;
@@ -2876,7 +2885,7 @@ compile_branch_condition(rb_iseq_t *iseq, LINK_ANCHOR *const ret, NODE *cond,
 				     else_label);
 	    break;
 	}
-      case NODE_LIT:		/* NODE_LIT is always not true */
+      case NODE_LIT:		/* NODE_LIT is always true */
       case NODE_TRUE:
       case NODE_STR:
       case NODE_DSTR:
@@ -5259,7 +5268,7 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *const ret, NODE *node, int poppe
 		LABEL *label;
 		st_data_t data;
 		st_table *labels_table = ISEQ_COMPILE_DATA(iseq)->labels_table;
-		ID label_name;
+		VALUE label_name;
 
 		if (!labels_table) {
 		    labels_table = st_init_numtable();
@@ -5268,7 +5277,7 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *const ret, NODE *node, int poppe
 		if (nd_type(node->nd_args->nd_head) == NODE_LIT &&
 		    SYMBOL_P(node->nd_args->nd_head->nd_lit)) {
 
-		    label_name = SYM2ID(node->nd_args->nd_head->nd_lit);
+		    label_name = node->nd_args->nd_head->nd_lit;
 		    if (!st_lookup(labels_table, (st_data_t)label_name, &data)) {
 			label = NEW_LABEL(line);
 			label->position = line;
@@ -5971,7 +5980,7 @@ iseq_compile_each(rb_iseq_t *iseq, LINK_ANCHOR *const ret, NODE *node, int poppe
       }
       case NODE_SCLASS:{
 	ID singletonclass;
-	const rb_iseq_t *singleton_class = NEW_ISEQ(node->nd_body, rb_str_new2("singleton class"),
+	const rb_iseq_t *singleton_class = NEW_ISEQ(node->nd_body, rb_fstring_cstr("singleton class"),
 						    ISEQ_TYPE_CLASS, line);
 
 	CHECK(COMPILE(ret, "sclass#recv", node->nd_recv));
@@ -6515,7 +6524,7 @@ rb_insns_name_array(void)
     VALUE ary = rb_ary_new();
     int i;
     for (i = 0; i < numberof(insn_name_info); i++) {
-	rb_ary_push(ary, rb_fstring(rb_str_new2(insn_name_info[i])));
+	rb_ary_push(ary, rb_fstring_cstr(insn_name_info[i]));
     }
     return rb_obj_freeze(ary);
 }
@@ -6597,7 +6606,14 @@ iseq_build_from_ary_exception(rb_iseq_t *iseq, struct st_table *labels_table,
 	lcont  = register_label(iseq, labels_table, ptr[4]);
 	sp     = NUM2UINT(ptr[5]);
 
-	(void)sp;
+	/* TODO: Dirty Hack!  Fix me */
+	if (type == CATCH_TYPE_RESCUE ||
+	    type == CATCH_TYPE_BREAK ||
+	    type == CATCH_TYPE_NEXT) {
+	    ++sp;
+	}
+
+	lcont->sp = sp;
 
 	ADD_CATCH_ENTRY(type, lstart, lend, eiseq, lcont);
 
@@ -6864,7 +6880,7 @@ iseq_build_kw(rb_iseq_t *iseq, VALUE params, VALUE keywords)
 #define SYM(s) ID2SYM(rb_intern(#s))
     (void)int_param(&keyword->bits_start, params, SYM(kwbits));
     i = keyword->bits_start - keyword->num;
-    ids = (VALUE *)&iseq->body->local_table[i];
+    ids = (ID *)&iseq->body->local_table[i];
 #undef SYM
 
     /* required args */
@@ -6881,10 +6897,11 @@ iseq_build_kw(rb_iseq_t *iseq, VALUE params, VALUE keywords)
   default_values: /* note: we intentionally preserve `i' from previous loop */
     default_len = len - i;
     if (default_len == 0) {
+	keyword->table = ids;
 	return keyword;
     }
 
-    dvs = ALLOC_N(VALUE, default_len);
+    dvs = ALLOC_N(VALUE, (unsigned int)default_len);
 
     for (j = 0; i < len; i++, j++) {
 	key = RARRAY_AREF(keywords, i);
@@ -6918,6 +6935,7 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
 {
 #define SYM(s) ID2SYM(rb_intern(#s))
     int i, len;
+    unsigned int arg_size, local_size, stack_max;
     ID *tbl;
     struct st_table *labels_table = st_init_numtable();
     VALUE labels_wrapper = Data_Wrap_Struct(0, 0, st_free_table, labels_table);
@@ -6942,11 +6960,6 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
 	}
     }
 
-    /*
-     * we currently ignore misc params,
-     * local_size, stack_size and param.size are all calculated
-     */
-
 #define INT_PARAM(F) int_param(&iseq->body->param.F, params, SYM(F))
     if (INT_PARAM(lead_num)) {
 	iseq->body->param.flags.has_lead = TRUE;
@@ -6956,6 +6969,14 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
     if (INT_PARAM(rest_start)) iseq->body->param.flags.has_rest = TRUE;
     if (INT_PARAM(block_start)) iseq->body->param.flags.has_block = TRUE;
 #undef INT_PARAM
+    {
+#define INT_PARAM(F) F = (int_param(&x, misc, SYM(F)) ? (unsigned int)x : 0)
+	int x;
+	INT_PARAM(arg_size);
+	INT_PARAM(local_size);
+	INT_PARAM(stack_max);
+#undef INT_PARAM
+    }
 
     switch (TYPE(arg_opt_labels)) {
       case T_ARRAY:
@@ -7011,6 +7032,10 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
 
     /* body */
     iseq_build_from_ary_body(iseq, anchor, body, labels_wrapper);
+
+    iseq->body->param.size = arg_size;
+    iseq->body->local_table_size = local_size;
+    iseq->body->stack_max = stack_max;
 }
 
 /* for parser */
@@ -7464,8 +7489,10 @@ ibf_load_code(const struct ibf_load *load, const rb_iseq_t *iseq, const struct r
 		break;
 	    }
 	}
-	assert(insn_len(insn) == op_index+1);
-    };
+	if (insn_len(insn) != op_index+1) {
+	    rb_raise(rb_eRuntimeError, "operand size mismatch");
+	}
+    }
 
 
     return code;

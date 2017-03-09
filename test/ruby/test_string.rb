@@ -202,6 +202,8 @@ CODE
     assert_equal("fobar", s)
 
     assert_raise(ArgumentError) { "foo"[1, 2, 3] = "" }
+
+    assert_raise(IndexError) {"foo"[RbConfig::Limits["LONG_MIN"]] = "l"}
   end
 
   def test_CMP # '<=>'
@@ -2537,6 +2539,8 @@ CODE
 
     assert_not_equal(str.object_id, (+str).object_id)
     assert_equal(str.object_id, (-str).object_id)
+    bar = %w(b a r).join('')
+    assert_same(str, -bar, "uminus deduplicates [Feature #13077]")
   end
 
   def test_ord

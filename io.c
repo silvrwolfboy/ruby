@@ -1419,40 +1419,13 @@ do_writeconv(VALUE str, rb_io_t *fptr, int *converted)
     return str;
 }
 
-struct fwrite_arg {
-    VALUE orig;
-    VALUE tmp;
-    rb_io_t *fptr;
-    int nosync;
-};
-
-static VALUE
-fwrite_do(VALUE arg)
-{
-    struct fwrite_arg *fa = (struct fwrite_arg *)arg;
-    const char *ptr;
-    long len;
-
-    RSTRING_GETMEM(fa->tmp, ptr, len);
-
-    return (VALUE)io_binwrite(fa->tmp, ptr, len, fa->fptr, fa->nosync);
-}
-
-static VALUE
-fwrite_end(VALUE arg)
-{
-    struct fwrite_arg *fa = (struct fwrite_arg *)arg;
-
-    rb_str_tmp_frozen_release(fa->orig, fa->tmp);
-
-    return Qfalse;
-}
-
 static long
 io_fwrite(VALUE str, rb_io_t *fptr, int nosync)
 {
     int converted = 0;
-    struct fwrite_arg fa;
+    VALUE tmp;
+    long n, len;
+    const char *ptr;
 #ifdef _WIN32
     if (fptr->mode & FMODE_TTY) {
 	long len = rb_w32_write_console(str, fptr->fd);
@@ -1463,12 +1436,12 @@ io_fwrite(VALUE str, rb_io_t *fptr, int nosync)
     if (converted)
 	OBJ_FREEZE(str);
 
-    fa.orig = str;
-    fa.tmp = rb_str_tmp_frozen_acquire(str);
-    fa.fptr = fptr;
-    fa.nosync = nosync;
+    tmp = rb_str_tmp_frozen_acquire(str);
+    RSTRING_GETMEM(tmp, ptr, len);
+    n = io_binwrite(tmp, ptr, len, fptr, nosync);
+    rb_str_tmp_frozen_release(str, tmp);
 
-    return (long)rb_ensure(fwrite_do, (VALUE)&fa, fwrite_end, (VALUE)&fa);
+    return n;
 }
 
 ssize_t
@@ -1908,8 +1881,6 @@ rb_io_sync(VALUE io)
  *
  *     f = File.new("testfile")
  *     f.sync = true
- *
- *  <em>(produces no output)</em>
  */
 
 static VALUE
@@ -4745,34 +4716,6 @@ rb_io_sysseek(int argc, VALUE *argv, VALUE io)
     return OFFT2NUM(pos);
 }
 
-struct swrite_arg {
-    VALUE orig;
-    VALUE tmp;
-    rb_io_t *fptr;
-};
-
-static VALUE
-swrite_do(VALUE arg)
-{
-    struct swrite_arg *sa = (struct swrite_arg *)arg;
-    const char *ptr;
-    long len;
-
-    RSTRING_GETMEM(sa->tmp, ptr, len);
-
-    return (VALUE)rb_write_internal(sa->fptr->fd, ptr, len);
-}
-
-static VALUE
-swrite_end(VALUE arg)
-{
-    struct swrite_arg *sa = (struct swrite_arg *)arg;
-
-    rb_str_tmp_frozen_release(sa->orig, sa->tmp);
-
-    return Qfalse;
-}
-
 /*
  *  call-seq:
  *     ios.syswrite(string)   -> integer
@@ -4789,25 +4732,27 @@ swrite_end(VALUE arg)
 static VALUE
 rb_io_syswrite(VALUE io, VALUE str)
 {
-    struct swrite_arg sa;
-    long n;
+    VALUE tmp;
+    rb_io_t *fptr;
+    long n, len;
+    const char *ptr;
 
     if (!RB_TYPE_P(str, T_STRING))
 	str = rb_obj_as_string(str);
 
     io = GetWriteIO(io);
-    GetOpenFile(io, sa.fptr);
-    rb_io_check_writable(sa.fptr);
+    GetOpenFile(io, fptr);
+    rb_io_check_writable(fptr);
 
-    if (sa.fptr->wbuf.len) {
+    if (fptr->wbuf.len) {
 	rb_warn("syswrite for buffered IO");
     }
 
-    sa.orig = str;
-    sa.tmp = rb_str_tmp_frozen_acquire(str);
-    n = (long)rb_ensure(swrite_do, (VALUE)&sa, swrite_end, (VALUE)&sa);
-
-    if (n == -1) rb_sys_fail_path(sa.fptr->pathv);
+    tmp = rb_str_tmp_frozen_acquire(str);
+    RSTRING_GETMEM(tmp, ptr, len);
+    n = rb_write_internal(fptr->fd, ptr, len);
+    if (n == -1) rb_sys_fail_path(fptr->pathv);
+    rb_str_tmp_frozen_release(str, tmp);
 
     return LONG2FIX(n);
 }
@@ -7065,18 +7010,20 @@ rb_f_printf(int argc, VALUE *argv)
 
 /*
  *  call-seq:
- *     ios.print()             -> nil
+ *     ios.print               -> nil
  *     ios.print(obj, ...)     -> nil
  *
- *  Writes the given object(s) to <em>ios</em>. The stream must be
- *  opened for writing. If the output field separator (<code>$,</code>)
- *  is not <code>nil</code>, it will be inserted between each object.
- *  If the output record separator (<code>$\\</code>)
- *  is not <code>nil</code>, it will be appended to the output. If no
- *  arguments are given, prints <code>$_</code>. Objects that aren't
- *  strings will be converted by calling their <code>to_s</code> method.
- *  With no argument, prints the contents of the variable <code>$_</code>.
- *  Returns <code>nil</code>.
+ *  Writes the given object(s) to <em>ios</em>. Returns <code>nil</code>.
+ *
+ *  The stream must be opened for writing.
+ *  Each given object that isn't a string will be converted by calling
+ *  its <code>to_s</code> method.
+ *  When called without arguments, prints the contents of <code>$_</code>.
+ *
+ *  If the output field separator (<code>$,</code>) is not <code>nil</code>,
+ *  it is inserted between objects.
+ *  If the output record separator (<code>$\\</code>) is not <code>nil</code>,
+ *  it is appended to the output.
  *
  *     $stdout.print("This is ", 100, " percent.\n")
  *
@@ -7234,11 +7181,12 @@ io_puts_ary(VALUE ary, VALUE out, int recur)
  *  call-seq:
  *     ios.puts(obj, ...)    -> nil
  *
- *  Writes the given objects to <em>ios</em> as with
- *  <code>IO#print</code>. Writes a record separator (typically a
- *  newline) after any that do not already end with a newline sequence.
+ *  Writes the given object(s) to <em>ios</em> as with <code>IO#print</code>.
+ *  Writes a newline after any that do not already end
+ *  with a newline sequence.
+ *
  *  If called with an array argument, writes each element on a new line.
- *  If called without arguments, outputs a single record separator.
+ *  If called without arguments, outputs a single newline.
  *
  *     $stdout.puts("this", "is", "a", "test")
  *
@@ -7453,6 +7401,14 @@ rb_write_error_str(VALUE mesg)
     }
 }
 
+int
+rb_stderr_tty_p(void)
+{
+    if (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0)
+	return isatty(fileno(stderr));
+    return 0;
+}
+
 static void
 must_respond_to(ID mid, VALUE val, ID id)
 {
@@ -7597,8 +7553,8 @@ rb_io_make_open_file(VALUE obj)
  *  === Open Mode
  *
  *  When +mode+ is an integer it must be combination of the modes defined in
- *  File::Constants (+File::RDONLY+, +File::WRONLY | File::CREAT+).  See the
- *  open(2) man page for more information.
+ *  File::Constants (+File::RDONLY+, <code>File::WRONLY|File::CREAT</code>).
+ *  See the open(2) man page for more information.
  *
  *  When +mode+ is a string it must be in one of the following forms:
  *
@@ -9970,24 +9926,24 @@ seek_before_access(VALUE argp)
  *
  *  The options hash accepts the following keys:
  *
- *  encoding::
+ *  :encoding::
  *    string or encoding
  *
- *    Specifies the encoding of the read string.  +encoding:+ will be ignored
+ *    Specifies the encoding of the read string.  +:encoding+ will be ignored
  *    if +length+ is specified.  See Encoding.aliases for possible encodings.
  *
- *  mode::
- *    string
+ *  :mode::
+ *    string or integer
  *
- *    Specifies the mode argument for open().  It must start with an "r"
- *    otherwise it will cause an error. See IO.new for the list of possible
- *    modes.
+ *    Specifies the <i>mode</i> argument for open().  It must start
+ *    with an "r", otherwise it will cause an error.
+ *    See IO.new for the list of possible modes.
  *
- *  open_args::
- *    array of strings
+ *  :open_args::
+ *    array
  *
  *    Specifies arguments for open() as an array.  This key can not be used
- *    in combination with either +encoding:+ or +mode:+.
+ *    in combination with either +:encoding+ or +:mode+.
  *
  *  Examples:
  *
@@ -10128,8 +10084,8 @@ io_s_write(int argc, VALUE *argv, int binary)
 
 /*
  *  call-seq:
- *     IO.write(name, string, [offset] )   => integer
- *     IO.write(name, string, [offset], open_args )   => integer
+ *     IO.write(name, string [, offset])           -> integer
+ *     IO.write(name, string [, offset] [, opt])   -> integer
  *
  *  Opens the file, optionally seeks to the given <i>offset</i>, writes
  *  <i>string</i>, then returns the length written.
@@ -10137,32 +10093,37 @@ io_s_write(int argc, VALUE *argv, int binary)
  *  If <i>offset</i> is not given, the file is truncated.  Otherwise,
  *  it is not truncated.
  *
- *  If the last argument is a hash, it specifies option for internal
- *  open().  The key would be the following.  open_args: is exclusive
- *  to others.
+ *    IO.write("testfile", "0123456789", 20)  #=> 10
+ *    # File could contain:  "This is line one\nThi0123456789two\nThis is line three\nAnd so on...\n"
+ *    IO.write("testfile", "0123456789")      #=> 10
+ *    # File would now read: "0123456789"
  *
- *   encoding: string or encoding
+ *  If the last argument is a hash, it specifies options for the internal
+ *  open().  It accepts the following keys:
  *
- *    specifies encoding of the read string.  encoding will be ignored
- *    if length is specified.
+ *  :encoding::
+ *    string or encoding
  *
- *   mode: string
+ *    Specifies the encoding of the read string.
+ *    See Encoding.aliases for possible encodings.
  *
- *    specifies mode argument for open().  it should start with "w" or "a" or "r+"
- *    otherwise it would cause error.
+ *  :mode::
+ *    string or integer
  *
- *   perm: integer
+ *    Specifies the <i>mode</i> argument for open().  It must start
+ *    with "w", "a", or "r+", otherwise it will cause an error.
+ *    See IO.new for the list of possible modes.
  *
- *    specifies perm argument for open().
+ *  :perm::
+ *    integer
  *
- *   open_args: array
+ *    Specifies the <i>perm</i> argument for open().
  *
- *    specifies arguments for open() as an array.
+ *  :open_args::
+ *    array
  *
- *     IO.write("testfile", "0123456789", 20) # => 10
- *     # File could contain:  "This is line one\nThi0123456789two\nThis is line three\nAnd so on...\n"
- *     IO.write("testfile", "0123456789")      #=> 10
- *     # File would now read: "0123456789"
+ *    Specifies arguments for open() as an array.
+ *    This key can not be used in combination with other keys.
  */
 
 static VALUE
@@ -12307,13 +12268,13 @@ rb_readwrite_syserr_fail(enum rb_io_wait_readwrite writable, int n, const char *
  *  <code>"\gumby\ruby\test.rb"</code>.  When specifying a Windows-style
  *  filename in a Ruby string, remember to escape the backslashes:
  *
- *    "c:\\gumby\\ruby\\test.rb"
+ *    "C:\\gumby\\ruby\\test.rb"
  *
  *  Our examples here will use the Unix-style forward slashes;
  *  File::ALT_SEPARATOR can be used to get the platform-specific separator
  *  character.
  *
- *  The global constant ARGF (also accessible as $<) provides an
+ *  The global constant ARGF (also accessible as <code>$<</code>) provides an
  *  IO-like stream which allows access to all files mentioned on the
  *  command line (or STDIN if no files are mentioned). ARGF#path and its alias
  *  ARGF#filename are provided to access the name of the file currently being

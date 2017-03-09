@@ -16,6 +16,7 @@
 #include "probes.h"
 #include "probes_helper.h"
 #include "ruby/config.h"
+#include "debug_counter.h"
 
 /* control stack frame */
 
@@ -894,6 +895,7 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 		    rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
 		val = Qnil;
 	    }
+	    RB_DEBUG_COUNTER_INC(ivar_get_hit);
 	    return val;
 	}
 	else {
@@ -918,6 +920,8 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 	}
     }
 #endif	/* USE_IC_FOR_IVAR */
+    RB_DEBUG_COUNTER_INC(ivar_get_miss);
+
     if (is_attr)
 	return rb_attr_get(obj, id);
     return rb_ivar_get(obj, id);
@@ -941,6 +945,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 
 	    if (index < ROBJECT_NUMIV(obj)) {
 		RB_OBJ_WRITE(obj, &ptr[index], val);
+		RB_DEBUG_COUNTER_INC(ivar_set_hit);
 		return val; /* inline cache hit */
 	    }
 	}
@@ -963,6 +968,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 	}
     }
 #endif	/* USE_IC_FOR_IVAR */
+    RB_DEBUG_COUNTER_INC(ivar_set_miss);
     return rb_ivar_set(obj, id, val);
 }
 
@@ -1220,13 +1226,17 @@ vm_search_method(const struct rb_call_info *ci, struct rb_call_cache *cc, VALUE 
     VALUE klass = CLASS_OF(recv);
 
 #if OPT_INLINE_METHOD_CACHE
-    if (LIKELY(GET_GLOBAL_METHOD_STATE() == cc->method_state && RCLASS_SERIAL(klass) == cc->class_serial)) {
+    if (LIKELY(RB_DEBUG_COUNTER_INC_UNLESS(mc_global_state_miss,
+					   GET_GLOBAL_METHOD_STATE() == cc->method_state) &&
+	       RB_DEBUG_COUNTER_INC_UNLESS(mc_class_serial_miss,
+					   RCLASS_SERIAL(klass) == cc->class_serial))) {
 	/* cache hit! */
 	VM_ASSERT(cc->call != NULL);
+	RB_DEBUG_COUNTER_INC(mc_inline_hit);
 	return;
     }
+    RB_DEBUG_COUNTER_INC(mc_inline_miss);
 #endif
-
     cc->me = rb_callable_method_entry(klass, ci->mid);
     VM_ASSERT(callable_method_entry_p(cc->me));
     cc->call = vm_call_general;
@@ -1255,32 +1265,29 @@ inline
 VALUE
 opt_eq_func(VALUE recv, VALUE obj, CALL_INFO ci, CALL_CACHE cc)
 {
-    if (FIXNUM_2_P(recv, obj) &&
-	BASIC_OP_UNREDEFINED_P(BOP_EQ, INTEGER_REDEFINED_OP_FLAG)) {
-	return (recv == obj) ? Qtrue : Qfalse;
-    }
-    else if (FLONUM_2_P(recv, obj) &&
-	     BASIC_OP_UNREDEFINED_P(BOP_EQ, FLOAT_REDEFINED_OP_FLAG)) {
-	return (recv == obj) ? Qtrue : Qfalse;
-    }
-    else if (!SPECIAL_CONST_P(recv) && !SPECIAL_CONST_P(obj)) {
-	if (RBASIC_CLASS(recv) == rb_cFloat &&
-	    RBASIC_CLASS(obj) == rb_cFloat &&
-	    BASIC_OP_UNREDEFINED_P(BOP_EQ, FLOAT_REDEFINED_OP_FLAG)) {
-	    double a = RFLOAT_VALUE(recv);
-	    double b = RFLOAT_VALUE(obj);
-
-	    if (isnan(a) || isnan(b)) {
-		return Qfalse;
-	    }
-	    return  (a == b) ? Qtrue : Qfalse;
+#define BUILTIN_CLASS_P(x, k) (!SPECIAL_CONST_P(x) && RBASIC_CLASS(x) == k)
+#define EQ_UNREDEFINED_P(t) BASIC_OP_UNREDEFINED_P(BOP_EQ, t##_REDEFINED_OP_FLAG)
+    if (FIXNUM_2_P(recv, obj)) {
+	if (EQ_UNREDEFINED_P(INTEGER)) {
+	    return (recv == obj) ? Qtrue : Qfalse;
 	}
-	else if (RBASIC_CLASS(recv) == rb_cString &&
-		 RBASIC_CLASS(obj) == rb_cString &&
-		 BASIC_OP_UNREDEFINED_P(BOP_EQ, STRING_REDEFINED_OP_FLAG)) {
+    }
+    else if (FLONUM_2_P(recv, obj)) {
+	if (EQ_UNREDEFINED_P(FLOAT)) {
+	    return (recv == obj) ? Qtrue : Qfalse;
+	}
+    }
+    else if (BUILTIN_CLASS_P(recv, rb_cFloat)) {
+	if (EQ_UNREDEFINED_P(FLOAT)) {
+	    return rb_float_equal(recv, obj);
+	}
+    }
+    else if (BUILTIN_CLASS_P(recv, rb_cString)) {
+	if (EQ_UNREDEFINED_P(STRING)) {
 	    return rb_str_equal(recv, obj);
 	}
     }
+#undef EQ_UNREDEFINED_P
 
     {
 	vm_search_method(ci, cc, recv);
@@ -2026,7 +2033,8 @@ vm_call_zsuper(rb_thread_t *th, rb_control_frame_t *cfp, struct rb_calling_info 
     if (!cc->me) {
 	return vm_call_method_nome(th, cfp, calling, ci, cc);
     }
-    if (cc->me->def->type == VM_METHOD_TYPE_REFINED) {
+    if (cc->me->def->type == VM_METHOD_TYPE_REFINED &&
+	cc->me->def->body.refined.orig_me) {
 	cc->me = refined_method_callable_without_refinement(cc->me);
     }
     return vm_call_method_each_type(th, cfp, calling, ci, cc);
@@ -2562,7 +2570,7 @@ vm_invoke_iseq_block(rb_thread_t *th, rb_control_frame_t *reg_cfp,
 		     struct rb_calling_info *calling, const struct rb_call_info *ci,
 		     int is_lambda, const struct rb_captured_block *captured)
 {
-    const rb_iseq_t *iseq = captured->code.iseq;
+    const rb_iseq_t *iseq = rb_iseq_check(captured->code.iseq);
     const int arg_size = iseq->body->param.size;
     VALUE * const rsp = GET_SP() - calling->argc;
     int opt_pc = vm_callee_setup_block_arg(th, calling, ci, iseq, rsp, is_lambda ? arg_setup_lambda : arg_setup_block);

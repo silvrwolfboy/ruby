@@ -126,18 +126,6 @@ str_associated(VALUE str)
     return rb_ivar_lookup(str, id_associated, Qfalse);
 }
 
-void
-rb_str_associate(VALUE str, VALUE add)
-{
-    ONLY_FOR_INTERNAL_USE("rb_str_associate()");
-}
-
-VALUE
-rb_str_associated(VALUE str)
-{
-    ONLY_FOR_INTERNAL_USE("rb_str_associated()");
-}
-
 /*
  *  call-seq:
  *     arr.pack( aTemplateString ) -> aBinaryString

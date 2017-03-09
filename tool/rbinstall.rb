@@ -29,7 +29,7 @@ rescue LoadError
 end
 
 STDOUT.sync = true
-File.umask(077)
+File.umask(0222)
 
 def parse_args(argv = ARGV)
   $mantype = 'doc'
@@ -354,7 +354,7 @@ install?(:local, :arch, :bin, :'bin-arch') do
   end
 end
 
-install?(:local, :arch, :lib) do
+install?(:local, :arch, :lib, :'lib-arch') do
   prepare "base libraries", libdir
 
   install lib, libdir, :mode => $prog_mode, :strip => $strip unless lib == arc
@@ -398,7 +398,7 @@ install?(:ext, :arch, :'ext-arch') do
     end
   end
 end
-install?(:ext, :arch, :hdr, :'arch-hdr') do
+install?(:ext, :arch, :hdr, :'arch-hdr', :'hdr-arch') do
   prepare "extension headers", archhdrdir
   install_recursive("#{$extout}/include/#{CONFIG['arch']}", archhdrdir, :glob => "*.h", :mode => $data_mode)
 end
@@ -408,7 +408,7 @@ install?(:ext, :comm, :'ext-comm') do
   prepare "extension scripts", sitelibdir
   prepare "extension scripts", vendorlibdir
 end
-install?(:ext, :comm, :hdr, :'comm-hdr') do
+install?(:ext, :comm, :hdr, :'comm-hdr', :'hdr-comm') do
   hdrdir = rubyhdrdir + "/ruby"
   prepare "extension headers", hdrdir
   install_recursive("#{$extout}/include/ruby", hdrdir, :glob => "*.h", :mode => $data_mode)
@@ -610,8 +610,9 @@ end
 module RbInstall
   module Specs
     class FileCollector
-      def initialize(base_dir)
-        @base_dir = base_dir
+      def initialize(gemspec)
+        @gemspec = gemspec
+        @base_dir = File.dirname(gemspec)
       end
 
       def collect
@@ -634,8 +635,12 @@ module RbInstall
           prefix = base.sub(/lib\/.*?\z/, "") + "lib/"
         end
 
-        Dir.glob("#{base}{.rb,/**/*.rb}").collect do |ruby_source|
-          remove_prefix(prefix, ruby_source)
+        if base
+          Dir.glob("#{base}{.rb,/**/*.rb}").collect do |ruby_source|
+            remove_prefix(prefix, ruby_source)
+          end
+        else
+          [remove_prefix(File.dirname(@gemspec) + '/', @gemspec.gsub(/gemspec/, 'rb'))]
         end
       end
 
@@ -649,6 +654,8 @@ module RbInstall
             remove_prefix(prefix, built_library)
           end
         when "lib"
+          []
+        else
           []
         end
       end
@@ -730,7 +737,12 @@ class Gem::Installer
   install = instance_method(:install)
   define_method(:install) do
     spec.post_install_message = nil
-    install.bind(self).call
+    begin
+      u = File.umask(0022)
+      install.bind(self).call
+    ensure
+      File.umask(u)
+    end
   end
 
   generate_bin_script = instance_method(:generate_bin_script)
@@ -742,7 +754,14 @@ end
 
 # :startdoc:
 
-install?(:ext, :comm, :gem) do
+install?(:ext, :comm, :gem, :'default-gems', :'default-gems-comm') do
+  install_default_gem('lib', srcdir)
+end
+install?(:ext, :arch, :gem, :'default-gems', :'default-gems-arch') do
+  install_default_gem('ext', srcdir)
+end
+
+def install_default_gem(dir, srcdir)
   gem_dir = Gem.default_dir
   directories = Gem.ensure_gem_subdirectories(gem_dir, :mode => $dir_mode)
   prepare "default gems", gem_dir, directories
@@ -751,9 +770,9 @@ install?(:ext, :comm, :gem) do
   default_spec_dir = "#{spec_dir}/default"
   makedirs(default_spec_dir)
 
-  gems = Dir.glob(srcdir+"/{lib,ext}/**/*.gemspec").map {|src|
+  gems = Dir.glob("#{srcdir}/#{dir}/**/*.gemspec").map {|src|
     spec = Gem::Specification.load(src) || raise("invalid spec in #{src}")
-    file_collector = RbInstall::Specs::FileCollector.new(File.dirname(src))
+    file_collector = RbInstall::Specs::FileCollector.new(src)
     files = file_collector.collect
     next if files.empty?
     spec.files = files
@@ -780,7 +799,7 @@ install?(:ext, :comm, :gem) do
   end
 end
 
-install?(:ext, :comm, :gem) do
+install?(:ext, :comm, :gem, :'bundle-gems') do
   gem_dir = Gem.default_dir
   directories = Gem.ensure_gem_subdirectories(gem_dir, :mode => $dir_mode)
   prepare "bundle gems", gem_dir, directories

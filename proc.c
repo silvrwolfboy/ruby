@@ -777,45 +777,42 @@ rb_block_lambda(void)
 /* CHECKME: are the argument checking semantics correct? */
 
 /*
- *  Document-method: call
  *  Document-method: []
+ *  Document-method: call
  *  Document-method: yield
  *
  *  call-seq:
  *     prc.call(params,...)   -> obj
  *     prc[params,...]        -> obj
  *     prc.(params,...)       -> obj
+ *     prc.yield(params,...)  -> obj
  *
  *  Invokes the block, setting the block's parameters to the values in
  *  <i>params</i> using something close to method calling semantics.
- *  Generates a warning if multiple values are passed to a proc that
- *  expects just one (previously this silently converted the parameters
- *  to an array).  Note that <code>prc.()</code> invokes
- *  <code>prc.call()</code> with the parameters given.  It's a syntax sugar to
- *  hide "call".
+ *  Returns the value of the last expression evaluated in the block.
  *
- *  Returns the value of the last expression evaluated in the block. See
- *  also Proc#yield.
+ *     a_proc = Proc.new {|scalar, *values| values.map {|value| value*scalar } }
+ *     a_proc.call(9, 1, 2, 3)    #=> [9, 18, 27]
+ *     a_proc[9, 1, 2, 3]         #=> [9, 18, 27]
+ *     a_proc.(9, 1, 2, 3)        #=> [9, 18, 27]
+ *     a_proc.yield(9, 1, 2, 3)   #=> [9, 18, 27]
  *
- *     a_proc = Proc.new { |scalar, *values| values.collect { |value| value*scalar } }
- *     a_proc.call(9, 1, 2, 3)   #=> [9, 18, 27]
- *     a_proc[9, 1, 2, 3]        #=> [9, 18, 27]
- *     a_proc.(9, 1, 2, 3)       #=> [9, 18, 27]
+ *  Note that <code>prc.()</code> invokes <code>prc.call()</code> with
+ *  the parameters given.  It's syntactic sugar to hide "call".
  *
  *  For procs created using <code>lambda</code> or <code>->()</code> an error
- *  is generated if the wrong number of parameters are passed to a Proc with
- *  multiple parameters.  For procs created using <code>Proc.new</code> or
- *  <code>Kernel.proc</code>, extra parameters are silently discarded.
+ *  is generated if the wrong number of parameters are passed to the proc.
+ *  For procs created using <code>Proc.new</code> or <code>Kernel.proc</code>,
+ *  extra parameters are silently discarded and missing parameters are
+ *  set to +nil+.
  *
- *     a_proc = lambda {|a,b| a}
- *     a_proc.call(1,2,3)
+ *     a_proc = proc {|a,b| [a,b] }
+ *     a_proc.call(1)   #=> [1, nil]
  *
- *  <em>produces:</em>
+ *     a_proc = lambda {|a,b| [a,b] }
+ *     a_proc.call(1)   # ArgumentError: wrong number of arguments (given 1, expected 2)
  *
- *     prog.rb:4:in `block in <main>': wrong number of arguments (given 3, expected 2) (ArgumentError)
- *     	from prog.rb:5:in `call'
- *     	from prog.rb:5:in `<main>'
- *
+ *  See also Proc#lambda?.
  */
 #if 0
 static VALUE
@@ -935,7 +932,7 @@ rb_block_min_max_arity(const struct rb_block *block, int *max)
 {
     switch (vm_block_type(block)) {
       case block_type_iseq:
-	return rb_iseq_min_max_arity(block->as.captured.code.iseq, max);
+	return rb_iseq_min_max_arity(rb_iseq_check(block->as.captured.code.iseq), max);
       case block_type_proc:
 	return rb_block_min_max_arity(vm_proc_block(block->as.proc), max);
       case block_type_ifunc:
@@ -1215,13 +1212,9 @@ proc_to_s(VALUE self)
 static VALUE
 proc_to_s_(VALUE self, const rb_proc_t *proc)
 {
-    VALUE str = 0;
-    const char *cname = rb_obj_classname(self);
-    const struct rb_block *block;
-    const char *is_lambda;
-
-    block = &proc->block;
-    is_lambda = proc->is_lambda ? " (lambda)" : "";
+    VALUE cname = rb_obj_class(self);
+    const struct rb_block *block = &proc->block;
+    VALUE str = rb_sprintf("#<%"PRIsVALUE":", cname);
 
   again:
     switch (vm_block_type(block)) {
@@ -1231,24 +1224,22 @@ proc_to_s_(VALUE self, const rb_proc_t *proc)
       case block_type_iseq:
 	{
 	    const rb_iseq_t *iseq = rb_iseq_check(block->as.captured.code.iseq);
-	    str = rb_sprintf("#<%s:%p@%"PRIsVALUE":%d%s>", cname, (void *)self,
-			     iseq->body->location.path,
-			     FIX2INT(iseq->body->location.first_lineno), is_lambda);
+	    rb_str_catf(str, "%p@%"PRIsVALUE":%d", (void *)self,
+			iseq->body->location.path,
+			FIX2INT(iseq->body->location.first_lineno));
 	}
 	break;
       case block_type_symbol:
-	str = rb_sprintf("#<%s:%p(&%+"PRIsVALUE")%s>", cname, (void *)self,
-			 block->as.symbol, is_lambda);
+	rb_str_catf(str, "%p(&%+"PRIsVALUE")", (void *)self, block->as.symbol);
 	break;
       case block_type_ifunc:
-	str = rb_sprintf("#<%s:%p%s>", cname, proc->block.as.captured.code.ifunc,
-			 is_lambda);
+	rb_str_catf(str, "%p", proc->block.as.captured.code.ifunc);
 	break;
     }
 
-    if (OBJ_TAINTED(self)) {
-	OBJ_TAINT(str);
-    }
+    if (proc->is_lambda) rb_str_cat_cstr(str, " (lambda)");
+    rb_str_cat_cstr(str, ">");
+    OBJ_INFECT_RAW(str, self);
     return str;
 }
 
@@ -2253,10 +2244,8 @@ rb_method_entry_min_max_arity(const rb_method_entry_t *me, int *max)
 	return rb_method_entry_min_max_arity(def->body.alias.original_me, max);
       case VM_METHOD_TYPE_BMETHOD:
 	return rb_proc_min_max_arity(def->body.proc, max);
-      case VM_METHOD_TYPE_ISEQ: {
-	const rb_iseq_t *iseq = rb_iseq_check(def->body.iseq.iseqptr);
-	return rb_iseq_min_max_arity(iseq, max);
-      }
+      case VM_METHOD_TYPE_ISEQ:
+	return rb_iseq_min_max_arity(rb_iseq_check(def->body.iseq.iseqptr), max);
       case VM_METHOD_TYPE_UNDEF:
       case VM_METHOD_TYPE_NOTIMPLEMENTED:
 	return *max = 0;

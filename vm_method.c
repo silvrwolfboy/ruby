@@ -81,12 +81,6 @@ rb_class_clear_method_cache(VALUE klass, VALUE arg)
 }
 
 void
-rb_clear_cache(void)
-{
-    ONLY_FOR_INTERNAL_USE("rb_clear_cache()");
-}
-
-void
 rb_clear_constant_cache(void)
 {
     INC_GLOBAL_CONSTANT_STATE();
@@ -701,6 +695,7 @@ search_method(VALUE klass, ID id, VALUE *defined_class_ptr)
     rb_method_entry_t *me;
 
     for (me = 0; klass; klass = RCLASS_SUPER(klass)) {
+	RB_DEBUG_COUNTER_INC(mc_search_super);
 	if ((me = lookup_method_table(klass, id)) != 0) break;
     }
 
@@ -784,10 +779,12 @@ method_entry_get(VALUE klass, ID id, VALUE *defined_class_ptr)
 	verify_method_cache(klass, id, ent->defined_class, ent->me);
 #endif
 	if (defined_class_ptr) *defined_class_ptr = ent->defined_class;
+	RB_DEBUG_COUNTER_INC(mc_global_hit);
 	return ent->me;
     }
 #endif
 
+    RB_DEBUG_COUNTER_INC(mc_global_miss);
     return method_entry_get_without_cache(klass, id, defined_class_ptr);
 }
 
@@ -804,6 +801,7 @@ prepare_callable_method_entry(VALUE defined_class, ID id, const rb_method_entry_
     const rb_callable_method_entry_t *cme;
 
     if (me && me->defined_class == 0) {
+	RB_DEBUG_COUNTER_INC(mc_cme_complement);
 	VM_ASSERT(RB_TYPE_P(defined_class, T_ICLASS) || RB_TYPE_P(defined_class, T_MODULE));
 	VM_ASSERT(me->defined_class == 0);
 
@@ -812,6 +810,7 @@ prepare_callable_method_entry(VALUE defined_class, ID id, const rb_method_entry_
 	}
 
 	if (rb_id_table_lookup(mtbl, id, (VALUE *)&me)) {
+	    RB_DEBUG_COUNTER_INC(mc_cme_complement_hit);
 	    cme = (rb_callable_method_entry_t *)me;
 	    VM_ASSERT(callable_method_entry_p(cme));
 	}

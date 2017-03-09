@@ -1271,7 +1271,7 @@ static inline int
 vm_block_handler_verify(VALUE block_handler)
 {
     VM_ASSERT(block_handler == VM_BLOCK_HANDLER_NONE ||
-	      vm_block_handler_type(block_handler) >= 0);
+	      (vm_block_handler_type(block_handler), 1));
     return 1;
 }
 
@@ -1334,7 +1334,7 @@ static inline const rb_iseq_t *
 vm_block_iseq(const struct rb_block *block)
 {
     switch (vm_block_type(block)) {
-      case block_type_iseq: return block->as.captured.code.iseq;
+      case block_type_iseq: return rb_iseq_check(block->as.captured.code.iseq);
       case block_type_proc: return vm_proc_iseq(block->as.proc);
       case block_type_ifunc:
       case block_type_symbol: return NULL;

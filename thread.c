@@ -2107,6 +2107,13 @@ rb_threadptr_raise(rb_thread_t *th, int argc, VALUE *argv)
     else {
 	exc = rb_make_exception(argc, argv);
     }
+
+    /* making an exception object can switch thread,
+       so we need to check thread deadness again */
+    if (rb_threadptr_dead(th)) {
+	return Qnil;
+    }
+
     rb_threadptr_setup_exception(GET_THREAD(), exc, Qundef);
     rb_threadptr_pending_interrupt_enque(th, exc);
     rb_threadptr_interrupt(th);
@@ -3084,6 +3091,39 @@ rb_thread_aref(VALUE thread, VALUE key)
 }
 
 static VALUE
+rb_thread_fetch(int argc, VALUE *argv, VALUE self)
+{
+    VALUE key, val;
+    ID id;
+    rb_thread_t *th;
+    int block_given;
+
+    rb_check_arity(argc, 1, 2);
+    key = argv[0];
+
+    block_given = rb_block_given_p();
+    if (block_given && argc == 2) {
+	rb_warn("block supersedes default value argument");
+    }
+
+    id = rb_check_id(&key);
+    GetThreadPtr(self, th);
+
+    if (id == recursive_key) {
+	return th->local_storage_recursive_hash;
+    }
+    if (id && th->local_storage && st_lookup(th->local_storage, id, &val)) {
+	return val;
+    }
+    if (block_given)
+	return rb_yield(key);
+    else if (argc == 1)
+	rb_raise(rb_eKeyError, "key not found: %"PRIsVALUE, key);
+    else
+	return argv[1];
+}
+
+static VALUE
 threadptr_local_aset(rb_thread_t *th, ID id, VALUE val)
 {
     if (id == recursive_key) {
@@ -3566,9 +3606,7 @@ rb_fd_select(int n, rb_fdset_t *readfds, rb_fdset_t *writefds, rb_fdset_t *excep
     return select(n, r, w, e, timeout);
 }
 
-#if defined __GNUC__ && __GNUC__ >= 6
-#define rb_fd_no_init(fds) ASSUME(!(fds)->maxfd)
-#endif
+#define rb_fd_no_init(fds) ((void)((fds)->fdset = 0), (void)((fds)->maxfd = 0))
 
 #undef FD_ZERO
 #undef FD_SET
@@ -3633,6 +3671,8 @@ rb_fd_set(int fd, rb_fdset_t *set)
 #define FD_CLR(i, f)	rb_fd_clr((i), (f))
 #define FD_ISSET(i, f)	rb_fd_isset((i), (f))
 
+#define rb_fd_no_init(fds) (void)((fds)->fdset = 0)
+
 #endif
 
 #ifndef rb_fd_no_init
@@ -3666,8 +3706,8 @@ update_timeval(struct timeval *timeout, double limit)
 }
 
 static int
-do_select(int n, rb_fdset_t *readfds, rb_fdset_t *writefds,
-	  rb_fdset_t *exceptfds, struct timeval *timeout)
+do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
+	  rb_fdset_t *const exceptfds, struct timeval *timeout)
 {
     int MAYBE_UNUSED(result);
     int lerrno;
@@ -4789,6 +4829,7 @@ Init_Thread(void)
     rb_define_method(rb_cThread, "wakeup", rb_thread_wakeup, 0);
     rb_define_method(rb_cThread, "[]", rb_thread_aref, 1);
     rb_define_method(rb_cThread, "[]=", rb_thread_aset, 2);
+    rb_define_method(rb_cThread, "fetch", rb_thread_fetch, -1);
     rb_define_method(rb_cThread, "key?", rb_thread_key_p, 1);
     rb_define_method(rb_cThread, "keys", rb_thread_keys, 0);
     rb_define_method(rb_cThread, "priority", rb_thread_priority, 0);

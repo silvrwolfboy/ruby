@@ -158,6 +158,7 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
     int field_flag;
     int i;
     const char *next_indent = default_indent;
+    enum node_type type;
 
     if (!node) {
 	D_NULL_NODE;
@@ -166,7 +167,8 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 
     D_NODE_HEADER(node);
 
-    switch (nd_type(node)) {
+    type = nd_type(node);
+    switch (type) {
       case NODE_BLOCK:
 	ANN("statement sequence");
 	ANN("format: [nd_head]; ...; [nd_next]");
@@ -332,9 +334,14 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
       case NODE_OR:
 	ANN("|| operator");
 	ANN("format: [nd_1st] || [nd_2nd]");
-	ANN("example: foo && bar");
+	ANN("example: foo || bar");
       andor:
-	F_NODE(nd_1st, "left expr");
+	while (1) {
+	    F_NODE(nd_1st, "left expr");
+	    if (!node->nd_2nd || nd_type(node->nd_2nd) != (int)type)
+		break;
+	    node = node->nd_2nd;
+	}
 	LAST_NODE;
 	F_NODE(nd_2nd, "right expr");
 	break;
@@ -419,10 +426,16 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	ANN("format: [nd_value] [ [nd_args->nd_body] ] [nd_vid]= [nd_args->nd_head]");
 	ANN("example: ary[1] += foo");
 	F_NODE(nd_recv, "receiver");
-	F_ID(nd_vid, "operator");
-	F_NODE(nd_args->nd_body, "index");
+	F_CUSTOM1(nd_mid, "operator") {
+	   switch (node->nd_mid) {
+	     case 0: A("0 (||)"); break;
+	     case 1: A("1 (&&)"); break;
+	     default: A_ID(node->nd_mid);
+	   }
+	};
+	F_NODE(nd_args->nd_head, "index");
 	LAST_NODE;
-	F_NODE(nd_args->nd_head, "rvalue");
+	F_NODE(nd_args->nd_body, "rvalue");
 	break;
 
       case NODE_OP_ASGN2:
@@ -961,8 +974,8 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	F_ID(nd_ainfo->rest_arg, "rest argument");
 	F_ID(nd_ainfo->block_arg, "block argument");
 	F_NODE(nd_ainfo->opt_args, "optional arguments");
-	LAST_NODE;
 	F_NODE(nd_ainfo->kw_args, "keyword arguments");
+	LAST_NODE;
 	F_NODE(nd_ainfo->kw_rest_arg, "keyword rest argument");
 	break;
 

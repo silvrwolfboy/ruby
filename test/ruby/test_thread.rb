@@ -482,6 +482,36 @@ class TestThread < Test::Unit::TestCase
     t.kill if t
   end
 
+  def test_thread_local_fetch
+    t = Thread.new { sleep }
+
+    assert_equal(false, t.key?(:foo))
+
+    t["foo"] = "foo"
+    t["bar"] = "bar"
+    t["baz"] = "baz"
+
+    x = nil
+    assert_equal("foo", t.fetch(:foo, 0))
+    assert_equal("foo", t.fetch(:foo) {x = true})
+    assert_nil(x)
+    assert_equal("foo", t.fetch("foo", 0))
+    assert_equal("foo", t.fetch("foo") {x = true})
+    assert_nil(x)
+
+    x = nil
+    assert_equal(0, t.fetch(:qux, 0))
+    assert_equal(1, t.fetch(:qux) {x = 1})
+    assert_equal(1, x)
+    assert_equal(2, t.fetch("qux", 2))
+    assert_equal(3, t.fetch("qux") {x = 3})
+    assert_equal(3, x)
+
+    assert_raise(KeyError) {t.fetch(:qux)}
+  ensure
+    t.kill if t
+  end
+
   def test_thread_local_security
     assert_raise(RuntimeError) do
       Thread.new do
@@ -1159,5 +1189,15 @@ q.pop
     bug12290 = '[ruby-core:74963] [Bug #12290]'
     c = Class.new(Thread) {def initialize() self.name = "foo"; super; end}
     assert_equal("foo", c.new {Thread.current.name}.value, bug12290)
+  end
+
+  def test_thread_interrupt_for_killed_thread
+    assert_normal_exit(<<-_end, '[Bug #8996]', timeout: 5, timeout_error: nil)
+      trap(:TERM){exit}
+      while true
+        t = Thread.new{sleep 0}
+        t.raise Interrupt
+      end
+    _end
   end
 end

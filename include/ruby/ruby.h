@@ -538,7 +538,11 @@ static inline int rb_type(VALUE obj);
 
 #ifdef __GNUC__
 #define RB_GC_GUARD(v) \
-    (*__extension__ ({volatile VALUE *rb_gc_guarded_ptr = &(v); rb_gc_guarded_ptr;}))
+    (*__extension__ ({ \
+	volatile VALUE *rb_gc_guarded_ptr = &(v); \
+	__asm__("" : : "m"(rb_gc_guarded_ptr)); \
+	rb_gc_guarded_ptr; \
+    }))
 #elif defined _MSC_VER
 #pragma optimize("", off)
 static inline volatile VALUE *rb_gc_guarded_ptr(volatile VALUE *ptr) {return ptr;}
@@ -913,13 +917,6 @@ struct RObject {
      RCLASS_IV_INDEX_TBL(rb_obj_class(o)) : \
      ROBJECT(o)->as.heap.iv_index_tbl)
 
-#define RClass RClassDeprecated
-#ifndef __cplusplus
-DEPRECATED_TYPE(("RClass is internal use only"),
-struct RClass {
-    struct RBasic basic;
-});
-#endif
 #define RCLASS_SUPER(c) rb_class_get_superclass(c)
 #define RMODULE_IV_TBL(m) RCLASS_IV_TBL(m)
 #define RMODULE_CONST_TBL(m) RCLASS_CONST_TBL(m)
@@ -2334,17 +2331,17 @@ rb_scan_args_end_idx(const char *fmt)
 		     rb_scan_args_f_var(fmt), \
 		     rb_scan_args_f_hash(fmt), \
 		     rb_scan_args_f_block(fmt), \
-		     rb_scan_args_verify(fmt, varc), vars)
+		     (rb_scan_args_verify(fmt, varc), vars))
 ALWAYS_INLINE(static int
 rb_scan_args_set(int argc, const VALUE *argv,
 		 int n_lead, int n_opt, int n_trail,
 		 int f_var, int f_hash, int f_block,
-		 int varc, VALUE *vars[]));
+		 VALUE *vars[]));
 inline int
 rb_scan_args_set(int argc, const VALUE *argv,
 		 int n_lead, int n_opt, int n_trail,
 		 int f_var, int f_hash, int f_block,
-		 int varc, VALUE *vars[])
+		 VALUE *vars[])
 {
     int i, argi = 0, vari = 0;
     VALUE *var, hash = Qnil;

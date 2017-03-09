@@ -2759,8 +2759,8 @@ class TestArray < Test::Unit::TestCase
     assert_raise(TypeError) {h.dig(1, 0)}
   end
 
-  FIXNUM_MIN = -(1 << (8 * RbConfig::SIZEOF['long'] - 2))
-  FIXNUM_MAX = (1 << (8 * RbConfig::SIZEOF['long'] - 2)) - 1
+  FIXNUM_MIN = RbConfig::Limits['FIXNUM_MIN']
+  FIXNUM_MAX = RbConfig::Limits['FIXNUM_MAX']
 
   def assert_typed_equal(e, v, cls, msg=nil)
     assert_kind_of(cls, v, msg)
@@ -2837,6 +2837,9 @@ class TestArray < Test::Unit::TestCase
 
     assert_equal("abc", ["a", "b", "c"].sum(""))
     assert_equal([1, [2], 3], [[1], [[2]], [3]].sum([]))
+
+    assert_raise(TypeError) {[0].sum("")}
+    assert_raise(TypeError) {[1].sum("")}
 
     assert_separately(%w[-rmathn], <<-EOS, ignore_stderr: true)
       assert_equal(6, [1r, 2, 3r].sum)

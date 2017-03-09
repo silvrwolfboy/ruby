@@ -96,15 +96,41 @@ extern "C" {
 #endif
 #define TIMET_MAX_PLUS_ONE (2*(double)(TIMET_MAX/2+1))
 
+#ifdef HAVE_BUILTIN___BUILTIN_MUL_OVERFLOW_P
+#define MUL_OVERFLOW_P(a, b) \
+    __builtin_mul_overflow_p((a), (b), (__typeof__(a * b))0)
+#elif defined HAVE_BUILTIN___BUILTIN_MUL_OVERFLOW
+#define MUL_OVERFLOW_P(a, b) \
+    ({__typeof__(a) c; __builtin_mul_overflow((a), (b), &c);})
+#endif
+
 #define MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, min, max) ( \
     (a) == 0 ? 0 : \
     (a) == -1 ? (b) < -(max) : \
     (a) > 0 ? \
       ((b) > 0 ? (max) / (a) < (b) : (min) / (a) > (b)) : \
       ((b) > 0 ? (min) / (a) < (b) : (max) / (a) > (b)))
+
+#ifdef HAVE_BUILTIN___BUILTIN_MUL_OVERFLOW_P
+/* __builtin_mul_overflow_p can take bitfield */
+/* and GCC permits bitfields for integers other than int */
+#define MUL_OVERFLOW_FIXNUM_P(a, b) ({ \
+    struct { SIGNED_VALUE fixnum : SIZEOF_VALUE * CHAR_BIT - 1; } c; \
+    __builtin_mul_overflow_p((a), (b), c.fixnum); \
+})
+#else
 #define MUL_OVERFLOW_FIXNUM_P(a, b) MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, FIXNUM_MIN, FIXNUM_MAX)
-#define MUL_OVERFLOW_LONG_P(a, b) MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, LONG_MIN, LONG_MAX)
-#define MUL_OVERFLOW_INT_P(a, b) MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, INT_MIN, INT_MAX)
+#endif
+
+#ifdef MUL_OVERFLOW_P
+#define MUL_OVERFLOW_LONG_LONG_P(a, b) MUL_OVERFLOW_P(a, b)
+#define MUL_OVERFLOW_LONG_P(a, b)      MUL_OVERFLOW_P(a, b)
+#define MUL_OVERFLOW_INT_P(a, b)       MUL_OVERFLOW_P(a, b)
+#else
+#define MUL_OVERFLOW_LONG_LONG_P(a, b) MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, LLONG_MIN, LLONG_MAX)
+#define MUL_OVERFLOW_LONG_P(a, b)      MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, LONG_MIN, LONG_MAX)
+#define MUL_OVERFLOW_INT_P(a, b)       MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, INT_MIN, INT_MAX)
+#endif
 
 #ifndef swap16
 # ifdef HAVE_BUILTIN___BUILTIN_BSWAP16
@@ -348,6 +374,65 @@ VALUE rb_int128t2big(int128_t n);
 
 #define ST2FIX(h) LONG2FIX((long)(h))
 
+static inline long
+rb_overflowed_fix_to_int(long x)
+{
+    return (long)((unsigned long)(x >> 1) ^ (1LU << (SIZEOF_LONG * CHAR_BIT - 1)));
+}
+
+static inline VALUE
+rb_fix_plus_fix(VALUE x, VALUE y)
+{
+#ifdef HAVE_BUILTIN___BUILTIN_ADD_OVERFLOW
+    long lz;
+    /* NOTE
+     * (1) `LONG2FIX(FIX2LONG(x)+FIX2LONG(y))`
+     +     = `((lx*2+1)/2 + (ly*2+1)/2)*2+1`
+     +     = `lx*2 + ly*2 + 1`
+     +     = `(lx*2+1) + (ly*2+1) - 1`
+     +     = `x + y - 1`
+     * (2) Fixnum's LSB is always 1.
+     *     It means you can always run `x - 1` without overflow.
+     * (3) Of course `z = x + (y-1)` may overflow.
+     *     At that time true value is
+     *     * positive: 0b0 1xxx...1, and z = 0b1xxx...1
+     *     * nevative: 0b1 0xxx...1, and z = 0b0xxx...1
+     *     To convert this true value to long,
+     *     (a) Use arithmetic shift
+     *         * positive: 0b11xxx...
+     *         * negative: 0b00xxx...
+     *     (b) invert MSB
+     *         * positive: 0b01xxx...
+     *         * negative: 0b10xxx...
+     */
+    if (__builtin_add_overflow((long)x, (long)y-1, &lz)) {
+	return rb_int2big(rb_overflowed_fix_to_int(lz));
+    }
+    else {
+	return (VALUE)lz;
+    }
+#else
+    long lz = FIX2LONG(x) + FIX2LONG(y);
+    return LONG2NUM(lz);
+#endif
+}
+
+static inline VALUE
+rb_fix_minus_fix(VALUE x, VALUE y)
+{
+#ifdef HAVE_BUILTIN___BUILTIN_SUB_OVERFLOW
+    long lz;
+    if (__builtin_sub_overflow((long)x, (long)y-1, &lz)) {
+	return rb_int2big(rb_overflowed_fix_to_int(lz));
+    }
+    else {
+	return (VALUE)lz;
+    }
+#else
+    long lz = FIX2LONG(x) - FIX2LONG(y);
+    return LONG2NUM(lz);
+#endif
+}
 
 /* arguments must be Fixnum */
 static inline VALUE
@@ -1010,7 +1095,6 @@ extern VALUE rb_eEAGAIN;
 extern VALUE rb_eEWOULDBLOCK;
 extern VALUE rb_eEINPROGRESS;
 void rb_report_bug_valist(VALUE file, int line, const char *fmt, va_list args);
-PRINTF_ARGS(void rb_compile_error_str(VALUE file, int line, void *enc, const char *fmt, ...), 4, 5);
 VALUE rb_syntax_error_append(VALUE, VALUE, int, int, rb_encoding*, const char*, va_list);
 VALUE rb_check_backtrace(VALUE);
 NORETURN(void rb_async_bug_errno(const char *,int));
@@ -1024,8 +1108,9 @@ VALUE rb_name_err_new(VALUE mesg, VALUE recv, VALUE method);
     rb_exc_raise(rb_name_err_new(mesg, recv, name))
 #define rb_name_err_raise(mesg, recv, name) \
     rb_name_err_raise_str(rb_fstring_cstr(mesg), (recv), (name))
-NORETURN(void ruby_only_for_internal_use(const char *));
-#define ONLY_FOR_INTERNAL_USE(func) ruby_only_for_internal_use(func)
+NORETURN(void ruby_deprecated_internal_feature(const char *));
+#define DEPRECATED_INTERNAL_FEATURE(func) \
+    (ruby_deprecated_internal_feature(func), UNREACHABLE)
 
 /* eval.c */
 VALUE rb_refinement_module_get_refined_class(VALUE module);
@@ -1134,6 +1219,7 @@ ssize_t rb_io_bufread(VALUE io, void *buf, size_t size);
 void rb_stdio_set_default_encoding(void);
 VALUE rb_io_flush_raw(VALUE, int);
 size_t rb_io_memsize(const rb_io_t *);
+int rb_stderr_tty_p(void);
 
 /* load.c */
 VALUE rb_get_load_path(void);
@@ -1221,6 +1307,7 @@ VALUE rb_int_lshift(VALUE x, VALUE y);
 VALUE rb_int_div(VALUE x, VALUE y);
 VALUE rb_int_abs(VALUE num);
 VALUE rb_float_abs(VALUE flt);
+VALUE rb_float_equal(VALUE x, VALUE y);
 
 #if USE_FLONUM
 #define RUBY_BIT_ROTL(v, n) (((v) << (n)) | ((v) >> ((sizeof(v) * 8) - n)))
@@ -1304,6 +1391,7 @@ VALUE rb_class_search_ancestor(VALUE klass, VALUE super);
 NORETURN(void rb_undefined_alloc(VALUE klass));
 double rb_num_to_dbl(VALUE val);
 VALUE rb_obj_dig(int argc, VALUE *argv, VALUE self, VALUE notfound);
+VALUE rb_immutable_obj_clone(int, VALUE *, VALUE);
 
 struct RBasicRaw {
     VALUE flags;

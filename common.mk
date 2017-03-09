@@ -11,6 +11,9 @@ Q = $(Q1:0=@)
 ECHO0 = $(ECHO1:0=echo)
 ECHO = @$(ECHO0)
 
+mflags = $(MFLAGS)
+gnumake_recursive =
+
 UNICODE_VERSION = 9.0.0
 
 ### set the following environment variable or uncomment the line if
@@ -66,7 +69,7 @@ EXTSOLIBS     =
 MINIOBJS      = $(ARCHMINIOBJS) miniinit.$(OBJEXT) dmyext.$(OBJEXT) miniprelude.$(OBJEXT)
 ENC_MK        = enc.mk
 MAKE_ENC      = -f $(ENC_MK) V="$(V)" UNICODE_HDR_DIR="$(UNICODE_HDR_DIR)" \
-		RUBY="$(MINIRUBY)" MINIRUBY="$(MINIRUBY)" $(MFLAGS)
+		RUBY="$(MINIRUBY)" MINIRUBY="$(MINIRUBY)" $(mflags)
 
 COMMONOBJS    = array.$(OBJEXT) \
 		bignum.$(OBJEXT) \
@@ -76,6 +79,7 @@ COMMONOBJS    = array.$(OBJEXT) \
 		complex.$(OBJEXT) \
 		cont.$(OBJEXT) \
 		debug.$(OBJEXT) \
+		debug_counter.$(OBJEXT) \
 		dir.$(OBJEXT) \
 		dln_find.$(OBJEXT) \
 		encoding.$(OBJEXT) \
@@ -211,13 +215,15 @@ exts: build-ext
 
 EXTS_MK = exts.mk
 $(EXTS_MK): ext/configure-ext.mk $(TIMESTAMPDIR)/.$(arch).time $(srcdir)/template/exts.mk.tmpl
-	$(MAKE) -f ext/configure-ext.mk V=$(V) EXTSTATIC=$(EXTSTATIC) \
-		gnumake=$(gnumake) EXTLDFLAGS="$(EXTLDFLAGS)" srcdir="$(srcdir)"
+	$(Q)$(MAKE) -f ext/configure-ext.mk $(mflags) V=$(V) EXTSTATIC=$(EXTSTATIC) \
+		gnumake=$(gnumake) MINIRUBY="$(MINIRUBY)" \
+		EXTLDFLAGS="$(EXTLDFLAGS)" srcdir="$(srcdir)"
 	$(ECHO) generating makefile $@
 	$(Q)$(MINIRUBY) $(srcdir)/tool/generic_erb.rb -o $@ -c \
 	    $(srcdir)/template/exts.mk.tmpl --gnumake=$(gnumake)
 
-ext/configure-ext.mk: $(PREP) all-incs $(MKFILES) $(RBCONFIG) $(LIBRUBY)
+ext/configure-ext.mk: $(PREP) all-incs $(MKFILES) $(RBCONFIG) $(LIBRUBY) \
+		$(srcdir)/template/configure-ext.mk.tmpl
 	$(ECHO) generating makefiles $@
 	$(Q)$(MAKEDIRS) $(@D)
 	$(Q)$(MINIRUBY) $(srcdir)/tool/generic_erb.rb -o $@ -c \
@@ -227,7 +233,7 @@ ext/configure-ext.mk: $(PREP) all-incs $(MKFILES) $(RBCONFIG) $(LIBRUBY)
 configure-ext: $(EXTS_MK)
 
 build-ext: $(EXTS_MK)
-	$(Q)$(MAKE) -f $(EXTS_MK) $(MFLAGS) libdir="$(libdir)" LIBRUBY_EXTS=$(LIBRUBY_EXTS) \
+	$(Q)$(MAKE) -f $(EXTS_MK) $(mflags) libdir="$(libdir)" LIBRUBY_EXTS=$(LIBRUBY_EXTS) \
 	    EXTENCS="$(ENCOBJS)" UPDATE_LIBRARIES=no $(EXTSTATIC)
 
 ext/extinit.c: $(srcdir)/template/extinit.c.tmpl
@@ -244,7 +250,7 @@ objs: $(ALLOBJS)
 
 GORUBY = go$(RUBY_INSTALL_NAME)
 golf: $(LIBRUBY) $(GOLFOBJS) PHONY
-	$(Q) $(MAKE) $(MFLAGS) MAINOBJ="$(GOLFOBJS)" PROGRAM=$(GORUBY)$(EXEEXT) program
+	$(Q) $(MAKE) $(mflags) MAINOBJ="$(GOLFOBJS)" PROGRAM=$(GORUBY)$(EXEEXT) program
 capi: $(CAPIOUT)/.timestamp PHONY
 
 $(CAPIOUT)/.timestamp: Doxyfile $(PREP)
@@ -470,11 +476,11 @@ post-install-gem::
 
 rdoc: PHONY main
 	@echo Generating RDoc documentation
-	$(Q) $(XRUBY) "$(srcdir)/bin/rdoc" --root "$(srcdir)" --page-dir "$(srcdir)/doc" --encoding=UTF-8 --no-force-update --all --ri --op "$(RDOCOUT)" --debug $(RDOCFLAGS) "$(srcdir)"
+	$(Q) $(XRUBY) "$(srcdir)/bin/rdoc" --root "$(srcdir)" --page-dir "$(srcdir)/doc" --encoding=UTF-8 --no-force-update --all --ri --op "$(RDOCOUT)" $(RDOCFLAGS) "$(srcdir)"
 
 html: PHONY main
 	@echo Generating RDoc HTML files
-	$(Q) $(XRUBY) "$(srcdir)/bin/rdoc" --root "$(srcdir)" --page-dir "$(srcdir)/doc" --encoding=UTF-8 --no-force-update --all --op "$(HTMLOUT)" --debug $(RDOCFLAGS) "$(srcdir)"
+	$(Q) $(XRUBY) "$(srcdir)/bin/rdoc" --root "$(srcdir)" --page-dir "$(srcdir)/doc" --encoding=UTF-8 --no-force-update --all --op "$(HTMLOUT)" $(RDOCFLAGS) "$(srcdir)"
 
 rdoc-coverage: PHONY main
 	@echo Generating RDoc coverage report
@@ -507,7 +513,7 @@ install-prereq: $(CLEAR_INSTALLED_LIST) yes-fake sudo-precheck PHONY
 clear-installed-list: PHONY
 	@> $(INSTALLED_LIST) set MAKE="$(MAKE)"
 
-clean: clean-ext clean-enc clean-golf clean-rdoc clean-capi clean-extout clean-local clean-platform
+clean: clean-ext clean-enc clean-golf clean-docs clean-extout clean-local clean-platform clean-rubyspec
 clean-local:: clean-runnable
 	$(Q)$(RM) $(OBJS) $(MINIOBJS) $(MAINOBJ) $(LIBRUBY_A) $(LIBRUBY_SO) $(LIBRUBY) $(LIBRUBY_ALIASES)
 	$(Q)$(RM) $(PROGRAM) $(WPROGRAM) miniruby$(EXEEXT) dmyext.$(OBJEXT) dmyenc.$(OBJEXT) $(ARCHFILE) .*.time
@@ -528,8 +534,9 @@ clean-platform: PHONY
 clean-extout: PHONY
 	-$(Q)$(RMDIR) $(EXTOUT)/$(arch) $(EXTOUT) 2> $(NULL) || exit 0
 clean-docs: clean-rdoc clean-html clean-capi
+clean-rubyspec: PHONY
 
-distclean: distclean-ext distclean-enc distclean-golf distclean-extout distclean-local distclean-platform
+distclean: distclean-ext distclean-enc distclean-golf distclean-docs distclean-extout distclean-local distclean-platform distclean-rubyspec
 distclean-local:: clean-local
 	$(Q)$(RM) $(MKFILES) yasmdata.rb *.inc $(PRELUDES)
 	$(Q)$(RM) config.cache config.status config.status.lineno
@@ -537,11 +544,13 @@ distclean-local:: clean-local
 	-$(Q)$(RMALL) $(srcdir)/autom4te.cache
 distclean-ext:: PHONY
 distclean-golf: clean-golf
-distclean-rdoc: PHONY
-distclean-html: PHONY
-distclean-capi: PHONY
+distclean-rdoc: clean-rdoc
+distclean-html: clean-html
+distclean-capi: clean-capi
+distclean-docs: clean-docs
 distclean-extout: clean-extout
 distclean-platform: clean-platform
+distclean-rubyspec: clean-rubyspec
 
 realclean:: realclean-ext realclean-local realclean-enc realclean-golf realclean-extout
 realclean-local:: distclean-local
@@ -553,13 +562,37 @@ realclean-local:: distclean-local
 realclean-ext:: PHONY
 realclean-golf: distclean-golf
 	$(Q)$(RM) $(GOLFPRELUDES)
-realclean-capi: PHONY
+realclean-rdoc: distclean-rdoc
+realclean-html: distclean-html
+realclean-capi: distclean-capi
+realclean-docs: distclean-docs
 realclean-extout: distclean-extout
+realclean-platform: distclean-platform
+realclean-rubyspec: distclean-rubyspec
 
-clean-ext distclean-ext realclean-ext::
-	$(Q)$(RM) $(EXTS_MK)
+clean-ext:: ext/clean gems/clean timestamp/clean
+distclean-ext:: ext/distclean gems/distclean timestamp/distclean
+realclean-ext:: ext/realclean gems/realclean timestamp/realclean
+
+ext/clean.mk ext/distclean.mk ext/realclean.mk::
+ext/clean gems/clean:: ext/clean.mk
+ext/distclean gems/distclean:: ext/distclean.mk
+ext/realclean gems/realclean:: ext/realclean.mk
+
+timestamp/clean:: ext/clean gems/clean
+timestamp/distclean:: ext/distclean gems/distclean
+timestamp/realclean:: ext/realclean gems/realclean
+
+timestamp/clean timestamp/distclean timestamp/realclean::
 	$(Q)$(RM) $(TIMESTAMPDIR)/.*.time $(TIMESTAMPDIR)/.$(arch).time $(TIMESTAMPDIR)/$(arch)/.time
-	$(Q)$(RMDIR) $(TIMESTAMPDIR)/$(arch) $(TIMESTAMPDIR) 2> $(NULL) || exit 0
+	$(Q)$(RMDIRS) $(TIMESTAMPDIR)/$(arch) 2> $(NULL) || exit 0
+
+clean-ext::
+	-$(Q)$(RM) ext/extinit.$(OBJEXT)
+
+distclean-ext realclean-ext::
+	-$(Q)$(RM) $(EXTS_MK) ext/extinit.* ext/configure-ext.mk
+	-$(Q)$(RMDIR) ext 2> $(NULL) || exit 0
 
 clean-enc distclean-enc realclean-enc: PHONY
 
@@ -584,6 +617,11 @@ clean-capi distclean-capi realclean-capi:
 clean-platform:
 	$(Q) $(RM) $(PLATFORM_D)
 	-$(Q) $(RMDIR) $(PLATFORM_DIR) 2> $(NULL) || exit 0
+
+RUBYSPEC_CAPIEXT = spec/rubyspec/optional/capi/ext
+clean-rubyspec: PHONY
+	$(Q) $(RM) $(RUBYSPEC_CAPIEXT)/*.$(OBJEXT) $(RUBYSPEC_CAPIEXT)/*.$(DLEXT)
+	-$(Q) $(RMDIRS) $(RUBYSPEC_CAPIEXT)
 
 check: main test test-testframework test-almost
 	$(ECHO) check succeeded
@@ -624,7 +662,7 @@ yes-test-knownbug: prog PHONY
 
 test-testframework: $(TEST_RUNNABLE)-test-testframework
 yes-test-testframework: prog PHONY
-	$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TESTOPTS) testunit minitest
+	$(gnumake_recursive)$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TESTOPTS) testunit minitest
 no-test-testframework: PHONY
 
 test-sample: test-basic # backward compatibility for mswin-build
@@ -634,20 +672,20 @@ test: btest-ruby test-knownbug test-basic
 # for example, make test-all TESTOPTS="-j2 -v -n test-name -- test-file-name"
 test-all: $(TEST_RUNNABLE)-test-all
 yes-test-all: prog PHONY
-	$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TEST_EXCLUDES) $(TESTOPTS) $(TESTS)
+	$(gnumake_recursive)$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TEST_EXCLUDES) $(TESTOPTS) $(TESTS)
 TESTS_BUILD = mkmf
 no-test-all: PHONY
-	$(MINIRUBY) -I"$(srcdir)/lib" "$(srcdir)/test/runner.rb" $(TESTOPTS) $(TESTS_BUILD)
+	$(gnumake_recursive)$(MINIRUBY) -I"$(srcdir)/lib" "$(srcdir)/test/runner.rb" $(TESTOPTS) $(TESTS_BUILD)
 
 test-almost: $(TEST_RUNNABLE)-test-almost
 yes-test-almost: prog PHONY
-	$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TEST_EXCLUDES) $(TESTOPTS) $(EXCLUDE_TESTFRAMEWORK) $(TESTS)
+	$(gnumake_recursive)$(Q)$(exec) $(RUNRUBY) "$(srcdir)/test/runner.rb" --ruby="$(RUNRUBY)" $(TEST_EXCLUDES) $(TESTOPTS) $(EXCLUDE_TESTFRAMEWORK) $(TESTS)
 no-test-almost: PHONY
 
 test-ruby: $(TEST_RUNNABLE)-test-ruby
 no-test-ruby: PHONY
 yes-test-ruby: prog encs PHONY
-	$(RUNRUBY) "$(srcdir)/test/runner.rb" $(TEST_EXCLUDES) $(TESTOPTS) -- ruby -ext-
+	$(gnumake_recursive)$(RUNRUBY) "$(srcdir)/test/runner.rb" $(TEST_EXCLUDES) $(TESTOPTS) -- ruby -ext-
 
 extconf: $(PREP)
 	$(Q) $(MAKEDIRS) "$(EXTCONFDIR)"
@@ -668,10 +706,12 @@ $(RBCONFIG): $(srcdir)/tool/mkconfig.rb config.status $(srcdir)/version.h
 	> rbconfig.tmp
 	$(IFCHANGE) "--timestamp=$@" rbconfig.rb rbconfig.tmp
 
-test-rubyspec-precheck:
+test-rubyspec-precheck: $(arch)-fake.rb
 
-test-rubyspec: test-rubyspec-precheck $(arch)-fake.rb
+test-rubyspec: $(TEST_RUNNABLE)-test-rubyspec
+yes-test-rubyspec: test-rubyspec-precheck
 	$(RUNRUBY) -r./$(arch)-fake $(srcdir)/spec/mspec/bin/mspec run -B $(srcdir)/spec/default.mspec $(MSPECOPT)
+no-test-rubyspec: test-rubyspec-precheck
 
 RUNNABLE = $(LIBRUBY_RELATIVE:no=un)-runnable
 runnable: $(RUNNABLE) prog $(srcdir)/tool/mkrunnable.rb PHONY
@@ -846,9 +886,14 @@ incs: $(INSNS) {$(VPATH)}node_name.inc {$(VPATH)}known_errors.inc \
       {$(VPATH)}vm_call_iseq_optimized.inc $(srcdir)/revision.h \
       $(REVISION_H) \
       $(UNICODE_DATA_HEADERS) $(srcdir)/enc/jis/props.h \
-      {$(VPATH)}id.h {$(VPATH)}probes.dmyh
+      {$(VPATH)}id.h {$(VPATH)}probes.dmyh \
+      {$(VPATH)}debug_counter_names.inc
 
 insns: $(INSNS)
+
+debug_counter_names.inc: $(srcdir)/tool/debug_counter.rb $(srcdir)/debug_counter.h
+	$(ECHO) generating $@
+	$(Q) $(BASERUBY) $(srcdir)/tool/debug_counter.rb $(srcdir)/debug_counter.h > $@
 
 id.h: $(srcdir)/tool/generic_erb.rb $(srcdir)/template/id.h.tmpl $(srcdir)/defs/id.def
 	$(ECHO) generating $@
@@ -922,18 +967,18 @@ $(srcdir)/ext/ripper/ripper.c: $(srcdir)/parse.y id.h
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
 	sed /AUTOGENERATED/q depend | \
-	$(exec) $(MAKE) -f - $(MFLAGS) \
+	$(exec) $(MAKE) -f - $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) RM="$(RM)" top_srcdir=../.. srcdir=. VPATH="$(PWD)" \
 		RUBY="$(BASERUBY)" PATH_SEPARATOR="$(PATH_SEPARATOR)"
 
 $(srcdir)/ext/json/parser/parser.c: $(srcdir)/ext/json/parser/parser.rl
 	$(ECHO) generating $@
-	$(Q) $(CHDIR) $(@D) && $(exec) $(MAKE) -f prereq.mk $(MFLAGS) \
+	$(Q) $(CHDIR) $(@D) && $(exec) $(MAKE) -f prereq.mk $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) top_srcdir=../../.. srcdir=. VPATH=../../.. BASERUBY="$(BASERUBY)"
 
 $(srcdir)/ext/date/zonetab.h: $(srcdir)/ext/date/zonetab.list
 	$(ECHO) generating $@
-	$(Q) $(CHDIR) $(@D) && $(exec) $(MAKE) -f prereq.mk $(MFLAGS) \
+	$(Q) $(CHDIR) $(@D) && $(exec) $(MAKE) -f prereq.mk $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) top_srcdir=../.. srcdir=. VPATH=../.. BASERUBY="$(BASERUBY)"
 
 $(srcdir)/ext/rbconfig/sizeof/sizes.c: $(srcdir)/ext/rbconfig/sizeof/depend \
@@ -941,7 +986,7 @@ $(srcdir)/ext/rbconfig/sizeof/sizes.c: $(srcdir)/ext/rbconfig/sizeof/depend \
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
 	sed '/AUTOGENERATED/q' depend | \
-	$(exec) $(MAKE) -f - $(MFLAGS) \
+	$(exec) $(MAKE) -f - $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) top_srcdir=../../.. srcdir=. VPATH=../../.. RUBY="$(BASERUBY)" $(@F)
 
 $(srcdir)/ext/rbconfig/sizeof/limits.c: $(srcdir)/ext/rbconfig/sizeof/depend \
@@ -949,13 +994,13 @@ $(srcdir)/ext/rbconfig/sizeof/limits.c: $(srcdir)/ext/rbconfig/sizeof/depend \
 	$(ECHO) generating $@
 	$(Q) $(CHDIR) $(@D) && \
 	sed '/AUTOGENERATED/q' depend | \
-	$(exec) $(MAKE) -f - $(MFLAGS) \
+	$(exec) $(MAKE) -f - $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) top_srcdir=../../.. srcdir=. VPATH=../../.. RUBY="$(BASERUBY)" $(@F)
 
 $(srcdir)/ext/socket/constdefs.c: $(srcdir)/ext/socket/depend
 	$(Q) $(CHDIR) $(@D) && \
 	sed '/AUTOGENERATED/q' depend | \
-	$(exec) $(MAKE) -f - $(MFLAGS) \
+	$(exec) $(MAKE) -f - $(mflags) \
 		Q=$(Q) ECHO=$(ECHO) top_srcdir=../.. srcdir=. VPATH=../.. RUBY="$(BASERUBY)"
 
 ##
@@ -1029,10 +1074,10 @@ dist:
 up:: update-remote
 
 up::
-	-$(Q)$(MAKE) $(MFLAGS) Q=$(Q) REVISION_FORCE=PHONY "$(REVISION_H)"
+	-$(Q)$(MAKE) $(mflags) Q=$(Q) REVISION_FORCE=PHONY "$(REVISION_H)"
 
 up::
-	-$(Q)$(MAKE) $(MFLAGS) Q=$(Q) after-update
+	-$(Q)$(MAKE) $(mflags) Q=$(Q) after-update
 
 after-update:: extract-extlibs
 
@@ -1115,7 +1160,7 @@ $(UNICODE_SRC_DATA_DIR)/$(ALWAYS_UPDATE_UNICODE:yes=.unicode-tables.time): $(UNI
 
 $(UNICODE_SRC_DATA_DIR)/.unicode-tables.time: $(srcdir)/tool/generic_erb.rb \
 		$(srcdir)/template/unicode_norm_gen.tmpl
-	$(Q) $(ALWAYS_UPDATE_UNICODE:yes=exit &&) $(MAKE) $(MFLAGS) Q=$(Q) UNICODE_VERSION=$(UNICODE_VERSION) update-unicode
+	$(Q) $(ALWAYS_UPDATE_UNICODE:yes=exit &&) $(MAKE) $(mflags) Q=$(Q) UNICODE_VERSION=$(UNICODE_VERSION) update-unicode
 	$(Q) $(BASERUBY) $(srcdir)/tool/generic_erb.rb \
 		-c -t$@ -o $(srcdir)/lib/unicode_normalize/tables.rb \
 		-I $(srcdir) \
@@ -1125,7 +1170,7 @@ $(UNICODE_SRC_DATA_DIR)/.unicode-tables.time: $(srcdir)/tool/generic_erb.rb \
 # UPDATE_NAME2CTYPE=    : toplevel
 # UPDATE_NAME2CTYPE=yes : sub-make to update name2ctype.h
 $(UNICODE_HDR_DIR)/$(UPDATE_NAME2CTYPE:yes=.ignore.)name2ctype.h:
-	$(Q) $(MAKE) $(MFLAGS) Q=$(Q) UPDATE_NAME2CTYPE=yes UNICODE_VERSION=$(UNICODE_VERSION) $@
+	$(Q) $(MAKE) $(mflags) Q=$(Q) UPDATE_NAME2CTYPE=yes UNICODE_VERSION=$(UNICODE_VERSION) $@
 
 $(UNICODE_HDR_DIR)/$(UPDATE_NAME2CTYPE:yes=name2ctype.h): \
 		$(UNICODE_SRC_DATA_DIR)/UnicodeData.txt \
@@ -1144,7 +1189,7 @@ $(UNICODE_HDR_DIR)/$(ALWAYS_UPDATE_UNICODE:yes=casefold.h): \
 		$(UNICODE_SRC_DATA_DIR)/CaseFolding.txt
 
 $(UNICODE_HDR_DIR)/casefold.h: $(srcdir)/enc/unicode/case-folding.rb
-	$(Q) $(ALWAYS_UPDATE_UNICODE:yes=exit &&) $(MAKE) $(MFLAGS) Q=$(Q) UNICODE_VERSION=$(UNICODE_VERSION) update-unicode
+	$(Q) $(ALWAYS_UPDATE_UNICODE:yes=exit &&) $(MAKE) $(mflags) Q=$(Q) UNICODE_VERSION=$(UNICODE_VERSION) update-unicode
 	$(MAKEDIRS) $(@D)
 	$(Q) $(BASERUBY) $(srcdir)/enc/unicode/case-folding.rb \
 		--output-file=$@ \
@@ -1182,7 +1227,9 @@ exam: check test-rubyspec
 love: sudo-precheck up all test install check
 	@echo love is all you need
 
-yes-test-all: sudo-precheck
+great: exam
+
+yes-test-all no-test-all: sudo-precheck
 
 sudo-precheck: PHONY
 	@$(SUDO) echo > $(NULL)
@@ -1259,6 +1306,7 @@ bignum.$(OBJEXT): {$(VPATH)}bignum.c
 bignum.$(OBJEXT): {$(VPATH)}config.h
 bignum.$(OBJEXT): {$(VPATH)}defines.h
 bignum.$(OBJEXT): {$(VPATH)}encoding.h
+bignum.$(OBJEXT): {$(VPATH)}id.h
 bignum.$(OBJEXT): {$(VPATH)}intern.h
 bignum.$(OBJEXT): {$(VPATH)}internal.h
 bignum.$(OBJEXT): {$(VPATH)}io.h
@@ -1417,6 +1465,9 @@ debug.$(OBJEXT): {$(VPATH)}util.h
 debug.$(OBJEXT): {$(VPATH)}vm_core.h
 debug.$(OBJEXT): {$(VPATH)}vm_debug.h
 debug.$(OBJEXT): {$(VPATH)}vm_opts.h
+debug_counter.$(OBJEXT): {$(VPATH)}debug_counter.h
+debug_counter.$(OBJEXT): {$(VPATH)}debug_counter_names.inc
+debug_counter.$(OBJEXT): {$(VPATH)}debug_counter.c
 dir.$(OBJEXT): $(hdrdir)/ruby/ruby.h
 dir.$(OBJEXT): $(top_srcdir)/include/ruby.h
 dir.$(OBJEXT): {$(VPATH)}config.h
@@ -2531,6 +2582,7 @@ variable.$(OBJEXT): $(top_srcdir)/include/ruby.h
 variable.$(OBJEXT): {$(VPATH)}config.h
 variable.$(OBJEXT): {$(VPATH)}constant.h
 variable.$(OBJEXT): {$(VPATH)}defines.h
+variable.$(OBJEXT): {$(VPATH)}debug_counter.h
 variable.$(OBJEXT): {$(VPATH)}encoding.h
 variable.$(OBJEXT): {$(VPATH)}id.h
 variable.$(OBJEXT): {$(VPATH)}id_table.h
@@ -2565,6 +2617,7 @@ vm.$(OBJEXT): {$(VPATH)}constant.h
 vm.$(OBJEXT): {$(VPATH)}defines.h
 vm.$(OBJEXT): {$(VPATH)}encoding.h
 vm.$(OBJEXT): {$(VPATH)}eval_intern.h
+vm.$(OBJEXT): {$(VPATH)}debug_counter.h
 vm.$(OBJEXT): {$(VPATH)}gc.h
 vm.$(OBJEXT): {$(VPATH)}id.h
 vm.$(OBJEXT): {$(VPATH)}id_table.h

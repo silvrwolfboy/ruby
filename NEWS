@@ -20,9 +20,29 @@ with all sufficient information, see the ChangeLog file or Redmine
 
 === Core classes updates (outstanding ones only)
 
+* Integer
+
+  * Integer.sqrt  [Feature #13219]
+
+* Regexp
+  * Update Onigmo 6.1.1.
+    * Support absent operator https://github.com/k-takata/Onigmo/issues/82
+
+* Thread
+
+  * Thread#fetch  [Feature #13009]
+
+* String
+
+  * String#-@ deduplicates unfrozen strings.  Already-frozen
+    strings remain unchanged for compatibility.  [Feature #13077]
+
 === Stdlib updates (outstanding ones only)
 
 === Compatibility issues (excluding feature bug fixes)
+
+* Random.raw_seed renamed to become Random.urandom.  It is now
+  applicable to non-seeding purposes due to [Bug #9569].
 
 === Stdlib compatibility issues (excluding feature bug fixes)
 

@@ -1323,7 +1323,7 @@ str_shared_replace(VALUE str, VALUE str2)
     int cr;
     int termlen;
 
-    ASSUME(str2 != str);
+    RUBY_ASSERT(str2 != str);
     enc = STR_ENC_GET(str2);
     cr = ENC_CODERANGE(str2);
     str_discard(str);
@@ -2386,7 +2386,7 @@ rb_str_subpos(VALUE str, long beg, long *lenp)
 	    beg += blen;
 	    if (beg < 0) return 0;
 	}
-	if (beg + len > blen)
+	if (len > blen - beg)
 	    len = blen - beg;
 	if (len < 0) return 0;
 	p = s + beg;
@@ -2520,8 +2520,8 @@ str_uplus(VALUE str)
  *
  * If the string is frozen, then return the string itself.
  *
- * If the string is not frozen, then duplicate the string
- * freeze it and return it.
+ * If the string is not frozen, return a frozen, possibly pre-existing
+ * copy of it.
  */
 static VALUE
 str_uminus(VALUE str)
@@ -2530,7 +2530,7 @@ str_uminus(VALUE str)
 	return str;
     }
     else {
-	return rb_str_freeze(rb_str_dup(str));
+	return rb_fstring(str);
     }
 }
 
@@ -2868,6 +2868,9 @@ rb_str_concat_literals(size_t num, const VALUE *strary)
 }
 
 /*
+ *  Document-method: String#<<
+ *  Document-method: String#concat
+ *
  *  call-seq:
  *     str << integer                      -> str
  *     str.concat(integer1, integer2,...)  -> str
@@ -2882,7 +2885,7 @@ rb_str_concat_literals(size_t num, const VALUE *strary)
  *     a = "hello "
  *     a << "world"   #=> "hello world"
  *     a.concat(33)   #=> "hello world!"
- *     a              #=> "hollo world!"
+ *     a              #=> "hello world!"
  *
  *     b = "sn"
  *     b.concat(b, b)    #=> "snsnsn"
@@ -3113,9 +3116,7 @@ str_eql(const VALUE str1, const VALUE str2)
  *     str == obj    -> true or false
  *     str === obj   -> true or false
  *
- *  === Equality
- *
- *  Returns whether +str+ == +obj+, similar to Object#==.
+ *  Equality---Returns whether +str+ == +obj+, similar to Object#==.
  *
  *  If +obj+ is not an instance of String but responds to +to_str+, then the
  *  two strings are compared using <code>obj.==</code>.
@@ -4434,12 +4435,14 @@ rb_str_update(VALUE str, long beg, long len, VALUE val)
 	rb_raise(rb_eIndexError, "index %ld out of string", beg);
     }
     if (beg < 0) {
-	if (-beg > slen) {
+	if (beg + slen < 0) {
 	    goto out_of_range;
 	}
 	beg += slen;
     }
-    if (slen < len || slen < beg + len) {
+    assert(beg >= 0);
+    assert(beg <= slen);
+    if (len > slen - beg) {
 	len = slen - beg;
     }
     str_modify_keep_cr(str);
@@ -5253,7 +5256,7 @@ str_byte_substr(VALUE str, long beg, long len, int empty)
 	beg += n;
 	if (beg < 0) return Qnil;
     }
-    if (beg + len > n)
+    if (len > n - beg)
 	len = n - beg;
     if (len <= 0) {
 	if (!empty) return Qnil;
@@ -5263,7 +5266,7 @@ str_byte_substr(VALUE str, long beg, long len, int empty)
     else
 	p = s + beg;
 
-    if (!STR_EMBEDDABLE_P(len, TERM_LEN(str) && SHARABLE_SUBSTRING_P(beg, len, n))) {
+    if (!STR_EMBEDDABLE_P(len, TERM_LEN(str)) && SHARABLE_SUBSTRING_P(beg, len, n)) {
 	str2 = rb_str_new_frozen(str);
 	str2 = str_new_shared(rb_obj_class(str2), str2);
 	RSTRING(str2)->as.heap.ptr += beg;
@@ -5784,7 +5787,7 @@ rb_str_inspect(VALUE str)
  *  Produces a version of +str+ with all non-printing characters replaced by
  *  <code>\nnn</code> notation and all special characters escaped.
  *
- *    "hello \n ''".dump  #=> "\"hello \\n ''\"
+ *    "hello \n ''".dump  #=> "\"hello \\n ''\""
  */
 
 VALUE
@@ -7493,8 +7496,7 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
     const char *ptr, *pend, *subptr, *subend, *rsptr, *hit, *adjusted;
     long pos, len, rslen;
     int rsnewline = 0;
-
-    VALUE MAYBE_UNUSED(ary);
+    VALUE ary = 0;
 
     if (rb_scan_args(argc, argv, "01:", &rs, &opts) == 0)
 	rs = rb_rs;
@@ -9707,6 +9709,7 @@ sym_inspect(VALUE sym)
  *  Returns the name or string corresponding to <i>sym</i>.
  *
  *     :fred.id2name   #=> "fred"
+ *     :ginger.to_s    #=> "ginger"
  */
 
 
@@ -10036,6 +10039,8 @@ Init_String(void)
 #define rb_intern(str) rb_intern_const(str)
 
     rb_cString  = rb_define_class("String", rb_cObject);
+    assert(rb_vm_fstring_table());
+    st_foreach(rb_vm_fstring_table(), fstring_set_class_i, rb_cString);
     rb_include_module(rb_cString, rb_mComparable);
     rb_define_alloc_func(rb_cString, empty_str_alloc);
     rb_define_singleton_method(rb_cString, "try_convert", rb_str_s_try_convert, 1);
@@ -10215,7 +10220,4 @@ Init_String(void)
     rb_define_method(rb_cSymbol, "swapcase", sym_swapcase, -1);
 
     rb_define_method(rb_cSymbol, "encoding", sym_encoding, 0);
-
-    assert(rb_vm_fstring_table());
-    st_foreach(rb_vm_fstring_table(), fstring_set_class_i, rb_cString);
 }

@@ -84,12 +84,6 @@ static VALUE envtbl;
 static ID id_hash, id_yield, id_default, id_flatten_bang;
 
 VALUE
-rb_hash_ifnone(VALUE h)
-{
-    return RHASH_IFNONE(h);
-}
-
-VALUE
 rb_hash_set_ifnone(VALUE hash, VALUE ifnone)
 {
     RB_OBJ_WRITE(hash, (&RHASH(hash)->ifnone), ifnone);
@@ -264,12 +258,6 @@ rb_obj_hash(VALUE obj)
 {
     long hnum = any_hash(obj, objid_hash);
     return ST2FIX(hnum);
-}
-
-int
-rb_hash_iter_lev(VALUE h)
-{
-    return RHASH_ITER_LEV(h);
 }
 
 static const struct st_hash_type objhash = {
@@ -2874,19 +2862,19 @@ rb_hash_any_p(VALUE hash)
  * call-seq:
  *   hsh.dig(key, ...)                 -> object
  *
- * Extracts the nested value specified by the sequence of <i>idx</i>
+ * Extracts the nested value specified by the sequence of <i>key</i>
  * objects by calling +dig+ at each step, returning +nil+ if any
  * intermediate step is +nil+.
  *
  *   h = { foo: {bar: {baz: 1}}}
  *
- *   h.dig(:foo, :bar, :baz)           #=> 1
- *   h.dig(:foo, :zot, :xyz)           #=> nil
+ *   h.dig(:foo, :bar, :baz)     #=> 1
+ *   h.dig(:foo, :zot, :xyz)     #=> nil
  *
  *   g = { foo: [10, 11, 12] }
- *   g.dig(:foo, 1)                    #=> 11
- *   g.dig(:foo, 1, 0)                 #=> TypeError: Integer does not have #dig method
- *   g.dig(:foo, :bar)                 #=> TypeError: no implicit conversion of Symbol into Integer
+ *   g.dig(:foo, 1)              #=> 11
+ *   g.dig(:foo, 1, 0)           #=> TypeError: Integer does not have #dig method
+ *   g.dig(:foo, :bar)           #=> TypeError: no implicit conversion of Symbol into Integer
  */
 
 VALUE
@@ -4375,7 +4363,7 @@ env_update(VALUE env, VALUE hash)
  *  Hashes are an easy way to represent data structures, such as
  *
  *    books         = {}
- *    books[:matz]  = "The Ruby Language"
+ *    books[:matz]  = "The Ruby Programming Language"
  *    books[:black] = "The Well-Grounded Rubyist"
  *
  *  Hashes are also commonly used as a way to have named parameters in
