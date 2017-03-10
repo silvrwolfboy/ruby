@@ -6798,6 +6798,10 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)src), (VALUE)src);
 
+    if (FL_TEST(src, FL_EXIVAR)) {
+	rb_mv_generic_ivar(src, dest);
+    }
+
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 

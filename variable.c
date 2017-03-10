@@ -1145,6 +1145,16 @@ rb_update_generic_ivar_references(VALUE obj)
 }
 
 void
+rb_mv_generic_ivar(VALUE rsrc, VALUE dst)
+{
+    st_data_t key = (st_data_t)rsrc;
+    struct gen_ivtbl *ivtbl;
+
+    if (st_delete(generic_iv_tbl, &key, (st_data_t *)&ivtbl))
+	st_insert(generic_iv_tbl, (st_data_t)dst, (st_data_t)ivtbl);
+}
+
+void
 rb_free_generic_ivar(VALUE obj)
 {
     st_data_t key = (st_data_t)obj;
