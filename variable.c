@@ -1130,21 +1130,6 @@ rb_mark_generic_ivar(VALUE obj)
 }
 
 void
-rb_update_generic_ivar_references(VALUE obj)
-{
-    struct gen_ivtbl *ivtbl;
-    uint32_t i;
-
-    if (gen_ivtbl_get(obj, &ivtbl)) {
-	for (i = 0; i < ivtbl->numiv; i++) {
-	    if(BUILTIN_TYPE(ivtbl->ivptr[i]) == T_MOVED) {
-		ivtbl->ivptr[i] = (VALUE)(RMOVED(ivtbl->ivptr[i])->destination);
-	    }
-	}
-    }
-}
-
-void
 rb_mv_generic_ivar(VALUE rsrc, VALUE dst)
 {
     st_data_t key = (st_data_t)rsrc;

@@ -3871,7 +3871,7 @@ static void
 push_mark_stack(mark_stack_t *stack, VALUE data)
 {
     if (BUILTIN_TYPE(data) == T_MOVED) {
-	rb_bug("WTF");
+	rb_bug("moved item should not be marked");
     }
     if (stack->index == stack->limit) {
         push_mark_stack_chunk(stack);
@@ -6771,10 +6771,6 @@ gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
     return TRUE;
 }
 
-void rb_obj_info_dump_move(VALUE obj, VALUE newloc);
-
-static const char * obj_type_name(VALUE obj);
-
 static void
 gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 {
@@ -6825,41 +6821,6 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
-}
-
-static const char * type_name(int type, VALUE obj);
-
-static void
-gc_print_page(rb_objspace_t * objspace, RVALUE *pstart, RVALUE *pend, struct heap_page *page, RVALUE *free, RVALUE *scan)
-{
-    short found = 0;
-    VALUE v;
-
-    v = (VALUE)pstart;
-    for(; v != (VALUE)pend; v += sizeof(RVALUE)) {
-	if((VALUE)free == v) {
-	    printf("👉 ");
-	} else if ((VALUE)scan == v) {
-	    printf("👈 ");
-	} else {
-	    int type = BUILTIN_TYPE(v);
-	    if (type != T_ZOMBIE && type != T_NONE) {
-		if (type == T_MOVED) {
-		    assert(!rb_objspace_marked_object_p(v));
-		    printf("➡️ ");
-		} else {
-		    if (gc_is_moveable_obj(objspace, v)) {
-			printf("🙆 ");
-		    } else {
-			printf("🙅 ");
-			// printf("SLOT %s \n", type_name(TYPE(v), v));
-		    }
-		}
-	    } else {
-		printf("🆓 ");
-	    }
-	}
-    }
 }
 
 struct heap_cursor {
@@ -7065,15 +7026,6 @@ gc_ref_update_hash(rb_objspace_t * objspace, VALUE v)
     gc_update_table_refs(objspace, rb_hash_tbl_raw(v));
 }
 
-static VALUE
-gc_moved_fixme(rb_objspace_t *objspace, VALUE obj)
-{
-    if (gc_object_moved_p(objspace, obj))
-	rb_bug("OMGFIX!!!!");
-
-    return obj;
-}
-
 static void
 gc_ref_update_method_entry(rb_objspace_t *objspace, rb_method_entry_t *me)
 {
@@ -7234,12 +7186,6 @@ static void
 gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
-
-    /*
-    if (FL_TEST(obj, FL_EXIVAR)) {
-	rb_update_generic_ivar_references(obj);
-    }
-    */
 
     switch(BUILTIN_TYPE(obj)) {
 	case T_CLASS:
@@ -7426,20 +7372,6 @@ rb_gc_pin_heap(VALUE mod)
     return mod;
 }
 
-void print_pages(int i, RVALUE *free, RVALUE *scan)
-{
-    struct heap_page *page;
-    rb_objspace_t *objspace = &rb_objspace;
-
-    printf("\e[H\e[2J\n");
-    for (int j = 0; j < i; j++) {
-	page = heap_pages_sorted[j];
-	gc_print_page(objspace, page->start, page->start + page->total_slots, page, free, scan);
-    }
-    printf("\n");
-    usleep(50000);
-}
-
 static VALUE type_sym(int type);
 
 static VALUE
@@ -7473,14 +7405,6 @@ rb_gc_compact(VALUE mod)
     struct heap_page *page;
 
     rb_gc_pin_heap(mod);
-
-    /*
-    for (int j = 0; j < heap_pages_sorted_length; j++) {
-	struct heap_page *page;
-	page = heap_pages_sorted[j];
-	gc_print_page(objspace, page->start, page->start + page->total_slots, page);
-    }
-    */
 
     gc_compact_page(objspace);
 
@@ -10304,13 +10228,6 @@ rb_obj_info_dump(VALUE obj)
 {
     char buff[0x100];
     fprintf(stderr, "rb_obj_info_dump: %s\n", rb_raw_obj_info(buff, 0x100, obj));
-}
-
-void
-rb_obj_info_dump_move(VALUE obj, VALUE newloc)
-{
-    char buff[0x100];
-    fprintf(stderr, "rb_obj_info_dump: %s -> %p\n", rb_raw_obj_info(buff, 0x100, obj), newloc);
 }
 
 #if GC_DEBUG
