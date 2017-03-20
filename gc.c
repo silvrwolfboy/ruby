@@ -6914,7 +6914,7 @@ int compare_pinned(const void *left, const void *right)
 }
 
 static void
-gc_compact_page(rb_objspace_t *objspace)
+gc_compact_heap(rb_objspace_t *objspace)
 {
     struct heap_cursor free_cursor;
     struct heap_cursor scan_cursor;
@@ -7338,36 +7338,16 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
 extern rb_symbols_t global_symbols;
 
 static void
-gc_update_references(VALUE obj)
+gc_update_references(rb_objspace_t * objspace)
 {
-    rb_objspace_each_objects_without_setup(gc_ref_update, &rb_objspace);
-    gc_update_table_refs(&rb_objspace, global_symbols.str_sym);
+    rb_objspace_each_objects_without_setup(gc_ref_update, objspace);
+    gc_update_table_refs(objspace, global_symbols.str_sym);
 }
 
 static void
 gc_pin_root(const char *category, VALUE obj, void *data)
 {
     gc_pin((rb_objspace_t *)data, obj);
-}
-
-static VALUE
-rb_gc_pin_heap(VALUE mod)
-{
-    rb_objspace_t *objspace = &rb_objspace;
-
-    rb_gc();
-
-    /* should only mark roots */
-    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
-
-    /* Pin things found via marking */
-    gc_marks_start(objspace, TRUE);
-    gc_mark_stacked_objects_all(objspace);
-    gc_marks_finish(objspace);
-    /* pin roots */
-    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
-
-    return mod;
 }
 
 static VALUE type_sym(int type);
@@ -7400,13 +7380,22 @@ static VALUE
 rb_gc_compact(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
-    struct heap_page *page;
 
-    rb_gc_pin_heap(mod);
+    rb_gc();
 
-    gc_compact_page(objspace);
+    /* should only mark roots */
+    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
-    gc_update_references(Qnil);
+    /* Pin things found via marking */
+    gc_marks_start(objspace, TRUE);
+    gc_mark_stacked_objects_all(objspace);
+    gc_marks_finish(objspace);
+    /* pin roots */
+    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
+
+    gc_compact_heap(objspace);
+
+    gc_update_references(objspace);
     gc_mode_transition(objspace, gc_mode_sweeping);
     gc_mode_transition(objspace, gc_mode_none);
 
