@@ -642,8 +642,8 @@ struct RFloat {
 
 struct RComplex {
     struct RBasic basic;
-    const VALUE real;
-    const VALUE imag;
+    VALUE real;
+    VALUE imag;
 };
 
 #define RCOMPLEX(obj) (R_CAST(RComplex)(obj))

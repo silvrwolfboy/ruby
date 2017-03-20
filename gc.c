@@ -7282,10 +7282,8 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    break;
 
 	case T_COMPLEX:
-	    if (gc_object_moved_p(objspace, any->as.complex.real))
-		rb_bug("OMGFIX!!!!");
-	    if (gc_object_moved_p(objspace, any->as.complex.imag))
-		rb_bug("OMGFIX!!!!");
+	    UPDATE_IF_MOVED(objspace, any->as.complex.real);
+	    UPDATE_IF_MOVED(objspace, any->as.complex.imag);
 
 	    break;
 
