@@ -7301,7 +7301,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 #if GC_DEBUG
 	    rb_gcdebug_print_obj_condition((VALUE)obj);
 	    rb_obj_info_dump(obj);
-	    rb_bug("OMGFIX!!!!");
+	    rb_bug("unreachable");
 #endif
 	    break;
 
