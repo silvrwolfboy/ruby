@@ -205,6 +205,9 @@ static ruby_gc_params_t gc_params = {
     FALSE,
 };
 
+static st_table *id_to_obj_tbl;
+static st_table *obj_to_id_tbl;
+
 /* GC_DEBUG:
  *  enable to embed GC debugging information.
  */
@@ -2156,6 +2159,11 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	rb_free_generic_ivar((VALUE)obj);
 	FL_UNSET(obj, FL_EXIVAR);
     }
+    VALUE id;
+    if (st_lookup(obj_to_id_tbl, (st_data_t)obj, &id)) {
+	st_delete(obj_to_id_tbl, (st_data_t)obj, 0);
+	st_delete(id_to_obj_tbl, (st_data_t)id, 0);
+    }
 
 #if USE_RGENGC
     if (RVALUE_WB_UNPROTECTED(obj)) CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS(obj), obj);
@@ -3165,6 +3173,32 @@ rb_obj_id(VALUE obj)
     else if (SPECIAL_CONST_P(obj)) {
 	return LONG2NUM((SIGNED_VALUE)obj);
     }
+    VALUE id;
+
+    if (st_lookup(obj_to_id_tbl, (st_data_t)obj, &id)) {
+	return id;
+    } else {
+	int tries;
+	id = nonspecial_obj_id(obj);
+	for(tries = 0; tries < 500; tries += 1) {
+	    if (st_lookup(id_to_obj_tbl, (st_data_t)id, 0)) {
+		id += 2;
+	    } else {
+		st_insert(obj_to_id_tbl, (st_data_t)obj, id);
+		st_insert(id_to_obj_tbl, (st_data_t)id, Qtrue);
+		return id;
+	    }
+	    rb_bug("Couldn't find an object id after 500 tries");
+	}
+    }
+    /*
+    if (in obj id table) {
+	get ivar
+    } else {
+	put in table
+
+    }
+    */
     return nonspecial_obj_id(obj);
 }
 
@@ -6798,6 +6832,14 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	rb_mv_generic_ivar(src, dest);
     }
 
+    VALUE id;
+    if(st_lookup(obj_to_id_tbl, (st_data_t)src, &id)) {
+	st_delete(obj_to_id_tbl, (st_data_t)src, 0);
+	st_insert(obj_to_id_tbl, (st_data_t)dest, id);
+	st_delete(id_to_obj_tbl, (st_data_t)id, 0);
+	st_insert(id_to_obj_tbl, (st_data_t)id, Qtrue);
+    }
+
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
 
@@ -10359,6 +10401,9 @@ Init_GC(void)
     VALUE rb_mObjSpace;
     VALUE rb_mProfiler;
     VALUE gc_constants;
+
+    id_to_obj_tbl = st_init_numtable();
+    obj_to_id_tbl = st_init_numtable();
 
     rb_mGC = rb_define_module("GC");
     rb_define_singleton_method(rb_mGC, "start", gc_start_internal, -1);
