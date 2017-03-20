@@ -7416,12 +7416,7 @@ rb_gc_compact(VALUE mod)
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
     /* GC after compaction to eliminate T_MOVED */
-    gc_marks_start(objspace, TRUE);
-    gc_mark_stacked_objects_all(objspace);
-    gc_marks_finish(objspace);
-    gc_sweep_start(objspace);
-    gc_sweep_rest(objspace);
-    gc_verify_internal_consistency(Qnil);
+    rb_gc();
 
     return rb_gc_compact_stats(mod);
 }
