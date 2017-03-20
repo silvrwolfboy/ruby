@@ -7415,23 +7415,13 @@ rb_gc_compact(VALUE mod)
 
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
-    /* Pin things found via marking */
+    /* GC after compaction to eliminate T_MOVED */
     gc_marks_start(objspace, TRUE);
     gc_mark_stacked_objects_all(objspace);
     gc_marks_finish(objspace);
     gc_sweep_start(objspace);
     gc_sweep_rest(objspace);
     gc_verify_internal_consistency(Qnil);
-
-    // gc_ref_update_array(ary);
-    // rb_gcdebug_print_obj_condition(rb_ary_entry(ary, 100));
-    // gc_ref_update_array(ary);
-    /*
-    printf("len: %d %d\n", BUILTIN_TYPE(ary), T_MOVED);
-    printf("blah: %d %d %d\n", BUILTIN_TYPE(rb_ary_entry(ary, 1)),
-	    BUILTIN_TYPE(rb_ary_entry(ary, 2)), T_MOVED);
-    gc_ref_update_array(ary);
-    */
 
     return rb_gc_compact_stats(mod);
 }
