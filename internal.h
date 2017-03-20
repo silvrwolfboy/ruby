@@ -893,7 +893,7 @@ struct vm_ifunc {
     VALUE flags;
     VALUE reserved;
     VALUE (*func)(ANYARGS);
-    const void *data;
+    void *data;
     ID id;
 };
 

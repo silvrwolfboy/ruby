@@ -7114,7 +7114,7 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
     }
 }
 
-static int
+static enum rb_id_table_iterator_result
 check_id_table_move(ID id, VALUE value, void *data)
 {
     if(!SPECIAL_CONST_P((void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
@@ -7124,8 +7124,8 @@ check_id_table_move(ID id, VALUE value, void *data)
     return ID_TABLE_CONTINUE;
 }
 
-static int
-update_id_table(void *key, VALUE * value, void *data)
+static enum rb_id_table_iterator_result
+update_id_table(ID *key, VALUE * value, void *data, int existing)
 {
     if(!SPECIAL_CONST_P((void *)*value) && BUILTIN_TYPE(*value) == T_MOVED) {
 	*value = (VALUE)RMOVED(*value)->destination;
@@ -7142,7 +7142,7 @@ update_m_tbl(rb_objspace_t *objspace, struct rb_id_table *tbl)
     }
 }
 
-static int
+static enum rb_id_table_iterator_result
 update_const_table(VALUE value, void *data)
 {
     rb_const_entry_t *ce = (rb_const_entry_t *)value;
@@ -7292,7 +7292,7 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_STRUCT:
 	    {
 		long i, len = RSTRUCT_LEN(obj);
-		VALUE *ptr = RSTRUCT_CONST_PTR(obj);
+		VALUE *ptr = (VALUE *)RSTRUCT_CONST_PTR(obj);
 
 		for(i = 0; i < len; i++) {
 		    UPDATE_IF_MOVED(objspace, ptr[i]);
