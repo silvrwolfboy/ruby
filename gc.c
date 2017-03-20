@@ -6931,7 +6931,7 @@ gc_compact_page(rb_objspace_t *objspace)
     init_cursors(objspace, &free_cursor, &scan_cursor, page_list);
 
     while (not_met(&free_cursor, &scan_cursor)) {
-	while(BUILTIN_TYPE(free_cursor.slot) != T_NONE) {
+	while(BUILTIN_TYPE(free_cursor.slot) != T_NONE && not_met(&free_cursor, &scan_cursor)) {
 	    advance_cursor(&free_cursor, page_list);
 	}
 
