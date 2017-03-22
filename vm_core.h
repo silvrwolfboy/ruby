@@ -1166,6 +1166,8 @@ VM_STACK_ENV_WRITE(const VALUE *ep, int index, VALUE v)
 }
 
 const VALUE *rb_vm_ep_local_ep(const VALUE *ep);
+const VALUE *rb_vm_proc_local_ep(VALUE proc);
+
 VALUE rb_vm_frame_block_handler(const rb_control_frame_t *cfp);
 
 #define RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp) ((cfp)+1)
@@ -1309,9 +1311,8 @@ vm_block_type_set(const struct rb_block *block, enum rb_block_type type)
 static inline const struct rb_block *
 vm_proc_block(VALUE procval)
 {
-    rb_proc_t *proc = RTYPEDDATA_DATA(procval);
     VM_ASSERT(rb_obj_is_proc(procval));
-    return &proc->block;
+    return &((rb_proc_t *)RTYPEDDATA_DATA(procval))->block;
 }
 
 static inline const rb_iseq_t *vm_block_iseq(const struct rb_block *block);
@@ -1320,7 +1321,6 @@ static inline const VALUE *vm_block_ep(const struct rb_block *block);
 static inline const rb_iseq_t *
 vm_proc_iseq(VALUE procval)
 {
-    VM_ASSERT(rb_obj_is_proc(procval));
     return vm_block_iseq(vm_proc_block(procval));
 }
 

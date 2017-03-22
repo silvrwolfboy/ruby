@@ -748,16 +748,16 @@ rb_class_search_ancestor(VALUE cl, VALUE c)
 
 /*
  *  call-seq:
- *     obj.tap{|x|...}    -> obj
+ *     obj.tap{|x| block }    -> obj
  *
  *  Yields self to the block, and then returns self.
  *  The primary purpose of this method is to "tap into" a method chain,
  *  in order to perform operations on intermediate results within the chain.
  *
- *	(1..10)                .tap {|x| puts "original: #{x.inspect}"}
- *	  .to_a                .tap {|x| puts "array: #{x.inspect}"}
- *	  .select {|x| x%2==0} .tap {|x| puts "evens: #{x.inspect}"}
- *	  .map {|x| x*x}       .tap {|x| puts "squares: #{x.inspect}"}
+ *	(1..10)                  .tap {|x| puts "original: #{x}" }
+ *	  .to_a                  .tap {|x| puts "array:    #{x}" }
+ *	  .select {|x| x.even? } .tap {|x| puts "evens:    #{x}" }
+ *	  .map {|x| x*x }        .tap {|x| puts "squares:  #{x}" }
  *
  */
 
@@ -2870,15 +2870,10 @@ rb_cstr_to_dbl(const char *p, int badcheck)
 	while (p < end && n < e) prev = *n++ = *p++;
 	while (*p) {
 	    if (*p == '_') {
-		/* remove underscores between digits */
-		if (badcheck) {
-		    if (n == buf || !ISDIGIT(prev)) goto bad;
-		    ++p;
-		    if (!ISDIGIT(*p)) goto bad;
-		}
-		else {
-		    while (*++p == '_');
-		    continue;
+		/* remove an underscore between digits */
+		if (n == buf || !ISDIGIT(prev) || (++p, !ISDIGIT(*p))) {
+		    if (badcheck) goto bad;
+		    break;
 		}
 	    }
 	    prev = *p++;

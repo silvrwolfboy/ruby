@@ -8,42 +8,53 @@
 
 **********************************************************************/
 
-#ifndef RUBY_DEBUG_COUNTER_H
-#define RUBY_DEBUG_COUNTER_H 1
-
 #ifndef USE_DEBUG_COUNTER
 #define USE_DEBUG_COUNTER 0
 #endif
+
+#ifdef RB_DEBUG_COUNTER
+RB_DEBUG_COUNTER(mc_inline_hit)
+RB_DEBUG_COUNTER(mc_inline_miss)
+RB_DEBUG_COUNTER(mc_global_hit)
+RB_DEBUG_COUNTER(mc_global_miss)
+RB_DEBUG_COUNTER(mc_global_state_miss)
+RB_DEBUG_COUNTER(mc_class_serial_miss)
+RB_DEBUG_COUNTER(mc_cme_complement)
+RB_DEBUG_COUNTER(mc_cme_complement_hit)
+RB_DEBUG_COUNTER(mc_search_super)
+RB_DEBUG_COUNTER(ivar_get_ic_hit)
+RB_DEBUG_COUNTER(ivar_get_ic_miss)
+RB_DEBUG_COUNTER(ivar_get_ic_miss_serial)
+RB_DEBUG_COUNTER(ivar_get_ic_miss_unset)
+RB_DEBUG_COUNTER(ivar_get_ic_miss_noobject)
+RB_DEBUG_COUNTER(ivar_set_ic_hit)
+RB_DEBUG_COUNTER(ivar_set_ic_miss)
+RB_DEBUG_COUNTER(ivar_set_ic_miss_serial)
+RB_DEBUG_COUNTER(ivar_set_ic_miss_unset)
+RB_DEBUG_COUNTER(ivar_set_ic_miss_oorange)
+RB_DEBUG_COUNTER(ivar_set_ic_miss_noobject)
+RB_DEBUG_COUNTER(ivar_get_base)
+RB_DEBUG_COUNTER(ivar_set_base)
+#endif
+
+#ifndef RUBY_DEBUG_COUNTER_H
+#define RUBY_DEBUG_COUNTER_H 1
 
 #if !defined(__GNUC__) && USE_DEBUG_COUNTER
 #error "USE_DEBUG_COUNTER is not supported by other than __GNUC__"
 #endif
 
 enum rb_debug_counter_type {
-#define COUNTER(name) RB_DEBUG_COUNTER_##name
-    COUNTER(mc_inline_hit),
-    COUNTER(mc_inline_miss),
-    COUNTER(mc_global_hit),
-    COUNTER(mc_global_miss),
-    COUNTER(mc_global_state_miss),
-    COUNTER(mc_class_serial_miss),
-    COUNTER(mc_cme_complement),
-    COUNTER(mc_cme_complement_hit),
-    COUNTER(mc_search_super),
-    COUNTER(ivar_get_hit),
-    COUNTER(ivar_get_miss),
-    COUNTER(ivar_set_hit),
-    COUNTER(ivar_set_miss),
-    COUNTER(ivar_get),
-    COUNTER(ivar_set),
+#define RB_DEBUG_COUNTER(name) RB_DEBUG_COUNTER_##name,
+#include "debug_counter.h"
     RB_DEBUG_COUNTER_MAX
-#undef COUNTER
+#undef RB_DEBUG_COUNTER
 };
 
 #if USE_DEBUG_COUNTER
 #include "ruby/ruby.h"
 
-extern size_t rb_debug_counter[RB_DEBUG_COUNTER_MAX + 1];
+extern size_t rb_debug_counter[];
 
 inline static int
 rb_debug_counter_add(enum rb_debug_counter_type type, int add, int cond)

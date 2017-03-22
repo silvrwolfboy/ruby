@@ -992,16 +992,20 @@ invoke_iseq_block_from_c(rb_thread_t *th, const struct rb_captured_block *captur
     const rb_iseq_t *iseq = rb_iseq_check(captured->code.iseq);
     int i, opt_pc;
     VALUE type = is_lambda ? VM_FRAME_MAGIC_LAMBDA : VM_FRAME_MAGIC_BLOCK;
-    VALUE *sp = th->cfp->sp;
+    rb_control_frame_t *cfp = th->cfp;
+    VALUE *sp = cfp->sp;
     const rb_callable_method_entry_t *me = th->passed_bmethod_me;
     th->passed_bmethod_me = NULL;
 
+    CHECK_VM_STACK_OVERFLOW(cfp, argc);
+    cfp->sp = sp + argc;
     for (i=0; i<argc; i++) {
 	sp[i] = argv[i];
     }
 
     opt_pc = vm_yield_setup_args(th, iseq, argc, sp, passed_block_handler,
 				 (type == VM_FRAME_MAGIC_LAMBDA ? (splattable ? arg_setup_lambda : arg_setup_method) : arg_setup_block));
+    cfp->sp = sp;
 
     if (me == NULL) {
 	return invoke_block(th, iseq, self, captured, cref, type, opt_pc);
@@ -1015,14 +1019,16 @@ static inline VALUE
 invoke_block_from_c_splattable(rb_thread_t *th, VALUE block_handler,
 			       int argc, const VALUE *argv,
 			       VALUE passed_block_handler, const rb_cref_t *cref,
-			       int is_lambda)
+			       int splattable, int is_lambda)
 {
   again:
     switch (vm_block_handler_type(block_handler)) {
       case block_handler_type_iseq:
 	{
 	    const struct rb_captured_block *captured = VM_BH_TO_ISEQ_BLOCK(block_handler);
-	    return invoke_iseq_block_from_c(th, captured, captured->self, argc, argv, passed_block_handler, cref, TRUE, is_lambda);
+	    return invoke_iseq_block_from_c(th, captured, captured->self,
+					    argc, argv, passed_block_handler,
+					    cref, splattable, is_lambda);
 	}
       case block_handler_type_ifunc:
 	return vm_yield_with_cfunc(th, VM_BH_TO_IFUNC_BLOCK(block_handler), VM_BH_TO_IFUNC_BLOCK(block_handler)->self,
@@ -1030,7 +1036,8 @@ invoke_block_from_c_splattable(rb_thread_t *th, VALUE block_handler,
       case block_handler_type_symbol:
 	return vm_yield_with_symbol(th, VM_BH_TO_SYMBOL(block_handler), argc, argv, passed_block_handler);
       case block_handler_type_proc:
-	is_lambda = block_proc_is_lambda(VM_BH_TO_PROC(block_handler));
+	if (!splattable)
+	    is_lambda = block_proc_is_lambda(VM_BH_TO_PROC(block_handler));
 	block_handler = vm_proc_to_block_handler(VM_BH_TO_PROC(block_handler));
 	goto again;
     }
@@ -1053,19 +1060,31 @@ check_block_handler(rb_thread_t *th)
 static VALUE
 vm_yield_with_cref(rb_thread_t *th, int argc, const VALUE *argv, const rb_cref_t *cref, int is_lambda)
 {
-    return invoke_block_from_c_splattable(th, check_block_handler(th), argc, argv, VM_BLOCK_HANDLER_NONE, cref, is_lambda);
+    return invoke_block_from_c_splattable(th, check_block_handler(th),
+					  argc, argv, VM_BLOCK_HANDLER_NONE,
+					  cref, FALSE, is_lambda);
 }
 
 static VALUE
 vm_yield(rb_thread_t *th, int argc, const VALUE *argv)
 {
-    return invoke_block_from_c_splattable(th, check_block_handler(th), argc, argv, VM_BLOCK_HANDLER_NONE, NULL, FALSE);
+    return invoke_block_from_c_splattable(th, check_block_handler(th),
+					  argc, argv, VM_BLOCK_HANDLER_NONE,
+					  NULL, FALSE, FALSE);
 }
 
 static VALUE
 vm_yield_with_block(rb_thread_t *th, int argc, const VALUE *argv, VALUE block_handler)
 {
-    return invoke_block_from_c_splattable(th, check_block_handler(th), argc, argv, block_handler, NULL, FALSE);
+    return invoke_block_from_c_splattable(th, check_block_handler(th),
+					  argc, argv, block_handler,
+					  NULL, FALSE, FALSE);
+}
+
+static VALUE
+vm_yield_lambda_splattable(rb_thread_t *th, VALUE args)
+{
+    return invoke_block_from_c_splattable(th, check_block_handler(th), 1, &args, VM_BLOCK_HANDLER_NONE, NULL, TRUE, FALSE);
 }
 
 static inline VALUE
@@ -2362,41 +2381,38 @@ rb_thread_mark(void *ptr)
 static void
 thread_free(void *ptr)
 {
-    rb_thread_t *th;
+    rb_thread_t *th = ptr;
     RUBY_FREE_ENTER("thread");
 
-    if (ptr) {
-	th = ptr;
-
-	if (!th->root_fiber) {
-	    RUBY_FREE_UNLESS_NULL(th->stack);
-	}
-
-	if (th->locking_mutex != Qfalse) {
-	    rb_bug("thread_free: locking_mutex must be NULL (%p:%p)", (void *)th, (void *)th->locking_mutex);
-	}
-	if (th->keeping_mutexes != NULL) {
-	    rb_bug("thread_free: keeping_mutexes must be NULL (%p:%p)", (void *)th, (void *)th->keeping_mutexes);
-	}
-
-	if (th->local_storage) {
-	    st_free_table(th->local_storage);
-	}
-
-	if (th->vm && th->vm->main_thread == th) {
-	    RUBY_GC_INFO("main thread\n");
-	}
-	else {
-#ifdef USE_SIGALTSTACK
-	    if (th->altstack) {
-		free(th->altstack);
-	    }
-#endif
-	    ruby_xfree(ptr);
-	}
-        if (ruby_current_thread == th)
-            ruby_current_thread = NULL;
+    if (!th->root_fiber) {
+	RUBY_FREE_UNLESS_NULL(th->stack);
     }
+
+    if (th->locking_mutex != Qfalse) {
+	rb_bug("thread_free: locking_mutex must be NULL (%p:%p)", (void *)th, (void *)th->locking_mutex);
+    }
+    if (th->keeping_mutexes != NULL) {
+	rb_bug("thread_free: keeping_mutexes must be NULL (%p:%p)", (void *)th, (void *)th->keeping_mutexes);
+    }
+
+    if (th->local_storage) {
+	st_free_table(th->local_storage);
+    }
+
+    if (th->vm && th->vm->main_thread == th) {
+	RUBY_GC_INFO("main thread\n");
+    }
+    else {
+#ifdef USE_SIGALTSTACK
+	if (th->altstack) {
+	    free(th->altstack);
+	}
+#endif
+	ruby_xfree(ptr);
+    }
+    if (ruby_current_thread == th)
+	ruby_current_thread = NULL;
+
     RUBY_FREE_LEAVE("thread");
 }
 

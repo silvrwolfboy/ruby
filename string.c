@@ -2102,11 +2102,11 @@ str_fill_term(VALUE str, char *s, long len, int termlen)
 void
 rb_str_change_terminator_length(VALUE str, const int oldtermlen, const int termlen)
 {
-    long capa = str_capacity(str, oldtermlen);
+    long capa = str_capacity(str, oldtermlen) + oldtermlen;
     long len = RSTRING_LEN(str);
 
     assert(capa >= len);
-    if (capa - len < termlen - oldtermlen) {
+    if (capa - len < termlen) {
 	rb_check_lockedtmp(str);
 	str_make_independent_expand(str, len, 0L, termlen);
     }
@@ -2118,7 +2118,7 @@ rb_str_change_terminator_length(VALUE str, const int oldtermlen, const int terml
 	if (!STR_EMBED_P(str)) {
 	    /* modify capa instead of realloc */
 	    assert(!FL_TEST((str), STR_SHARED));
-	    RSTRING(str)->as.heap.aux.capa = capa - (termlen - oldtermlen);
+	    RSTRING(str)->as.heap.aux.capa = capa - termlen;
 	}
 	if (termlen > oldtermlen) {
 	    TERM_FILL(RSTRING_PTR(str) + len, termlen);
@@ -2574,7 +2574,7 @@ rb_str_set_len(VALUE str, long len)
     if (STR_SHARED_P(str)) {
 	rb_raise(rb_eRuntimeError, "can't set length of shared string");
     }
-    if (len > (capa = (long)str_capacity(str, termlen))) {
+    if (len > (capa = (long)str_capacity(str, termlen)) || len < 0) {
 	rb_bug("probable buffer overflow: %ld for %ld", len, capa);
     }
     STR_SET_LEN(str, len);
@@ -3154,11 +3154,10 @@ rb_str_eql(VALUE str1, VALUE str2)
 
 /*
  *  call-seq:
- *     string <=> other_string   -> -1, 0, +1 or nil
+ *     string <=> other_string   -> -1, 0, +1, or nil
  *
- *
- *  Comparison---Returns -1, 0, +1 or nil depending on whether +string+ is less
- *  than, equal to, or greater than +other_string+.
+ *  Comparison---Returns -1, 0, +1, or +nil+ depending on whether +string+ is
+ *  less than, equal to, or greater than +other_string+.
  *
  *  +nil+ is returned if the two values are incomparable.
  *
@@ -3182,44 +3181,49 @@ static VALUE
 rb_str_cmp_m(VALUE str1, VALUE str2)
 {
     int result;
-
-    if (!RB_TYPE_P(str2, T_STRING)) {
-	VALUE tmp = rb_check_funcall(str2, idTo_str, 0, 0);
-	if (RB_TYPE_P(tmp, T_STRING)) {
-	    result = rb_str_cmp(str1, tmp);
-	}
-	else {
-	    return rb_invcmp(str1, str2);
-	}
+    VALUE s = rb_check_string_type(str2);
+    if (NIL_P(s)) {
+	return rb_invcmp(str1, str2);
     }
-    else {
-	result = rb_str_cmp(str1, str2);
-    }
+    result = rb_str_cmp(str1, s);
     return INT2FIX(result);
 }
 
+static VALUE str_casecmp(VALUE str1, VALUE str2);
+static VALUE str_casecmp_p(VALUE str1, VALUE str2);
+
 /*
  *  call-seq:
- *     str.casecmp(other_str)   -> -1, 0, +1 or nil
+ *     str.casecmp(other_str)   -> -1, 0, +1, or nil
  *
  *  Case-insensitive version of <code>String#<=></code>.
  *  Currently, case-insensitivity only works on characters A-Z/a-z,
- *  not all of Unicode. This is different from <code>casecmp?</code>.
+ *  not all of Unicode. This is different from String#casecmp?.
  *
- *     "abcdef".casecmp("abcde")     #=> 1
+ *     "aBcDeF".casecmp("abcde")     #=> 1
  *     "aBcDeF".casecmp("abcdef")    #=> 0
- *     "abcdef".casecmp("abcdefg")   #=> -1
+ *     "aBcDeF".casecmp("abcdefg")   #=> -1
  *     "abcdef".casecmp("ABCDEF")    #=> 0
+ *
+ *  +nil+ is returned if the two strings have incompatible encodings.
+ *
+ *     "\u{e4 f6 fc}".encode("ISO-8859-1").casecmp("\u{c4 d6 dc}")   #=> nil
  */
 
 static VALUE
 rb_str_casecmp(VALUE str1, VALUE str2)
 {
+    StringValue(str2);
+    return str_casecmp(str1, str2);
+}
+
+static VALUE
+str_casecmp(VALUE str1, VALUE str2)
+{
     long len;
     rb_encoding *enc;
     char *p1, *p1end, *p2, *p2end;
 
-    StringValue(str2);
     enc = rb_enc_compatible(str1, str2);
     if (!enc) {
 	return Qnil;
@@ -3274,24 +3278,34 @@ rb_str_casecmp(VALUE str1, VALUE str2)
  *  call-seq:
  *     str.casecmp?(other_str)   -> true, false, or nil
  *
- *  Returns true if str and other_other_str are equal after Unicode case folding,
- *  false if they are not equal, and nil if other_str is not a string.
+ *  Returns +true+ if +str+ and +other_str+ are equal after
+ *  Unicode case folding, +false+ if they are not equal.
  *
- *     "abcdef".casecmp?("abcde")     #=> false
+ *     "aBcDeF".casecmp?("abcde")     #=> false
  *     "aBcDeF".casecmp?("abcdef")    #=> true
- *     "abcdef".casecmp?("abcdefg")   #=> false
+ *     "aBcDeF".casecmp?("abcdefg")   #=> false
  *     "abcdef".casecmp?("ABCDEF")    #=> true
- *     "\u{e4 f6 fc}".casecmp?("\u{c4 d6 dc}") #=> true
+ *     "\u{e4 f6 fc}".casecmp?("\u{c4 d6 dc}")   #=> true
+ *
+ *  +nil+ is returned if the two strings have incompatible encodings.
+ *
+ *     "\u{e4 f6 fc}".encode("ISO-8859-1").casecmp?("\u{c4 d6 dc}")   #=> nil
  */
 
 static VALUE
 rb_str_casecmp_p(VALUE str1, VALUE str2)
 {
+    StringValue(str2);
+    return str_casecmp_p(str1, str2);
+}
+
+static VALUE
+str_casecmp_p(VALUE str1, VALUE str2)
+{
     rb_encoding *enc;
     VALUE folded_str1, folded_str2;
     VALUE fold_opt = sym_fold;
 
-    StringValue(str2);
     enc = rb_enc_compatible(str1, str2);
     if (!enc) {
 	return Qnil;
@@ -4133,7 +4147,7 @@ str_upto_each(VALUE beg, VALUE end, int excl, int (*each)(VALUE, VALUE), VALUE a
 	}
 	else {
 	    ID op = excl ? '<' : idLE;
-	    VALUE args[2], fmt = rb_obj_freeze(rb_usascii_str_new_cstr("%.*d"));
+	    VALUE args[2], fmt = rb_fstring_cstr("%.*d");
 
 	    args[0] = INT2FIX(width);
 	    while (rb_funcall(b, op, 1, e)) {
@@ -7951,7 +7965,9 @@ rb_str_enumerate_codepoints(VALUE str, int wantarray)
  *
  *  Passes the <code>Integer</code> ordinal of each character in <i>str</i>,
  *  also known as a <i>codepoint</i> when applied to Unicode strings to the
- *  given block.
+ *  given block.  For encodings other than UTF-8/UTF-16(BE|LE)/UTF-32(BE|LE),
+ *  values are directly derived from the binary representation
+ *  of each character.
  *
  *  If no block is given, an enumerator is returned instead.
  *
@@ -9781,13 +9797,13 @@ sym_succ(VALUE sym)
 /*
  * call-seq:
  *
- *   symbol <=> other_symbol       -> -1, 0, +1 or nil
+ *   symbol <=> other_symbol       -> -1, 0, +1, or nil
  *
  * Compares +symbol+ with +other_symbol+ after calling #to_s on each of the
- * symbols. Returns -1, 0, +1 or nil depending on whether +symbol+ is less
- * than, equal to, or greater than +other_symbol+.
+ * symbols. Returns -1, 0, +1, or +nil+ depending on whether +symbol+ is
+ * less than, equal to, or greater than +other_symbol+.
  *
- *  +nil+ is returned if the two values are incomparable.
+ * +nil+ is returned if the two values are incomparable.
  *
  * See String#<=> for more information.
  */
@@ -9804,11 +9820,22 @@ sym_cmp(VALUE sym, VALUE other)
 /*
  * call-seq:
  *
- *   sym.casecmp(other)  -> -1, 0, +1 or nil
+ *   sym.casecmp(other_symbol)   -> -1, 0, +1, or nil
  *
  * Case-insensitive version of <code>Symbol#<=></code>.
  * Currently, case-insensitivity only works on characters A-Z/a-z,
- * not all of Unicode. This is different from <code>casecmp?</code>.
+ * not all of Unicode. This is different from Symbol#casecmp?.
+ *
+ *   :aBcDeF.casecmp(:abcde)     #=> 1
+ *   :aBcDeF.casecmp(:abcdef)    #=> 0
+ *   :aBcDeF.casecmp(:abcdefg)   #=> -1
+ *   :abcdef.casecmp(:ABCDEF)    #=> 0
+ *
+ * +nil+ is returned if the two symbols have incompatible encodings,
+ * or if +other_symbol+ is not a symbol.
+ *
+ *   :foo.casecmp(2)   #=> nil
+ *   "\u{e4 f6 fc}".encode("ISO-8859-1").to_sym.casecmp(:"\u{c4 d6 dc}")   #=> nil
  */
 
 static VALUE
@@ -9817,16 +9844,28 @@ sym_casecmp(VALUE sym, VALUE other)
     if (!SYMBOL_P(other)) {
 	return Qnil;
     }
-    return rb_str_casecmp(rb_sym2str(sym), rb_sym2str(other));
+    return str_casecmp(rb_sym2str(sym), rb_sym2str(other));
 }
 
 /*
  * call-seq:
  *
- *   sym.casecmp?(other)  -> true, false, or nil
+ *   sym.casecmp?(other_symbol)   -> true, false, or nil
  *
- * Returns true if sym and other are equal after Unicode case folding,
- * false if they are not equal, and nil if other is not a symbol.
+ * Returns +true+ if +sym+ and +other_symbol+ are equal after
+ * Unicode case folding, +false+ if they are not equal.
+ *
+ *   :aBcDeF.casecmp?(:abcde)     #=> false
+ *   :aBcDeF.casecmp?(:abcdef)    #=> true
+ *   :aBcDeF.casecmp?(:abcdefg)   #=> false
+ *   :abcdef.casecmp?(:ABCDEF)    #=> true
+ *   :"\u{e4 f6 fc}".casecmp?(:"\u{c4 d6 dc}")   #=> true
+ *
+ * +nil+ is returned if the two symbols have incompatible encodings,
+ * or if +other_symbol+ is not a symbol.
+ *
+ *   :foo.casecmp?(2)   #=> nil
+ *   "\u{e4 f6 fc}".encode("ISO-8859-1").to_sym.casecmp?(:"\u{c4 d6 dc}")   #=> nil
  */
 
 static VALUE
@@ -9835,7 +9874,7 @@ sym_casecmp_p(VALUE sym, VALUE other)
     if (!SYMBOL_P(other)) {
 	return Qnil;
     }
-    return rb_str_casecmp_p(rb_sym2str(sym), rb_sym2str(other));
+    return str_casecmp_p(rb_sym2str(sym), rb_sym2str(other));
 }
 
 /*
@@ -9922,7 +9961,8 @@ sym_empty(VALUE sym)
 
 /*
  * call-seq:
- *   sym.upcase [options]   -> symbol
+ *   sym.upcase              -> symbol
+ *   sym.upcase([options])   -> symbol
  *
  * Same as <code>sym.to_s.upcase.intern</code>.
  */
@@ -9935,7 +9975,8 @@ sym_upcase(int argc, VALUE *argv, VALUE sym)
 
 /*
  * call-seq:
- *   sym.downcase [options]   -> symbol
+ *   sym.downcase              -> symbol
+ *   sym.downcase([options])   -> symbol
  *
  * Same as <code>sym.to_s.downcase.intern</code>.
  */
@@ -9948,7 +9989,8 @@ sym_downcase(int argc, VALUE *argv, VALUE sym)
 
 /*
  * call-seq:
- *   sym.capitalize [options]   -> symbol
+ *   sym.capitalize              -> symbol
+ *   sym.capitalize([options])   -> symbol
  *
  * Same as <code>sym.to_s.capitalize.intern</code>.
  */
@@ -9961,7 +10003,8 @@ sym_capitalize(int argc, VALUE *argv, VALUE sym)
 
 /*
  * call-seq:
- *   sym.swapcase [options]   -> symbol
+ *   sym.swapcase              -> symbol
+ *   sym.swapcase([options])   -> symbol
  *
  * Same as <code>sym.to_s.swapcase.intern</code>.
  */
@@ -10183,6 +10226,7 @@ Init_String(void)
     rb_fs = Qnil;
     rb_define_hooked_variable("$;", &rb_fs, 0, rb_fs_setter);
     rb_define_hooked_variable("$-F", &rb_fs, 0, rb_fs_setter);
+    rb_gc_register_address(&rb_fs);
 
     rb_cSymbol = rb_define_class("Symbol", rb_cObject);
     rb_include_module(rb_cSymbol, rb_mComparable);

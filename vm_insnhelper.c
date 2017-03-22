@@ -884,7 +884,10 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 #if USE_IC_FOR_IVAR
     if (LIKELY(RB_TYPE_P(obj, T_OBJECT))) {
 	VALUE val = Qundef;
-	if (LIKELY(is_attr ? cc->aux.index > 0 : ic->ic_serial == RCLASS_SERIAL(RBASIC(obj)->klass))) {
+	if (LIKELY(is_attr ?
+		   RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_unset, cc->aux.index > 0) :
+		   RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_serial,
+					       ic->ic_serial == RCLASS_SERIAL(RBASIC(obj)->klass)))) {
 	    st_index_t index = !is_attr ? ic->ic_value.index : (cc->aux.index - 1);
 	    if (LIKELY(index < ROBJECT_NUMIV(obj))) {
 		val = ROBJECT_IVPTR(obj)[index];
@@ -895,7 +898,7 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 		    rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
 		val = Qnil;
 	    }
-	    RB_DEBUG_COUNTER_INC(ivar_get_hit);
+	    RB_DEBUG_COUNTER_INC(ivar_get_ic_hit);
 	    return val;
 	}
 	else {
@@ -919,8 +922,11 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 	    goto undef_check;
 	}
     }
+    else {
+	RB_DEBUG_COUNTER_INC(ivar_get_ic_miss_noobject);
+    }
 #endif	/* USE_IC_FOR_IVAR */
-    RB_DEBUG_COUNTER_INC(ivar_get_miss);
+    RB_DEBUG_COUNTER_INC(ivar_get_ic_miss);
 
     if (is_attr)
 	return rb_attr_get(obj, id);
@@ -938,14 +944,14 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 	st_data_t index;
 
 	if (LIKELY(
-	    (!is_attr && ic->ic_serial == RCLASS_SERIAL(klass)) ||
-	    (is_attr && cc->aux.index > 0))) {
+	    (!is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_serial, ic->ic_serial == RCLASS_SERIAL(klass))) ||
+	    ( is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_unset, cc->aux.index > 0)))) {
 	    VALUE *ptr = ROBJECT_IVPTR(obj);
 	    index = !is_attr ? ic->ic_value.index : cc->aux.index-1;
 
-	    if (index < ROBJECT_NUMIV(obj)) {
+	    if (RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_oorange, index < ROBJECT_NUMIV(obj))) {
 		RB_OBJ_WRITE(obj, &ptr[index], val);
-		RB_DEBUG_COUNTER_INC(ivar_set_hit);
+		RB_DEBUG_COUNTER_INC(ivar_set_ic_hit);
 		return val; /* inline cache hit */
 	    }
 	}
@@ -967,8 +973,11 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 	    /* fall through */
 	}
     }
+    else {
+	RB_DEBUG_COUNTER_INC(ivar_set_ic_miss_noobject);
+    }
 #endif	/* USE_IC_FOR_IVAR */
-    RB_DEBUG_COUNTER_INC(ivar_set_miss);
+    RB_DEBUG_COUNTER_INC(ivar_set_ic_miss);
     return rb_ivar_set(obj, id, val);
 }
 
@@ -1288,6 +1297,7 @@ opt_eq_func(VALUE recv, VALUE obj, CALL_INFO ci, CALL_CACHE cc)
 	}
     }
 #undef EQ_UNREDEFINED_P
+#undef BUILTIN_CLASS_P
 
     {
 	vm_search_method(ci, cc, recv);
@@ -2496,7 +2506,11 @@ vm_callee_setup_block_arg_arg0_check(VALUE *argv)
 {
     VALUE ary, arg0 = argv[0];
     ary = rb_check_array_type(arg0);
+#if 0
     argv[0] = arg0;
+#else
+    VM_ASSERT(argv[0] == arg0);
+#endif
     return ary;
 }
 
@@ -2528,12 +2542,6 @@ vm_callee_setup_block_arg(rb_thread_t *th, struct rb_calling_info *calling, cons
 		else if (calling->argc > iseq->body->param.lead_num) {
 		    calling->argc = iseq->body->param.lead_num; /* simply truncate arguments */
 		}
-	    }
-	    else if (arg_setup_type == arg_setup_lambda &&
-		     calling->argc == 1 &&
-		     !NIL_P(arg0 = vm_callee_setup_block_arg_arg0_check(argv)) &&
-		     RARRAY_LEN(arg0) == iseq->body->param.lead_num) {
-		calling->argc = vm_callee_setup_block_arg_arg0_splat(cfp, iseq, argv, arg0);
 	    }
 	    else {
 		argument_arity_error(th, iseq, calling->argc, iseq->body->param.lead_num, iseq->body->param.lead_num);
