@@ -7419,6 +7419,16 @@ rb_gc_compact_stats(VALUE mod)
 }
 
 static VALUE
+rb_gc_pin_roots(VALUE mod)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+
+    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
+
+    return Qnil;
+}
+
+static VALUE
 rb_gc_compact(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
@@ -7433,7 +7443,7 @@ rb_gc_compact(VALUE mod)
     gc_mark_stacked_objects_all(objspace);
     gc_marks_finish(objspace);
     /* pin roots */
-    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
+    rb_gc_pin_roots(mod);
 
     gc_compact_heap(objspace);
 
@@ -10415,6 +10425,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
     rb_define_singleton_method(rb_mGC, "compact", rb_gc_compact, 0);
+    rb_define_singleton_method(rb_mGC, "pin_roots", rb_gc_pin_roots, 0);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
