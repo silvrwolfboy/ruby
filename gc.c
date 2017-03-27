@@ -6763,7 +6763,7 @@ gc_start_internal(int argc, VALUE *argv, VALUE self)
 static int
 gc_is_moveable_obj(rb_objspace_t *objspace, VALUE obj)
 {
-    if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || rb_objspace_pinned_object_p(obj)) {
+    if (SPECIAL_CONST_P(obj) || BUILTIN_TYPE(obj) == T_NONE || BUILTIN_TYPE(obj) == T_ZOMBIE || rb_objspace_pinned_object_p(obj)) {
 	return FALSE;
     }
 
