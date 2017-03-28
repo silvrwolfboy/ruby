@@ -3905,7 +3905,8 @@ static void
 push_mark_stack(mark_stack_t *stack, VALUE data)
 {
     if (BUILTIN_TYPE(data) == T_MOVED) {
-	rb_bug("moved item should not be marked");
+	VALUE dest = (VALUE)RMOVED(data)->destination;
+	rb_bug("moved item (%lu -> %lu (type: %d) should not be marked", data, dest, BUILTIN_TYPE(dest));
     }
     if (stack->index == stack->limit) {
         push_mark_stack_chunk(stack);
