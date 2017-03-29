@@ -3906,7 +3906,8 @@ push_mark_stack(mark_stack_t *stack, VALUE data)
 {
     if (BUILTIN_TYPE(data) == T_MOVED) {
 	VALUE dest = (VALUE)RMOVED(data)->destination;
-	rb_bug("moved item (%lu -> %lu (type: %d) should not be marked", data, dest, BUILTIN_TYPE(dest));
+	fprintf(stderr, "<%s>", obj_info(dest));
+	rb_bug("moved item (%p -> %p (type: %d) should not be marked", (RVALUE *)data, (RVALUE *)dest, BUILTIN_TYPE(dest));
     }
     if (stack->index == stack->limit) {
         push_mark_stack_chunk(stack);
@@ -4311,8 +4312,8 @@ gc_mark_and_pin_maybe(rb_objspace_t *objspace, VALUE obj)
     (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
     if (is_pointer_to_heap(objspace, (void *)obj)) {
 	int type = BUILTIN_TYPE(obj);
+	gc_pin(objspace, obj);
 	if (type != T_ZOMBIE && type != T_NONE) {
-	    gc_pin(objspace, obj);
 	    gc_mark_ptr(objspace, obj);
 	}
     }
@@ -7388,9 +7389,14 @@ gc_update_references(rb_objspace_t * objspace)
 }
 
 static void
-gc_pin_root(const char *category, VALUE obj, void *data)
+gc_verify_pinned_root(const char *category, VALUE obj, void *data)
 {
-    gc_pin((rb_objspace_t *)data, obj);
+    if (!rb_objspace_pinned_object_p(obj)) {
+	rb_bug("ROOT SHOULD BE PINNED\n");
+    }
+    if (BUILTIN_TYPE(obj) == T_MOVED) {
+	rb_bug("ROOT SHOULD NOT MOVE!!!!!\n");
+    }
 }
 
 static VALUE type_sym(int type);
@@ -7420,11 +7426,11 @@ rb_gc_compact_stats(VALUE mod)
 }
 
 static VALUE
-rb_gc_pin_roots(VALUE mod)
+rb_gc_verify_roots(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
-    rb_objspace_reachable_objects_from_root(gc_pin_root, objspace);
+    rb_objspace_reachable_objects_from_root(gc_verify_pinned_root, objspace);
 
     return Qnil;
 }
@@ -7435,25 +7441,17 @@ rb_gc_compact(VALUE mod)
     rb_objspace_t *objspace = &rb_objspace;
 
     rb_gc();
-
-    /* should only mark roots */
-    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
-
-    /* Pin things found via marking */
-    gc_marks_start(objspace, TRUE);
-    gc_mark_stacked_objects_all(objspace);
-    gc_marks_finish(objspace);
-    /* pin roots */
-    rb_gc_pin_roots(mod);
+    rb_gc_verify_roots(mod);
 
     gc_compact_heap(objspace);
+    rb_gc_verify_roots(mod);
 
     gc_update_references(objspace);
-    gc_mode_transition(objspace, gc_mode_sweeping);
-    gc_mode_transition(objspace, gc_mode_none);
+    rb_gc_verify_roots(mod);
 
     rb_clear_method_cache_by_class(rb_cObject);
     rb_clear_constant_cache();
+    rb_gc_verify_roots(mod);
 
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
@@ -10426,7 +10424,6 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
     rb_define_singleton_method(rb_mGC, "compact", rb_gc_compact, 0);
-    rb_define_singleton_method(rb_mGC, "pin_roots", rb_gc_pin_roots, 0);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
     gc_constants = rb_hash_new();
