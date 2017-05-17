@@ -2090,6 +2090,7 @@ rb_vm_mark(void *ptr)
 	rb_gc_mark(vm->top_self);
 	RUBY_MARK_UNLESS_NULL(vm->coverages);
 	rb_gc_mark(vm->defined_module_hash);
+	rb_mark_hash(vm->frozen_strings);
 
 	if (vm->loading_table) {
 	    rb_mark_tbl(vm->loading_table);
