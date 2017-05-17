@@ -4312,9 +4312,11 @@ gc_mark_and_pin_maybe(rb_objspace_t *objspace, VALUE obj)
     (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
     if (is_pointer_to_heap(objspace, (void *)obj)) {
 	int type = BUILTIN_TYPE(obj);
-	gc_pin(objspace, obj);
-	if (type != T_ZOMBIE && type != T_NONE) {
-	    gc_mark_ptr(objspace, obj);
+	if (type != T_MOVED) {
+	    gc_pin(objspace, obj);
+	    if (type != T_ZOMBIE && type != T_NONE) {
+		gc_mark_ptr(objspace, obj);
+	    }
 	}
     }
 }
@@ -7388,17 +7390,6 @@ gc_update_references(rb_objspace_t * objspace)
     gc_update_table_refs(objspace, global_symbols.str_sym);
 }
 
-static void
-gc_verify_pinned_root(const char *category, VALUE obj, void *data)
-{
-    if (!rb_objspace_pinned_object_p(obj)) {
-	rb_bug("ROOT SHOULD BE PINNED\n");
-    }
-    if (BUILTIN_TYPE(obj) == T_MOVED) {
-	rb_bug("ROOT SHOULD NOT MOVE!!!!!\n");
-    }
-}
-
 static VALUE type_sym(int type);
 
 static VALUE
@@ -7426,32 +7417,17 @@ rb_gc_compact_stats(VALUE mod)
 }
 
 static VALUE
-rb_gc_verify_roots(VALUE mod)
-{
-    rb_objspace_t *objspace = &rb_objspace;
-
-    rb_objspace_reachable_objects_from_root(gc_verify_pinned_root, objspace);
-
-    return Qnil;
-}
-
-static VALUE
 rb_gc_compact(VALUE mod)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
     rb_gc();
-    rb_gc_verify_roots(mod);
-
     gc_compact_heap(objspace);
-    rb_gc_verify_roots(mod);
 
     gc_update_references(objspace);
-    rb_gc_verify_roots(mod);
 
     rb_clear_method_cache_by_class(rb_cObject);
     rb_clear_constant_cache();
-    rb_gc_verify_roots(mod);
 
     rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
