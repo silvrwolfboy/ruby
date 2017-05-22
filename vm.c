@@ -2327,7 +2327,7 @@ rb_thread_mark(void *ptr)
 	rb_control_frame_t *cfp = th->cfp;
 	rb_control_frame_t *limit_cfp = (void *)(th->stack + th->stack_size);
 
-	rb_gc_mark_values((long)(sp - p), p);
+	rb_gc_mark_stack_values((long)(sp - p), p);
 
 	while (cfp != limit_cfp) {
 #if VM_CHECK_MODE > 0
