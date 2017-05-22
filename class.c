@@ -539,6 +539,7 @@ boot_defclass(const char *name, VALUE super)
 
     rb_name_class(obj, id);
     rb_const_set((rb_cObject ? rb_cObject : obj), id, obj);
+    rb_vm_add_root_module(id, obj);
     return obj;
 }
 
