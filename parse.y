@@ -5101,6 +5101,11 @@ tr_type		: tr_cpath
 		| '~' tr_type
 		| keyword_nil
 		| symbol
+		| tLPAREN tr_union_type rparen
+		;
+
+tr_union_type	: tr_union_type '|' tr_type
+		| tr_type
 		;
 
 tr_argsig	: tr_type
