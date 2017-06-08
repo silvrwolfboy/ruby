@@ -4711,12 +4711,12 @@ kwrest_mark	: tPOW
 		| tDSTAR
 		;
 
-f_kwrest	: kwrest_mark tIDENTIFIER
+f_kwrest	: tr_argsig kwrest_mark tIDENTIFIER
 		    {
-			shadowing_lvar(get_id($2));
-			$$ = $2;
+			shadowing_lvar(get_id($3));
+			$$ = $3;
 		    }
-		| kwrest_mark
+		| tr_argsig kwrest_mark
 		    {
 			$$ = internal_id();
 			arg_var($$);
