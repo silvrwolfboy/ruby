@@ -829,6 +829,11 @@ RCLASS_SET_SUPER(VALUE klass, VALUE super)
 #define IMEMO_DEBUG 0
 #endif
 
+struct RIMalloc {
+    VALUE flags;
+    size_t slots;
+};
+
 struct RIMemo {
     VALUE flags;
     VALUE v0;
@@ -846,7 +851,7 @@ enum imemo_type {
     imemo_memo       = 5,
     imemo_ment       = 6,
     imemo_iseq       = 7,
-    imemo_mask       = 0x07
+    imemo_mask       = 0x7
 };
 
 static inline enum imemo_type

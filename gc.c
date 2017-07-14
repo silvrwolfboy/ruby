@@ -1976,6 +1976,72 @@ newobj_of(VALUE klass, VALUE flags, VALUE v1, VALUE v2, VALUE v3, int wb_protect
     }
 }
 
+static inline VALUE
+heap_get_freeobj_contiguous(rb_objspace_t *objspace, rb_heap_t *eden, size_t size)
+{
+    return heap_get_freeobj_head(objspace, eden);
+}
+
+void
+rb_gc_free(void * ptr)
+{
+    if (is_pointer_to_heap(&rb_objspace, ptr - sizeof(struct RIMalloc))) {
+	printf("we should free this pointer\n");
+    } else {
+	xfree(ptr);
+    }
+}
+
+void *
+rb_gc_malloc(size_t size)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    VALUE obj;
+
+    if (!(during_gc ||
+	  ruby_gc_stressful ||
+	  gc_event_hook_available_p(objspace)) &&
+	(obj = heap_get_freeobj_contiguous(objspace, heap_eden, size + sizeof(struct RIMalloc))) != Qfalse) {
+	void * ptr;
+	ptr = (void *)newobj_init(0, T_MALLOC, 0, 0, 0, TRUE, objspace, obj);
+
+	((struct RIMalloc *)ptr)->slots = 1;
+	return ptr + sizeof(struct RIMalloc);
+    }
+    else {
+	rb_bug("not implemented yet");
+    }
+    return NULL;
+}
+
+static VALUE
+gc_try_malloc(VALUE mod)
+{
+    char * string;
+
+    printf("hash size: %lu\n", sizeof(st_table));
+    string = (char *)rb_gc_malloc(10);
+    printf("VALUE: %lu RIMalloc: %lu t1: %d, t2: %d slots: %d\n",
+	    sizeof(VALUE), sizeof(struct RIMalloc),
+	    BUILTIN_TYPE(string), BUILTIN_TYPE((string - sizeof(struct RIMalloc))),
+	    ((struct RIMalloc *)(string - sizeof(struct RIMalloc)))->slots);
+    string[0] = 'H';
+    string[1] = 'e';
+    string[2] = 'l';
+    string[3] = 'l';
+    string[4] = 'o';
+    string[5] = '!';
+    string[6] = '!';
+    string[7] = '!';
+    string[8] = '!';
+    string[9] = 0;
+    printf("allocated: %s\n", string);
+    rb_gc_free(string);
+    string = (char *)xmalloc(10);
+    rb_gc_free(string);
+    return Qnil;
+}
+
 VALUE
 rb_wb_unprotected_newobj_of(VALUE klass, VALUE flags)
 {
@@ -3530,6 +3596,10 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 			  break;
 		      }
 
+		      case T_MALLOC:
+			printf("freeing a malloc node\n");
+			break;
+
 			/* minor cases */
 		      case T_ZOMBIE:
 			/* already counted */
@@ -3539,7 +3609,7 @@ gc_page_sweep(rb_objspace_t *objspace, rb_heap_t *heap, struct heap_page *sweep_
 			break;
 		    }
 		}
-		p++;
+		p += 1;
 		bitset >>= 1;
 	    } while (bitset);
 	}
@@ -9589,6 +9659,7 @@ Init_GC(void)
     rb_define_singleton_method(rb_mGC, "stress=", gc_stress_set_m, 1);
     rb_define_singleton_method(rb_mGC, "count", gc_count, 0);
     rb_define_singleton_method(rb_mGC, "stat", gc_stat, -1);
+    rb_define_singleton_method(rb_mGC, "try_malloc", gc_try_malloc, 0);
     rb_define_singleton_method(rb_mGC, "latest_gc_info", gc_latest_gc_info, -1);
     rb_define_method(rb_mGC, "garbage_collect", gc_start_internal, -1);
 
