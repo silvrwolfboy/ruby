@@ -4090,9 +4090,9 @@ ary_make_hash_by(VALUE ary)
 static inline void
 ary_recycle_hash(VALUE hash)
 {
-    if (RHASH(hash)->ntbl) {
-	st_table *tbl = RHASH(hash)->ntbl;
-	RHASH(hash)->ntbl = 0;
+    if (RHASH_IS_TABLE(hash) && RHASH(hash)->as.table.ntbl) {
+	st_table *tbl = RHASH(hash)->as.table.ntbl;
+	RHASH(hash)->as.table.ntbl = 0;
 	st_free_table(tbl);
     }
     RB_GC_GUARD(hash);
