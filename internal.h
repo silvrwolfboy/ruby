@@ -582,7 +582,19 @@ struct RHash {
 #undef RHASH_SIZE
 #define RHASH_ITER_LEV(h) (RHASH(h)->iter_lev)
 #define RHASH_IFNONE(h) (RHASH(h)->ifnone)
-#define RHASH_SIZE(h) (RHASH(h)->ntbl ? RHASH(h)->ntbl->num_entries : (st_index_t)0)
+static inline st_index_t
+RHASH_SIZE(VALUE h)
+{
+    if (RHASH_IS_EMBED(h)) {
+	return 1;
+    }
+
+    if (RHASH(h)->as.table.ntbl) {
+	return RHASH(h)->as.table.ntbl->num_entries;
+    }
+
+    return 0;
+}
 #endif
 
 /* missing/setproctitle.c */
