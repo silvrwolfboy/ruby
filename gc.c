@@ -2173,8 +2173,8 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 	rb_ary_free(obj);
 	break;
       case T_HASH:
-	if (RANY(obj)->as.hash.ntbl) {
-	    st_free_table(RANY(obj)->as.hash.ntbl);
+	if (RHASH_IS_TABLE(obj) && RHASH(obj)->as.table.ntbl) {
+	    st_free_table(RHASH(obj)->as.table.ntbl);
 	}
 	break;
       case T_REGEXP:
@@ -3185,8 +3185,8 @@ obj_memsize_of(VALUE obj, int use_all_types)
 	size += rb_ary_memsize(obj);
 	break;
       case T_HASH:
-	if (RHASH(obj)->ntbl) {
-	    size += st_memsize(RHASH(obj)->ntbl);
+	if (RHASH_IS_TABLE(obj) && RHASH(obj)->as.table.ntbl) {
+	    size += st_memsize(RHASH(obj)->as.table.ntbl);
 	}
 	break;
       case T_REGEXP:
@@ -4059,16 +4059,29 @@ mark_keyvalue(st_data_t key, st_data_t value, st_data_t data)
 }
 
 static void
-mark_hash(rb_objspace_t *objspace, st_table *tbl)
+mark_st_table(rb_objspace_t *objspace, st_table *tbl)
 {
-    if (!tbl) return;
-    st_foreach(tbl, mark_keyvalue, (st_data_t)objspace);
+    if (tbl) {
+	st_foreach(tbl, mark_keyvalue, (st_data_t)objspace);
+    }
+}
+
+static void
+mark_hash(rb_objspace_t *objspace, struct RHash *hash)
+{
+    if (RHASH_IS_EMBED(hash)) {
+	gc_mark(objspace, hash->as.embed.key);
+	gc_mark(objspace, hash->as.embed.value);
+    } else {
+	gc_mark(objspace, hash->as.table.ifnone);
+	mark_st_table(objspace, hash->as.table.ntbl);
+    }
 }
 
 void
 rb_mark_hash(st_table *tbl)
 {
-    mark_hash(&rb_objspace, tbl);
+    mark_st_table(&rb_objspace, tbl);
 }
 
 static void
@@ -4514,8 +4527,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
 	break;
 
       case T_HASH:
-	mark_hash(objspace, any->as.hash.ntbl);
-	gc_mark(objspace, any->as.hash.ifnone);
+	mark_hash(objspace, &any->as.hash);
 	break;
 
       case T_STRING:
