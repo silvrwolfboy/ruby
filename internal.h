@@ -581,7 +581,7 @@ struct RHash {
 #undef RHASH_IFNONE
 #undef RHASH_SIZE
 #define RHASH_ITER_LEV(h) (RHASH(h)->iter_lev)
-#define RHASH_IFNONE(h) (RHASH(h)->ifnone)
+#define RHASH_IFNONE(h) (RHASH_IS_EMBED(h) ? Qnil : RHASH(h)->as.table.ifnone)
 static inline st_index_t
 RHASH_SIZE(VALUE h)
 {
