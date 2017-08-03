@@ -554,11 +554,24 @@ struct RComplex {
 #define RCOMPLEX_SET_IMAG(cmp, i) RB_OBJ_WRITE((cmp), &((struct RComplex *)(cmp))->imag,(i))
 #endif
 
+#define RHASH_EMBED_FLAG RUBY_FL_USER1
+
+#define RHASH_IS_EMBED(h) (FL_TEST((h), RHASH_EMBED_FLAG))
+#define RHASH_IS_TABLE(h) (!RHASH_IS_EMBED(h))
+
 struct RHash {
     struct RBasic basic;
-    struct st_table *ntbl;      /* possibly 0 */
     int iter_lev;
-    const VALUE ifnone;
+    union {
+      struct {
+        struct st_table *ntbl;      /* possibly 0 */
+        const VALUE ifnone;
+      } table;
+      struct {
+        VALUE key;
+	VALUE value;
+      } embed;
+    } as;
 };
 
 #define RHASH(obj)   (R_CAST(RHash)(obj))
