@@ -60,6 +60,27 @@ has_extra_methods(VALUE klass)
     return 0;
 }
 
+static void
+clear_embed_table(struct RHash *hash)
+{
+    FL_UNSET(hash, RHASH_EMBED_FLAG);
+    hash->as.table.ntbl = 0;
+    *(VALUE*)&hash->as.table.ifnone = Qnil;
+}
+
+static void
+spill_to_table(struct RHash *hash)
+{
+    if (RHASH_IS_EMBED(hash)) {
+	VALUE key = hash->as.embed.key;
+	VALUE value = hash->as.embed.value;
+	
+	clear_embed_table(hash);
+
+	rb_hash_aset((VALUE)hash, key, value);
+    }
+}
+
 static VALUE rb_hash_s_try_convert(VALUE, VALUE);
 
 /*
@@ -92,7 +113,11 @@ rb_hash_ifnone(VALUE h)
 VALUE
 rb_hash_set_ifnone(VALUE hash, VALUE ifnone)
 {
-    RB_OBJ_WRITE(hash, (&RHASH(hash)->ifnone), ifnone);
+    if (RHASH_IS_EMBED(hash) && ifnone != Qnil) {
+	spill_to_table(RHASH(hash));
+    }
+
+    RB_OBJ_WRITE(hash, (&RHASH(hash)->as.table.ifnone), ifnone);
     return hash;
 }
 
@@ -352,9 +377,9 @@ hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp, int error)
     st_table *tbl;
 
     if (error) return ST_STOP;
-    tbl = RHASH(arg->hash)->ntbl;
+    tbl = RHASH(arg->hash)->as.table.ntbl;
     status = (*arg->func)((VALUE)key, (VALUE)value, arg->arg);
-    if (RHASH(arg->hash)->ntbl != tbl) {
+    if (RHASH(arg->hash)->as.table.ntbl != tbl) {
 	rb_raise(rb_eRuntimeError, "rehash occurred during iteration");
     }
     switch (status) {
@@ -381,7 +406,7 @@ hash_foreach_ensure(VALUE hash)
 {
     if (--RHASH_ITER_LEV(hash) == 0) {
 	if (FL_TEST(hash, HASH_DELETED)) {
-	    st_cleanup_safe(RHASH(hash)->ntbl, (st_data_t)Qundef);
+	    st_cleanup_safe(RHASH(hash)->as.table.ntbl, (st_data_t)Qundef);
 	    FL_UNSET(hash, HASH_DELETED);
 	}
     }
@@ -392,7 +417,7 @@ static VALUE
 hash_foreach_call(VALUE arg)
 {
     VALUE hash = ((struct hash_foreach_arg *)arg)->hash;
-    if (st_foreach_check(RHASH(hash)->ntbl, hash_foreach_iter, (st_data_t)arg, (st_data_t)Qundef)) {
+    if (st_foreach_check(RHASH(hash)->as.table.ntbl, hash_foreach_iter, (st_data_t)arg, (st_data_t)Qundef)) {
 	rb_raise(rb_eRuntimeError, "hash modified during iteration");
     }
     return Qnil;
@@ -403,7 +428,12 @@ rb_hash_foreach(VALUE hash, int (*func)(ANYARGS), VALUE farg)
 {
     struct hash_foreach_arg arg;
 
-    if (!RHASH(hash)->ntbl)
+    if (RHASH_IS_EMBED(hash)) {
+	func(RHASH(hash)->as.embed.key, RHASH(hash)->as.embed.value, farg);
+	return;
+    }
+
+    if (!RHASH(hash)->as.table.ntbl)
         return;
     RHASH_ITER_LEV(hash)++;
     arg.hash = hash;
@@ -443,13 +473,27 @@ rb_hash_new(void)
     return hash_alloc(rb_cHash);
 }
 
+static void
+hash_copy_contents(VALUE dest, VALUE src)
+{
+    if (!RHASH_EMPTY_P(src)) {
+	if (RHASH_IS_EMBED(src)) {
+	    FL_SET(dest, RHASH_EMBED_FLAG);
+	    RB_OBJ_WRITE(dest, &RHASH(dest)->as.embed.key, RHASH(src)->as.embed.key);
+	    RB_OBJ_WRITE(dest, &RHASH(dest)->as.embed.value, RHASH(src)->as.embed.value);
+	} else {
+	    FL_UNSET(dest, RHASH_EMBED_FLAG);
+	    RHASH(dest)->as.table.ntbl = st_copy(RHASH(src)->as.table.ntbl);
+	}
+    }
+}
+
 static VALUE
 hash_dup(VALUE hash, VALUE klass, VALUE flags)
 {
     VALUE ret = hash_alloc_flags(klass, flags,
 				 RHASH_IFNONE(hash));
-    if (!RHASH_EMPTY_P(hash))
-	RHASH(ret)->ntbl = st_copy(RHASH(hash)->ntbl);
+    hash_copy_contents(ret, hash);
     return ret;
 }
 
@@ -473,10 +517,15 @@ rb_hash_modify_check(VALUE hash)
 static struct st_table *
 hash_tbl(VALUE hash)
 {
-    if (!RHASH(hash)->ntbl) {
-        RHASH(hash)->ntbl = st_init_table(&objhash);
+    if (RHASH_IS_EMBED(hash)) {
+	spill_to_table(RHASH(hash));
     }
-    return RHASH(hash)->ntbl;
+
+    if (!RHASH(hash)->as.table.ntbl) {
+        RHASH(hash)->as.table.ntbl = st_init_table(&objhash);
+    }
+
+    return RHASH(hash)->as.table.ntbl;
 }
 
 struct st_table *
@@ -542,6 +591,20 @@ tbl_update(VALUE hash, VALUE key, tbl_update_func func, st_data_t optional_arg)
     struct update_arg arg;
     int result;
 
+    if (RHASH_IS_EMBED(hash)) {
+	if (rb_any_cmp(RHASH(hash)->as.embed.key, key) == 0) {
+	    result = func(&RHASH(hash)->as.embed.key, &RHASH(hash)->as.embed.value, optional_arg, TRUE);
+
+	    if (result == ST_DELETE) {
+		clear_embed_table(RHASH(hash));
+	    }
+
+	    return result;
+	} else {
+	    spill_to_table(RHASH(hash));
+	}
+    }
+
     arg.arg = optional_arg;
     arg.hash = hash;
     arg.new_key = 0;
@@ -549,7 +612,7 @@ tbl_update(VALUE hash, VALUE key, tbl_update_func func, st_data_t optional_arg)
     arg.new_value = 0;
     arg.old_value = Qundef;
 
-    result = st_update(RHASH(hash)->ntbl, (st_data_t)key, func, (st_data_t)&arg);
+    result = st_update(RHASH(hash)->as.table.ntbl, (st_data_t)key, func, (st_data_t)&arg);
 
     /* write barrier */
     if (arg.new_key)   RB_OBJ_WRITTEN(hash, arg.old_key, arg.new_key);
@@ -668,9 +731,7 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
 	tmp = rb_hash_s_try_convert(Qnil, argv[0]);
 	if (!NIL_P(tmp)) {
 	    hash = hash_alloc(klass);
-	    if (RHASH(tmp)->ntbl) {
-		RHASH(hash)->ntbl = st_copy(RHASH(tmp)->ntbl);
-	    }
+	    hash_copy_contents(hash, tmp);
 	    return hash;
 	}
 
@@ -716,8 +777,16 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
     }
 
     hash = hash_alloc(klass);
+
+    if (argc == 2) {
+	FL_SET(hash, RHASH_EMBED_FLAG);
+	RB_OBJ_WRITE(hash, &RHASH(hash)->as.embed.key, argv[0]);
+	RB_OBJ_WRITE(hash, &RHASH(hash)->as.embed.value, argv[0]);
+	return hash;
+    }
+
     if (argc > 0) {
-        RHASH(hash)->ntbl = st_init_table_with_size(&objhash, argc / 2);
+        RHASH(hash)->as.table.ntbl = st_init_table_with_size(&objhash, argc / 2);
     }
     for (i=0; i<argc; i+=2) {
         rb_hash_aset(hash, argv[i], argv[i + 1]);
@@ -795,20 +864,24 @@ rb_hash_rehash(VALUE hash)
     VALUE tmp;
     st_table *tbl;
 
+    if (RHASH_IS_EMBED(hash)) {
+	return hash;
+    }
+
     if (RHASH_ITER_LEV(hash) > 0) {
 	rb_raise(rb_eRuntimeError, "rehash during iteration");
     }
     rb_hash_modify_check(hash);
-    if (!RHASH(hash)->ntbl)
+    if (!RHASH(hash)->as.table.ntbl)
         return hash;
     tmp = hash_alloc(0);
-    tbl = st_init_table_with_size(RHASH(hash)->ntbl->type, RHASH(hash)->ntbl->num_entries);
-    RHASH(tmp)->ntbl = tbl;
+    tbl = st_init_table_with_size(RHASH(hash)->as.table.ntbl->type, RHASH(hash)->as.table.ntbl->num_entries);
+    RHASH(tmp)->as.table.ntbl = tbl;
 
     rb_hash_foreach(hash, rb_hash_rehash_i, (VALUE)tbl);
-    st_free_table(RHASH(hash)->ntbl);
-    RHASH(hash)->ntbl = tbl;
-    RHASH(tmp)->ntbl = 0;
+    st_free_table(RHASH(hash)->as.table.ntbl);
+    RHASH(hash)->as.table.ntbl = tbl;
+    RHASH(tmp)->as.table.ntbl = 0;
 
     return hash;
 }
@@ -846,7 +919,15 @@ rb_hash_aref(VALUE hash, VALUE key)
 {
     st_data_t val;
 
-    if (!RHASH(hash)->ntbl || !st_lookup(RHASH(hash)->ntbl, key, &val)) {
+    if (RHASH_IS_EMBED(hash)) {
+	if (rb_any_cmp(RHASH(hash)->as.embed.key, key) == 0) {
+	    return RHASH(hash)->as.embed.value;
+	} else {
+	    return Qnil;
+	}
+    }
+
+    if (!RHASH(hash)->as.table.ntbl || !st_lookup(RHASH(hash)->as.table.ntbl, key, &val)) {
 	return rb_hash_default_value(hash, key);
     }
     return (VALUE)val;
@@ -857,7 +938,15 @@ rb_hash_lookup2(VALUE hash, VALUE key, VALUE def)
 {
     st_data_t val;
 
-    if (!RHASH(hash)->ntbl || !st_lookup(RHASH(hash)->ntbl, key, &val)) {
+    if (RHASH_IS_EMBED(hash)) {
+	if (rb_any_cmp(RHASH(hash)->as.embed.key, key) == 0) {
+	    return RHASH(hash)->as.embed.value;
+	} else {
+	    return def;
+	}
+    }
+
+    if (!RHASH(hash)->as.table.ntbl || !st_lookup(RHASH(hash)->as.table.ntbl, key, &val)) {
 	return def; /* without Hash#default */
     }
     return (VALUE)val;
@@ -912,19 +1001,27 @@ rb_hash_fetch_m(int argc, VALUE *argv, VALUE hash)
     if (block_given && argc == 2) {
 	rb_warn("block supersedes default value argument");
     }
-    if (!RHASH(hash)->ntbl || !st_lookup(RHASH(hash)->ntbl, key, &val)) {
-	if (block_given) return rb_yield(key);
-	if (argc == 1) {
-	    VALUE desc = rb_protect(rb_inspect, key, 0);
-	    if (NIL_P(desc)) {
-		desc = rb_any_to_s(key);
-	    }
-	    desc = rb_str_ellipsize(desc, 65);
-	    rb_raise(rb_eKeyError, "key not found: %"PRIsVALUE, desc);
+
+    if (RHASH_IS_EMBED(hash)) {
+	if (rb_any_cmp(RHASH(hash)->as.embed.key, key) == 0) {
+	    return RHASH(hash)->as.embed.value;
 	}
-	return argv[1];
+    } else {
+	if (st_lookup(RHASH(hash)->as.table.ntbl, key, &val)) {
+	    return (VALUE)val;
+	}
     }
-    return (VALUE)val;
+
+    if (block_given) return rb_yield(key);
+    if (argc == 1) {
+	VALUE desc = rb_protect(rb_inspect, key, 0);
+	if (NIL_P(desc)) {
+	    desc = rb_any_to_s(key);
+	}
+	desc = rb_str_ellipsize(desc, 65);
+	rb_raise(rb_eKeyError, "key not found: %"PRIsVALUE, desc);
+    }
+    return argv[1];
 }
 
 VALUE
@@ -1113,15 +1210,25 @@ rb_hash_delete_entry(VALUE hash, VALUE key)
 {
     st_data_t ktmp = (st_data_t)key, val;
 
-    if (!RHASH(hash)->ntbl) {
+    if (RHASH_IS_EMBED(hash)) {
+	if (rb_any_cmp(RHASH(hash)->as.embed.key, key) == 0) {
+	    VALUE val = RHASH(hash)->as.embed.value;
+	    clear_embed_table(RHASH(hash));
+	    return val;
+	} else {
+	    return Qundef;
+	}
+    }
+
+    if (!RHASH(hash)->as.table.ntbl) {
 	return Qundef;
     }
     else if (RHASH_ITER_LEV(hash) > 0 &&
-	     (st_delete_safe(RHASH(hash)->ntbl, &ktmp, &val, (st_data_t)Qundef))) {
+	     (st_delete_safe(RHASH(hash)->as.table.ntbl, &ktmp, &val, (st_data_t)Qundef))) {
 	FL_SET(hash, HASH_DELETED);
 	return (VALUE)val;
     }
-    else if (st_delete(RHASH(hash)->ntbl, &ktmp, &val)) {
+    else if (st_delete(RHASH(hash)->as.table.ntbl, &ktmp, &val)) {
 	return (VALUE)val;
     }
     else {
@@ -1220,10 +1327,17 @@ rb_hash_shift(VALUE hash)
     struct shift_var var;
 
     rb_hash_modify_check(hash);
-    if (RHASH(hash)->ntbl) {
+
+    if (RHASH_IS_EMBED(hash)) {
+	VALUE assoc = rb_assoc_new(RHASH(hash)->as.embed.key, RHASH(hash)->as.embed.value);
+	clear_embed_table(RHASH(hash));
+	return assoc;
+    }
+
+    if (RHASH(hash)->as.table.ntbl) {
 	var.key = Qundef;
 	if (RHASH_ITER_LEV(hash) == 0) {
-	    if (st_shift(RHASH(hash)->ntbl, &var.key, &var.val)) {
+	    if (st_shift(RHASH(hash)->as.table.ntbl, &var.key, &var.val)) {
 		return rb_assoc_new(var.key, var.val);
 	    }
 	}
@@ -1273,7 +1387,7 @@ rb_hash_delete_if(VALUE hash)
 {
     RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
     rb_hash_modify_check(hash);
-    if (RHASH(hash)->ntbl)
+    if (RHASH_IS_EMBED(hash) || RHASH(hash)->as.table.ntbl)
 	rb_hash_foreach(hash, delete_if_i, hash);
     return hash;
 }
@@ -1297,7 +1411,7 @@ rb_hash_reject_bang(VALUE hash)
     n = RHASH_SIZE(hash);
     if (!n) return Qnil;
     rb_hash_foreach(hash, delete_if_i, hash);
-    if (n == RHASH(hash)->ntbl->num_entries) return Qnil;
+    if (n == RHASH_SIZE(hash)) return Qnil;
     return hash;
 }
 
@@ -1455,11 +1569,11 @@ rb_hash_select_bang(VALUE hash)
 
     RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
     rb_hash_modify_check(hash);
-    if (!RHASH(hash)->ntbl)
+    n = RHASH_SIZE(hash);
+    if (n == 0)
         return Qnil;
-    n = RHASH(hash)->ntbl->num_entries;
     rb_hash_foreach(hash, keep_if_i, hash);
-    if (n == RHASH(hash)->ntbl->num_entries) return Qnil;
+    if (n == RHASH_SIZE(hash)) return Qnil;
     return hash;
 }
 
@@ -1480,7 +1594,7 @@ rb_hash_keep_if(VALUE hash)
 {
     RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
     rb_hash_modify_check(hash);
-    if (RHASH(hash)->ntbl)
+    if (RHASH_IS_EMBED(hash) || RHASH(hash)->as.table.ntbl)
 	rb_hash_foreach(hash, keep_if_i, hash);
     return hash;
 }
@@ -1506,13 +1620,17 @@ VALUE
 rb_hash_clear(VALUE hash)
 {
     rb_hash_modify_check(hash);
-    if (!RHASH(hash)->ntbl)
+    if (RHASH_IS_EMBED(hash)) {
+	clear_embed_table(RHASH(hash));
+	return hash;
+    }
+    if (!RHASH(hash)->as.table.ntbl)
         return hash;
-    if (RHASH(hash)->ntbl->num_entries > 0) {
+    if (RHASH(hash)->as.table.ntbl->num_entries > 0) {
 	if (RHASH_ITER_LEV(hash) > 0)
 	    rb_hash_foreach(hash, clear_i, 0);
 	else
-	    st_clear(RHASH(hash)->ntbl);
+	    st_clear(RHASH(hash)->as.table.ntbl);
     }
 
     return hash;
