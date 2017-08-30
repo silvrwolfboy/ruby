@@ -113,6 +113,9 @@ ARCH = $(MACHINE)
 !if !defined(DEBUGFLAGS)
 DEBUGFLAGS = -Zi
 !endif
+!if "$(RUBY_DEVEL)" == "yes"
+DEBUGFLAGS = $(DEBUGFLAGS) -DRUBY_DEVEL=1
+!endif
 !if !defined(OPTFLAGS)
 !if $(MSC_VER) < 1400
 OPTFLAGS = -O2b2xg-
@@ -284,6 +287,7 @@ RCFLAGS=-nologo
 !endif
 !endif
 
+ENABLE_SHARED = yes
 LIBRUBY_LDSHARED = $(LDSHARED)
 LIBRUBY_DLDFLAGS = $(EXTLDFLAGS) -implib:dummy.lib -def:$(RUBYDEF)
 
@@ -364,6 +368,7 @@ OS_DEST_FILE = $(@:/=\)
 !if !defined(WINMAINOBJ)
 WINMAINOBJ    = winmain.$(OBJEXT)
 !endif
+MAINSRC       = $(MAINOBJ:.obj=.c)
 ARCHMINIOBJS  = dmydln.$(OBJEXT) miniruby.res
 LIBOBJS       = $(MISSING) $(LIBOBJS)
 
@@ -393,14 +398,34 @@ top_srcdir = $(srcdir)
 hdrdir = $(srcdir)/include
 VPATH = $(arch_hdrdir)/ruby;$(hdrdir)/ruby;$(srcdir);$(srcdir)/missing;$(win_srcdir)
 
+!ifndef GIT
+GIT = git
+!endif
+!if "$(HAVE_GIT)" == "yes" || "$(HAVE_GIT)" == "no"
+!else if "$(GIT)" == ""
+HAVE_GIT = no
+!else if [for %I in ($(GIT)) do @if not "%~xI" == "" exit 1]
+! if [for %I in ($(GIT)) do @if not "%~$$PATH:I" == "" exit 1]
+HAVE_GIT = yes
+! else
+HAVE_GIT = no
+! endif
+!else
+! if [for %x in (%PATHEXT:;= %) do @for %I in ($(GIT)%x) do @if not "%~$$PATH:I" == "" exit 1]
+HAVE_GIT = yes
+! else
+HAVE_GIT = no
+! endif
+!endif
+
 !if exist($(srcdir)/.svn)
 VCS = svn
 VCSUP = $(VCS) up $(SVNUPOPTIONS)
 !else if exist($(srcdir)/.git/svn)
-VCS = git svn
+VCS = $(GIT) svn
 VCSUP = $(VCS) rebase $(GITSVNREBASEOPTIONS)
 !else if exist($(srcdir)/.git)
-VCS = git
+VCS = $(GIT)
 VCSUP = $(VCS) pull $(GITPULLOPTIONS)
 !else
 VCSUP = rem
@@ -466,32 +491,6 @@ $(SCRIPTPROGRAMS): $(STUBPROGRAM)
 
 update-src::
 	@cd "$(srcdir:/=\)" && set LC_TIME=C && $(VCSUP)
-
-update-mspec:
-!if exist($(srcdir)/spec/mspec)
-	@echo updating mspec ...
-	@cd $(srcdir:/=\)\spec\mspec && git pull
-!else
-	@echo retrieving mspec ...
-	@cd $(srcdir:/=\) && git clone $(MSPEC_GIT_URL) spec/mspec
-!endif
-	@cd $(srcdir:/=\)\spec\mspec && git --no-pager log -1 --oneline
-
-update-rubyspec: update-mspec
-!if exist($(srcdir)/spec/rubyspec)
-	@echo updating rubyspec ...
-	@cd $(srcdir:/=\)\spec\rubyspec && git pull
-!else
-	@echo retrieving rubyspec ...
-	@cd $(srcdir:/=\) && git clone $(RUBYSPEC_GIT_URL) spec/rubyspec
-!endif
-	@cd $(srcdir:/=\)\spec\rubyspec && git --no-pager log -1 --oneline
-
-test-rubyspec-precheck:
-!if !exist($(srcdir)/spec/rubyspec/.)
-	@echo No rubyspec here.  make update-rubyspec first.
-	@exit 1
-!endif
 
 $(MKFILES): $(srcdir)/common.mk $(srcdir)/version.h \
 	    $(win_srcdir)/Makefile.sub $(win_srcdir)/configure.bat \
@@ -577,6 +576,7 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define SIZEOF_FLOAT 4
 #define SIZEOF_DOUBLE 8
 #define SIGNEDNESS_OF_TIME_T -1
+#define NEGATIVE_TIME_T 1
 !if $(RT_VER) >= 80
 #define SIZEOF_TIME_T 8
 #define TIMET2NUM(v) LL2NUM(v)
@@ -730,9 +730,6 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define HAVE_STRFTIME 1
 #define HAVE_STRCHR 1
 #define HAVE_STRSTR 1
-#define HAVE_STRTOD 1
-#define HAVE_STRTOL 1
-#define HAVE_STRTOUL 1
 #define HAVE_FLOCK 1
 #define HAVE_ISNAN 1
 #define HAVE_FINITE 1
@@ -780,9 +777,6 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 !endif
 #define CANONICALIZATION_FOR_MATHN 1
 #define DEFAULT_KCODE KCODE_NONE
-!if "$(ENABLE_DEBUG_ENV)" == "yes"
-#define RUBY_DEBUG_ENV 1
-!endif
 #define LOAD_RELATIVE 1
 #define DLEXT ".so"
 !if "$(EXTSTATIC)" == "static"
@@ -1156,7 +1150,7 @@ $(ruby_pc): $(RBCONFIG)
 lex.c: {$(srcdir)}lex.c.blt
 	copy $(?:/=\) $@
 
-enc/jis/props.h: {$(srcdir)}enc/jis/props.h.blt
+$(srcdir)/enc/jis/props.h: {$(srcdir)}enc/jis/props.h.blt
 	@if not exist $(@D:/=\) md $(@D:/=\)
 	$(ECHO) copying $@
 	$(Q) copy $(?:/=\) $(@:/=\) > nul

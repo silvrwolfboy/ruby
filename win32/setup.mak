@@ -60,7 +60,11 @@ NTVER = $(NTVER)
 !if defined(USE_RUBYGEMS)
 USE_RUBYGEMS = $(USE_RUBYGEMS)
 !endif
+!if defined(ENABLE_DEBUG_ENV)
+ENABLE_DEBUG_ENV = $(ENABLE_DEBUG_ENV)
+!endif
 
+# TOOLS
 <<
 !if !defined(BASERUBY)
 	@for %I in (ruby.exe) do @echo BASERUBY = %~s$$PATH:I>> $(MAKEFILE)
@@ -74,6 +78,12 @@ USE_RUBYGEMS = $(USE_RUBYGEMS)
 	@echo HAVE_BASERUBY = yes>> $(MAKEFILE)
 !else
 	@echo HAVE_BASERUBY = no>> $(MAKEFILE)
+!endif
+!if "$(GIT)" != ""
+	@echo GIT = $(GIT)>> $(MAKEFILE)
+!endif
+!if "$(HAVE_GIT)" != ""
+	@echo HAVE_GIT = $(HAVE_GIT)>> $(MAKEFILE)
 !endif
 
 -osname-section-:
@@ -145,6 +155,9 @@ echo RUBY_PROGRAM_VERSION = %ruby_version:""=%
 echo MAJOR = %major%
 echo MINOR = %minor%
 echo TEENY = %teeny%
+#if defined RUBY_PATCHLEVEL && RUBY_PATCHLEVEL < 0
+echo RUBY_DEVEL = yes
+#endif
 del %0 & exit
 <<
 

@@ -73,9 +73,6 @@
 # of these properties compared to using a Hash or a Struct.
 #
 class OpenStruct
-  class << self # :nodoc:
-    alias allocate new
-  end
 
   #
   # Creates a new OpenStruct object.  By default, the resulting OpenStruct
@@ -195,7 +192,7 @@ class OpenStruct
 
   def respond_to_missing?(mid, include_private = false) # :nodoc:
     mname = mid.to_s.chomp("=").to_sym
-    @table.key?(mname) || super
+    @table&.key?(mname) || super
   end
 
   def method_missing(mid, *args) # :nodoc:
@@ -205,15 +202,18 @@ class OpenStruct
         raise ArgumentError, "wrong number of arguments (#{len} for 1)", caller(1)
       end
       modifiable?[new_ostruct_member!(mname)] = args[0]
-    elsif len == 0
+    elsif len == 0 # and /\A[a-z_]\w*\z/ =~ mid #
       if @table.key?(mid)
         new_ostruct_member!(mid) unless frozen?
         @table[mid]
       end
     else
-      err = NoMethodError.new "undefined method `#{mid}' for #{self}", mid, args
-      err.set_backtrace caller(1)
-      raise err
+      begin
+        super
+      rescue NoMethodError => err
+        err.backtrace.shift
+        raise
+      end
     end
   end
 

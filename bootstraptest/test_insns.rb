@@ -10,8 +10,8 @@ begin
 rescue LoadError
   # OK, just skip
 else
-  $FIXNUM_MAX = RbConfig::Limits["FIXNUM_MAX"]
-  $FIXNUM_MIN = RbConfig::Limits["FIXNUM_MIN"]
+  $FIXNUM_MAX = RbConfig::LIMITS["FIXNUM_MAX"]
+  $FIXNUM_MIN = RbConfig::LIMITS["FIXNUM_MIN"]
 end
 
 fsl   = { frozen_string_literal: true } # used later
@@ -69,7 +69,7 @@ tests = [
   [ 'tostring / concatstrings', %q{ "#{true}" }, ],
   [ 'freezestring',             %q{ "#{true}"}, fsl, ],
   [ 'freezestring',             %q{ "#{true}"}, '-d', fsl, ],
-  [ 'torexp',                   %q{ /#{true}/ =~ "true" && $~ }, ],
+  [ 'toregexp',                 %q{ /#{true}/ =~ "true" && $~ }, ],
 
   [ 'newarray',    %q{ ["true"][0] }, ],
   [ 'duparray',    %q{ [ true ][0] }, ],
@@ -178,7 +178,7 @@ tests = [
   },
 
   [ 'opt_str_freeze', %q{ 'true'.freeze }, ],
-  [ 'opt_str_freeze', %q{ -'true' }, ],
+  [ 'opt_str_uminus', %q{ -'true' }, ],
   [ 'opt_str_freeze', <<~'},', ], # {
     class String
       def freeze
@@ -222,7 +222,7 @@ tests = [
     x
   },
   [ 'jump',         <<~'},', ], # {
-    # ultra complicated situation: this ||= assinment only generates
+    # ultra complicated situation: this ||= assignment only generates
     # 15 instructions, not including the class definition.
     class X; attr_accessor :x; end
     x = X.new

@@ -69,7 +69,7 @@ set_backtrace(VALUE info, VALUE bt)
 static void
 error_print(rb_thread_t *th)
 {
-    rb_threadptr_error_print(th, th->errinfo);
+    rb_threadptr_error_print(th, th->ec.errinfo);
 }
 
 static void
@@ -137,6 +137,11 @@ print_backtrace(const VALUE eclass, const VALUE errat, int reverse)
 	long i;
 	long len = RARRAY_LEN(errat);
         int skip = eclass == rb_eSysStackError;
+	const int threshold = 1000000000;
+	int width = ((int)log10((double)(len > threshold ?
+					 ((len - 1) / threshold) :
+					 len - 1)) +
+		     (len < threshold ? 0 : 9) + 1);
 
 #define TRACE_MAX (TRACE_HEAD+TRACE_TAIL+5)
 #define TRACE_HEAD 8
@@ -145,7 +150,9 @@ print_backtrace(const VALUE eclass, const VALUE errat, int reverse)
 	for (i = 1; i < len; i++) {
 	    VALUE line = RARRAY_AREF(errat, reverse ? len - i : i);
 	    if (RB_TYPE_P(line, T_STRING)) {
-		warn_print_str(rb_sprintf("\tfrom %"PRIsVALUE"\n", line));
+		VALUE str = rb_str_new_cstr("\t");
+		if (reverse) rb_str_catf(str, "%*ld: ", width, len - i);
+		warn_print_str(rb_str_catf(str, "from %"PRIsVALUE"\n", line));
 	    }
 	    if (skip && i == TRACE_HEAD && len > TRACE_MAX) {
 		warn_print_str(rb_sprintf("\t ... %ld levels...\n",
@@ -160,7 +167,7 @@ void
 rb_threadptr_error_print(rb_thread_t *volatile th, volatile VALUE errinfo)
 {
     volatile VALUE errat = Qundef;
-    volatile int raised_flag = th->raised_flag;
+    volatile int raised_flag = th->ec.raised_flag;
     volatile VALUE eclass = Qundef, emesg = Qundef;
 
     if (NIL_P(errinfo))
@@ -168,7 +175,7 @@ rb_threadptr_error_print(rb_thread_t *volatile th, volatile VALUE errinfo)
     rb_thread_raised_clear(th);
 
     TH_PUSH_TAG(th);
-    if (TH_EXEC_TAG() == 0) {
+    if (TH_EXEC_TAG() == TAG_NONE) {
 	errat = rb_get_backtrace(errinfo);
     }
     else if (errat == Qundef) {
@@ -185,7 +192,7 @@ rb_threadptr_error_print(rb_thread_t *volatile th, volatile VALUE errinfo)
 	}
     }
     if (rb_stderr_tty_p()) {
-	if (0) warn_print("Traceback (most recent call last):\n");
+	warn_print("Traceback (most recent call last):\n");
 	print_backtrace(eclass, errat, TRUE);
 	print_errinfo(eclass, errat, emesg);
     }
@@ -195,14 +202,8 @@ rb_threadptr_error_print(rb_thread_t *volatile th, volatile VALUE errinfo)
     }
   error:
     TH_POP_TAG();
-    th->errinfo = errinfo;
+    th->ec.errinfo = errinfo;
     rb_thread_raised_set(th, raised_flag);
-}
-
-void
-ruby_error_print(void)
-{
-    error_print(GET_THREAD());
 }
 
 #define undef_mesg_for(v, k) rb_fstring_cstr("undefined"v" method `%1$s' for "k" `%2$s'")
@@ -303,7 +304,7 @@ error_handle(int ex)
 	warn_print("unexpected throw\n");
 	break;
       case TAG_RAISE: {
-	VALUE errinfo = th->errinfo;
+	VALUE errinfo = th->ec.errinfo;
 	if (rb_obj_is_kind_of(errinfo, rb_eSystemExit)) {
 	    status = sysexit_status(errinfo);
 	}

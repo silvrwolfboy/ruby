@@ -34,6 +34,19 @@ class TestThread < Test::Unit::TestCase
     th.join
   end
 
+  def test_inspect_with_fiber
+    inspect1 = inspect2 = nil
+
+    Thread.new{
+      inspect1 = Thread.current.inspect
+      Fiber.new{
+        inspect2 = Thread.current.inspect
+      }.resume
+    }.join
+
+    assert_equal inspect1, inspect2, '[Bug #13689]'
+  end
+
   def test_main_thread_variable_in_enumerator
     assert_equal Thread.main, Thread.current
 
@@ -648,14 +661,14 @@ class TestThread < Test::Unit::TestCase
 
   def make_handle_interrupt_test_thread1 flag
     r = []
-    ready_p = false
-    done = false
+    ready_q = Queue.new
+    done_q = Queue.new
     th = Thread.new{
       begin
         Thread.handle_interrupt(RuntimeError => flag){
           begin
-            ready_p = true
-            sleep 0.01 until done
+            ready_q << true
+            done_q.pop
           rescue
             r << :c1
           end
@@ -664,10 +677,10 @@ class TestThread < Test::Unit::TestCase
         r << :c2
       end
     }
-    Thread.pass until ready_p
+    ready_q.pop
     th.raise
     begin
-      done = true
+      done_q << true
       th.join
     rescue
       r << :c3
@@ -1135,9 +1148,9 @@ q.pop
       end
       Process.wait2(f.pid)
     end
-    unless th.join(3)
+    unless th.join(EnvUtil.apply_timeout_scale(3))
       Process.kill(:QUIT, f.pid)
-      Process.kill(:KILL, f.pid) unless th.join(1)
+      Process.kill(:KILL, f.pid) unless th.join(EnvUtil.apply_timeout_scale(1))
     end
     _, status = th.value
     output = f.read

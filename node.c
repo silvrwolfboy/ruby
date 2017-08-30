@@ -475,6 +475,7 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	break;
 
       case NODE_CALL:
+      case NODE_OPCALL:
 	ANN("method invocation");
 	ANN("format: [nd_recv].[nd_mid]([nd_args])");
 	ANN("example: obj.foo(1)");
@@ -544,9 +545,16 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	break;
 
       case NODE_HASH:
-	ANN("hash constructor");
-	ANN("format: { [nd_head] }");
-	ANN("example: { 1 => 2, 3 => 4 }");
+	if (!node->nd_alen) {
+	    ANN("keyword arguments");
+	    ANN("format: nd_head");
+	    ANN("example: a: 1, b: 2");
+	}
+	else {
+	    ANN("hash constructor");
+	    ANN("format: { [nd_head] }");
+	    ANN("example: { 1 => 2, 3 => 4 }");
+	}
 	LAST_NODE;
 	F_NODE(nd_head, "contents");
 	break;
@@ -1068,7 +1076,6 @@ rb_gc_mark_node(NODE *obj)
       case NODE_RESCUE:
       case NODE_RESBODY:
       case NODE_CLASS:
-      case NODE_BLOCK_PASS:
       case NODE_MATCH2:
 	rb_gc_mark(RNODE(obj)->u2.value);
 	/* fall through */
@@ -1107,6 +1114,7 @@ rb_gc_mark_node(NODE *obj)
       case NODE_ALIAS:
       case NODE_VALIAS:
       case NODE_ARGSCAT:
+      case NODE_BLOCK_PASS:
 	rb_gc_mark(RNODE(obj)->u1.value);
 	/* fall through */
       case NODE_GASGN:	/* 2 */

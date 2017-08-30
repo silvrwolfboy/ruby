@@ -2,6 +2,7 @@
 gnumake = yes
 override gnumake_recursive := $(if $(findstring n,$(firstword $(MFLAGS))),,+)
 override mflags := $(filter-out -j%,$(MFLAGS))
+MSPECOPT += $(if $(filter -j%,$(MFLAGS)),-j)
 
 CHECK_TARGETS := great exam love check test check% test% btest%
 # expand test targets, and those dependents
@@ -10,6 +11,7 @@ TEST_DEPENDS := $(filter-out commit $(TEST_TARGETS),$(MAKECMDGOALS))
 TEST_TARGETS := $(patsubst great,exam,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out great $(TEST_TARGETS),$(TEST_DEPENDS))
 TEST_TARGETS := $(patsubst exam,check test-rubyspec,$(TEST_TARGETS))
+TEST_TARGETS := $(patsubst test-rubyspec,test-spec,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out exam $(TEST_TARGETS),$(TEST_DEPENDS))
 TEST_TARGETS := $(patsubst love,check,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out love $(TEST_TARGETS),$(TEST_DEPENDS))
@@ -17,7 +19,7 @@ TEST_TARGETS := $(patsubst check,test test-testframework test-almost,$(patsubst 
 TEST_DEPENDS := $(filter-out check $(TEST_TARGETS),$(TEST_DEPENDS))
 TEST_TARGETS := $(patsubst test,btest-ruby test-knownbug test-basic,$(TEST_TARGETS))
 TEST_DEPENDS := $(filter-out test $(TEST_TARGETS),$(TEST_DEPENDS))
-TEST_DEPENDS += $(if $(filter-out btest%,$(TEST_TARGETS)),all exts)
+TEST_DEPENDS += $(if $(filter great exam love check,$(MAKECMDGOALS)),all exts)
 
 ifneq ($(filter -O0 -Od,$(optflags)),)
 override XCFLAGS := $(filter-out -D_FORTIFY_SOURCE=%,$(XCFLAGS))
@@ -59,9 +61,9 @@ endif
 ORDERED_TEST_TARGETS := $(filter $(TEST_TARGETS), \
 	btest-ruby test-knownbug test-basic \
 	test-testframework test-ruby test-almost test-all \
-	test-rubyspec \
+	test-spec \
 	)
-prev_test := $(if $(filter test-rubyspec,$(ORDERED_TEST_TARGETS)),test-rubyspec-precheck)
+prev_test := $(if $(filter test-spec,$(ORDERED_TEST_TARGETS)),test-spec-precheck)
 $(foreach test,$(ORDERED_TEST_TARGETS), \
 	$(eval yes-$(value test) no-$(value test): $(value prev_test)); \
 	$(eval prev_test := $(value test)))
@@ -134,19 +136,11 @@ $(TIMESTAMPDIR)/.exec.time:
 	$(Q) mkdir exec
 	$(Q) exit > $@
 
-ifneq (,)
-else ifeq ($(VCS),svn)
-VCSCOMMIT = $(VCS) commit $(SVNCOMMITOPTIONS)
-else ifeq ($(VCS),git svn)
-VCSCOMMIT = $(VCS) dcommit $(GITSVNCOMMITOPTIONS)
-VCSWAIT = sleep 2 # wait for svn to git sync
-else ifeq ($(VCS),git)
-VCSCOMMIT := $(VCS) push $(GITCOMMITOPTIONS)
-endif
-ifneq ($(VCSCOMMIT),)
 .PHONY: commit
 commit: $(if $(filter commit,$(MAKECMDGOALS)),$(filter-out commit,$(MAKECMDGOALS)))
-	@$(CHDIR) "$(srcdir)" && LC_TIME=C exec $(VCSCOMMIT)
-	$(Q)$(VCSWAIT)
+	@$(BASERUBY) -C "$(srcdir)" -I./tool -rvcs -e 'VCS.detect(".").commit'
 	$(Q)$(MAKE) $(mflags) Q=$(Q) REVISION_FORCE=PHONY update-src srcs all-incs
+
+ifeq ($(words $(filter update-gems extract-gems,$(MAKECMDGOALS))),2)
+extract-gems: update-gems
 endif

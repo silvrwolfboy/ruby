@@ -886,7 +886,7 @@ VALUE rb_obj_reveal(VALUE obj, VALUE klass); /* do not use this API to change kl
 
 #define ROBJECT_EMBED_LEN_MAX ROBJECT_EMBED_LEN_MAX
 #define ROBJECT_EMBED ROBJECT_EMBED
-enum {
+enum ruby_robject_flags {
     ROBJECT_EMBED_LEN_MAX = 3,
     ROBJECT_EMBED = RUBY_FL_USER1,
 
@@ -925,7 +925,7 @@ struct RObject {
 #define RMODULE_IS_OVERLAID RMODULE_IS_OVERLAID
 #define RMODULE_IS_REFINEMENT RMODULE_IS_REFINEMENT
 #define RMODULE_INCLUDED_INTO_REFINEMENT RMODULE_INCLUDED_INTO_REFINEMENT
-enum {
+enum ruby_rmodule_flags {
     RMODULE_IS_OVERLAID = RUBY_FL_USER2,
     RMODULE_IS_REFINEMENT = RUBY_FL_USER3,
     RMODULE_INCLUDED_INTO_REFINEMENT = RUBY_FL_USER4,
@@ -948,7 +948,7 @@ VALUE rb_float_new_in_heap(double);
 #define RSTRING_EMBED_LEN_SHIFT RSTRING_EMBED_LEN_SHIFT
 #define RSTRING_EMBED_LEN_MAX RSTRING_EMBED_LEN_MAX
 #define RSTRING_FSTR RSTRING_FSTR
-enum {
+enum ruby_rstring_flags {
     RSTRING_NOEMBED = RUBY_FL_USER1,
     RSTRING_EMBED_LEN_MASK = (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|
 			      RUBY_FL_USER5|RUBY_FL_USER6),
@@ -993,7 +993,7 @@ struct RString {
      ((ptrvar) = RSTRING(str)->as.ary, (lenvar) = RSTRING_EMBED_LEN(str)) : \
      ((ptrvar) = RSTRING(str)->as.heap.ptr, (lenvar) = RSTRING(str)->as.heap.len))
 
-enum {
+enum ruby_rarray_flags {
     RARRAY_EMBED_LEN_MAX = 3,
     RARRAY_EMBED_FLAG = RUBY_FL_USER1,
     /* RUBY_FL_USER2 is for ELTS_SHARED */
@@ -1190,7 +1190,7 @@ void *rb_check_typeddata(VALUE, const rb_data_type_t *);
 #define TypedData_Get_Struct(obj,type,data_type,sval) \
     ((sval) = (type*)rb_check_typeddata((obj), (data_type)))
 
-#define RSTRUCT_LEN(st)         rb_struct_size(st)
+#define RSTRUCT_LEN(st)         NUM2LONG(rb_struct_size(st))
 #define RSTRUCT_PTR(st)         rb_struct_ptr(st)
 #define RSTRUCT_SET(st, idx, v) rb_struct_aset(st, INT2NUM(idx), (v))
 #define RSTRUCT_GET(st, idx)    rb_struct_aref(st, INT2NUM(idx))
@@ -1280,6 +1280,11 @@ int rb_big_sign(VALUE);
 #define RB_OBJ_FREEZE_RAW(x) (void)(RBASIC(x)->flags |= RUBY_FL_FREEZE)
 #define RB_OBJ_FREEZE(x) rb_obj_freeze_inline((VALUE)x)
 
+/*!
+ * \defgroup deprecated_macros deprecated macro APIs
+ * \{
+ * \par These macros are deprecated. Prefer their `RB_`-prefixed versions.
+ */
 #define FL_ABLE(x) RB_FL_ABLE(x)
 #define FL_TEST_RAW(x,f) RB_FL_TEST_RAW(x,f)
 #define FL_TEST(x,f) RB_FL_TEST(x,f)
@@ -1307,6 +1312,8 @@ int rb_big_sign(VALUE);
 #define OBJ_FROZEN(x) RB_OBJ_FROZEN(x)
 #define OBJ_FREEZE_RAW(x) RB_OBJ_FREEZE_RAW(x)
 #define OBJ_FREEZE(x) RB_OBJ_FREEZE(x)
+
+/* \} */
 
 void rb_freeze_singleton_class(VALUE klass);
 
@@ -1619,7 +1626,7 @@ static inline void *
 rb_alloc_tmp_buffer2(volatile VALUE *store, long count, size_t elsize)
 {
     size_t cnt = (size_t)count;
-    if (elsize % sizeof(VALUE) == 0) {
+    if (elsize == sizeof(VALUE)) {
 	if (RB_UNLIKELY(cnt > LONG_MAX / sizeof(VALUE))) {
 	    ruby_malloc_size_overflow(cnt, elsize);
 	}
@@ -1660,7 +1667,7 @@ rb_alloc_tmp_buffer2(volatile VALUE *store, long count, size_t elsize)
 #define MEMMOVE(p1,p2,type,n) memmove((p1), (p2), sizeof(type)*(size_t)(n))
 #define MEMCMP(p1,p2,type,n) memcmp((p1), (p2), sizeof(type)*(size_t)(n))
 
-void rb_obj_infect(VALUE,VALUE);
+void rb_obj_infect(VALUE victim, VALUE carrier);
 
 typedef int ruby_glob_func(const char*,VALUE, void*);
 void rb_glob(const char*,void(*)(const char*,VALUE,void*),VALUE);
@@ -1750,6 +1757,27 @@ VALUE rb_check_symbol(volatile VALUE *namep);
     (__builtin_constant_p(str) ? \
      __extension__ (rb_intern2((str), (long)strlen(str))) : \
      (rb_intern)(str))
+
+# define rb_varargs_argc_check_runtime(argc, vargc) \
+    (((argc) <= (vargc)) ? (argc) : \
+     (rb_fatal("argc(%d) exceeds actual arguments(%d)", \
+	       argc, vargc), 0))
+# if defined(HAVE_BUILTIN___BUILTIN_CHOOSE_EXPR_CONSTANT_P)
+#   if HAVE_ATTRIBUTE_ERRORFUNC
+ERRORFUNC((" argument length doesn't match"), int rb_varargs_bad_length(int,int));
+#   else
+#     define rb_varargs_bad_length(argc, vargc) ((argc)/((argc) == (vargc)))
+#   endif
+#   define rb_varargs_argc_check(argc, vargc) \
+    __builtin_choose_expr(__builtin_constant_p(argc), \
+	(((argc) == (vargc)) ? (argc) : \
+	 rb_varargs_bad_length(argc, vargc)), \
+	rb_varargs_argc_check_runtime(argc, vargc))
+# else
+#   define rb_varargs_argc_check(argc, vargc) \
+	rb_varargs_argc_check_runtime(argc, vargc)
+# endif
+
 #else
 #define rb_intern_const(str) rb_intern2((str), (long)strlen(str))
 #endif
@@ -2008,7 +2036,8 @@ rb_special_const_p(VALUE obj)
 static inline void
 rb_clone_setup(VALUE clone, VALUE obj)
 {
-    rb_obj_setup(clone, rb_singleton_class_clone(obj), RBASIC(obj)->flags);
+    rb_obj_setup(clone, rb_singleton_class_clone(obj),
+                 RBASIC(obj)->flags & ~(FL_PROMOTED0|FL_PROMOTED1|FL_FINALIZE));
     rb_singleton_class_attached(RBASIC_CLASS(clone), clone);
     if (RB_FL_TEST(obj, RUBY_FL_EXIVAR)) rb_copy_generic_ivar(clone, obj);
 }
@@ -2258,29 +2287,16 @@ ALWAYS_INLINE(static int rb_scan_args_trail_idx(const char *fmt));
 static inline int
 rb_scan_args_trail_idx(const char *fmt)
 {
-    return (rb_scan_args_lead_p(fmt) ?
-	    (rb_scan_args_isdigit(fmt[1]) || fmt[1]=='*')+1 :
-	    (fmt[0]=='*'));
-}
-
-ALWAYS_INLINE(static int rb_scan_args_trail_p(const char *fmt));
-static inline int
-rb_scan_args_trail_p(const char *fmt)
-{
-    return (rb_scan_args_lead_p(fmt) ?
-	    (rb_scan_args_isdigit(fmt[1]) || fmt[1]=='*') &&
-	    rb_scan_args_isdigit(fmt[2]) :
-	    fmt[0]=='*' && rb_scan_args_isdigit(fmt[1]));
+    const int idx = rb_scan_args_var_idx(fmt);
+    return idx+(fmt[idx]=='*');
 }
 
 ALWAYS_INLINE(static int rb_scan_args_n_trail(const char *fmt));
 static inline int
 rb_scan_args_n_trail(const char *fmt)
 {
-    return (rb_scan_args_lead_p(fmt) ?
-	    ((rb_scan_args_isdigit(fmt[1]) || fmt[1]=='*') &&
-	     rb_scan_args_isdigit(fmt[2]) ? fmt[2]-'0' : 0) :
-	    (fmt[0]=='*' && rb_scan_args_isdigit(fmt[1]) ? fmt[1]-'0' : 0));
+    const int idx = rb_scan_args_trail_idx(fmt);
+    return (rb_scan_args_isdigit(fmt[idx]) ? fmt[idx]-'0' : 0);
 }
 
 ALWAYS_INLINE(static int rb_scan_args_hash_idx(const char *fmt));
@@ -2343,8 +2359,8 @@ rb_scan_args_set(int argc, const VALUE *argv,
 		 int f_var, int f_hash, int f_block,
 		 VALUE *vars[])
 {
-    int i, argi = 0, vari = 0;
-    VALUE *var, hash = Qnil;
+    int i, argi = 0, vari = 0, last_idx = -1;
+    VALUE *var, hash = Qnil, last_hash = 0;
     const int n_mand = n_lead + n_trail;
 
     /* capture an option hash - phase 1: pop */
@@ -2362,7 +2378,8 @@ rb_scan_args_set(int argc, const VALUE *argv,
 	    hash = rb_check_hash_type(last);
 	    if (!RB_NIL_P(hash)) {
 		VALUE opts = rb_extract_keywords(&hash);
-		if (!hash) argc--;
+		if (!(last_hash = hash)) argc--;
+		else last_idx = argc - 1;
 		hash = opts ? opts : Qnil;
 	    }
 	}
@@ -2373,14 +2390,14 @@ rb_scan_args_set(int argc, const VALUE *argv,
     /* capture leading mandatory arguments */
     for (i = n_lead; i-- > 0; ) {
 	var = vars[vari++];
-	if (var) *var = argv[argi];
+	if (var) *var = (argi == last_idx) ? last_hash : argv[argi];
 	argi++;
     }
     /* capture optional arguments */
     for (i = n_opt; i-- > 0; ) {
 	var = vars[vari++];
 	if (argi < argc - n_trail) {
-	    if (var) *var = argv[argi];
+	    if (var) *var = (argi == last_idx) ? last_hash : argv[argi];
 	    argi++;
 	}
 	else {
@@ -2393,7 +2410,11 @@ rb_scan_args_set(int argc, const VALUE *argv,
 
 	var = vars[vari++];
 	if (0 < n_var) {
-	    if (var) *var = rb_ary_new4(n_var, &argv[argi]);
+	    if (var) {
+		int f_last = (last_idx + 1 == argc - n_trail);
+		*var = rb_ary_new4(n_var-f_last, &argv[argi]);
+		if (f_last) rb_ary_push(*var, last_hash);
+	    }
 	    argi += n_var;
 	}
 	else {
@@ -2403,7 +2424,7 @@ rb_scan_args_set(int argc, const VALUE *argv,
     /* capture trailing mandatory arguments */
     for (i = n_trail; i-- > 0; ) {
 	var = vars[vari++];
-	if (var) *var = argv[argi];
+	if (var) *var = (argi == last_idx) ? last_hash : argv[argi];
 	argi++;
     }
     /* capture an option hash - phase 2: assignment */
@@ -2424,6 +2445,30 @@ rb_scan_args_set(int argc, const VALUE *argv,
 
     return argc;
 }
+#endif
+
+#if defined(__GNUC__) && defined(__OPTIMIZE__)
+# define rb_yield_values(argc, ...) \
+__extension__({ \
+	const int rb_yield_values_argc = (argc); \
+	const VALUE rb_yield_values_args[] = {__VA_ARGS__}; \
+	const int rb_yield_values_nargs = \
+	    (int)(sizeof(rb_yield_values_args) / sizeof(VALUE)); \
+	rb_yield_values2( \
+	    rb_varargs_argc_check(rb_yield_values_argc, rb_yield_values_nargs), \
+	    rb_yield_values_nargs ? rb_yield_values_args : NULL); \
+    })
+
+# define rb_funcall(recv, mid, argc, ...) \
+__extension__({ \
+	const int rb_funcall_argc = (argc); \
+	const VALUE rb_funcall_args[] = {__VA_ARGS__}; \
+	const int rb_funcall_nargs = \
+	    (int)(sizeof(rb_funcall_args) / sizeof(VALUE)); \
+	rb_funcallv(recv, mid, \
+	    rb_varargs_argc_check(rb_funcall_argc, rb_funcall_nargs), \
+	    rb_funcall_nargs ? rb_funcall_args : NULL); \
+    })
 #endif
 
 #ifndef RUBY_DONT_SUBST

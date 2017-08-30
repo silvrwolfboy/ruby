@@ -608,69 +608,6 @@ install?(:local, :comm, :man) do
 end
 
 module RbInstall
-  module Specs
-    class FileCollector
-      def initialize(gemspec)
-        @gemspec = gemspec
-        @base_dir = File.dirname(gemspec)
-      end
-
-      def collect
-        (ruby_libraries + built_libraries).sort
-      end
-
-      private
-      def type
-        /\/(ext|lib)?\/.*?\z/ =~ @base_dir
-        $1
-      end
-
-      def ruby_libraries
-        case type
-        when "ext"
-          prefix = "#{$extout}/common/"
-          base = "#{prefix}#{relative_base}"
-        when "lib"
-          base = @base_dir
-          prefix = base.sub(/lib\/.*?\z/, "") + "lib/"
-        end
-
-        if base
-          Dir.glob("#{base}{.rb,/**/*.rb}").collect do |ruby_source|
-            remove_prefix(prefix, ruby_source)
-          end
-        else
-          [remove_prefix(File.dirname(@gemspec) + '/', @gemspec.gsub(/gemspec/, 'rb'))]
-        end
-      end
-
-      def built_libraries
-        case type
-        when "ext"
-          prefix = "#{$extout}/#{CONFIG['arch']}/"
-          base = "#{prefix}#{relative_base}"
-          dlext = CONFIG['DLEXT']
-          Dir.glob("#{base}{.#{dlext},/**/*.#{dlext}}").collect do |built_library|
-            remove_prefix(prefix, built_library)
-          end
-        when "lib"
-          []
-        else
-          []
-        end
-      end
-
-      def relative_base
-        /\/#{Regexp.escape(type)}\/(.*?)\z/ =~ @base_dir
-        $1
-      end
-
-      def remove_prefix(prefix, string)
-        string.sub(/\A#{Regexp.escape(prefix)}/, "")
-      end
-    end
-  end
-
   class UnpackedInstaller < Gem::Installer
     module DirPackage
       def extract_files(destination_dir, pattern = "*")
@@ -678,10 +615,12 @@ module RbInstall
         return if path == destination_dir
         File.chmod(0700, destination_dir)
         mode = pattern == "bin/*" ? $script_mode : $data_mode
-        install_recursive(path, without_destdir(destination_dir),
-                          :glob => pattern,
-                          :no_install => "*.gemspec",
-                          :mode => mode)
+        spec.files.each do |f|
+          src = File.join(path, f)
+          dest = File.join(without_destdir(destination_dir), f)
+          makedirs(dest[/.*(?=\/)/m])
+          install src, dest, :mode => mode
+        end
         File.chmod($dir_mode, destination_dir)
       end
     end
@@ -758,7 +697,31 @@ install?(:ext, :comm, :gem, :'default-gems', :'default-gems-comm') do
   install_default_gem('lib', srcdir)
 end
 install?(:ext, :arch, :gem, :'default-gems', :'default-gems-arch') do
-  install_default_gem('ext', srcdir)
+  install_default_gem('ext', srcdir) do |path|
+    # assume that gemspec and extconf.rb are placed in the same directory
+    success = false
+    begin
+      IO.foreach(File.dirname(path[(srcdir.size+1)..-1]) + "/Makefile") do |l|
+        break success = true if /^TARGET\s*=/ =~ l
+      end
+    rescue Errno::ENOENT
+    end
+    success
+  end
+end
+
+def load_gemspec(file)
+  code = File.read(file, encoding: "utf-8:-")
+  code.gsub!(/`git.*?`/m, '""')
+  begin
+    spec = eval(code, binding, file)
+  rescue SignalException, SystemExit
+    raise
+  rescue SyntaxError, Exception
+  end
+  raise("invalid spec in #{file}") unless spec
+  spec.loaded_from = file
+  spec
 end
 
 def install_default_gem(dir, srcdir)
@@ -771,12 +734,8 @@ def install_default_gem(dir, srcdir)
   makedirs(default_spec_dir)
 
   gems = Dir.glob("#{srcdir}/#{dir}/**/*.gemspec").map {|src|
-    spec = Gem::Specification.load(src) || raise("invalid spec in #{src}")
-    file_collector = RbInstall::Specs::FileCollector.new(src)
-    files = file_collector.collect
-    next if files.empty?
-    spec.files = files
-    spec
+    next if block_given? and !yield(src)
+    load_gemspec(src)
   }
   gems.compact.sort_by(&:name).each do |gemspec|
     full_name = "#{gemspec.name}-#{gemspec.version}"
@@ -819,10 +778,7 @@ install?(:ext, :comm, :gem, :'bundle-gems') do
   gem_ext_dir = "#$extout/gems/#{CONFIG['arch']}"
   extensions_dir = Gem::StubSpecification.gemspec_stub("", gem_dir, gem_dir).extensions_dir
   Gem::Specification.each_gemspec([srcdir+'/gems/*']) do |path|
-    dir = File.dirname(path)
-    spec = Dir.chdir(dir) {
-      Gem::Specification.load(File.basename(path))
-    }
+    spec = load_gemspec(path)
     next unless spec.platform == Gem::Platform::RUBY
     next unless spec.full_name == path[srcdir.size..-1][/\A\/gems\/([^\/]+)/, 1]
     spec.extension_dir = "#{extensions_dir}/#{spec.full_name}"

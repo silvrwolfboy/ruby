@@ -135,6 +135,8 @@ module Net
         sock.close if sock
         servers.each(&:close)
       end
+    rescue LoadError
+      # skip (require openssl)
     end
 
     def test_tls_connect_timeout
@@ -151,6 +153,8 @@ module Net
           smtp.start do
           end
         end
+      rescue LoadError
+        # skip (require openssl)
       ensure
         sock.close if sock
         servers.each(&:close)
@@ -162,7 +166,7 @@ module Net
       servers = Socket.tcp_server_sockets("localhost", 0)
       begin
         sock = nil
-        Thread.start do
+        t = Thread.start do
           sock = accept(servers)
           sock.close
         end
@@ -176,6 +180,7 @@ module Net
       ensure
         sock.close if sock
         servers.each(&:close)
+        t.join
       end
     end
 

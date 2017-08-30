@@ -252,7 +252,7 @@ method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, 
 	  case VM_METHOD_TYPE_CFUNC:
 	    {
 		rb_method_cfunc_t *cfunc = (rb_method_cfunc_t *)opts;
-		setup_method_cfunc_struct(&def->body.cfunc, cfunc->func, cfunc->argc);
+		setup_method_cfunc_struct(UNALIGNED_MEMBER_PTR(def, body.cfunc), cfunc->func, cfunc->argc);
 		return;
 	    }
 	  case VM_METHOD_TYPE_ATTRSET:
@@ -264,10 +264,10 @@ method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, 
 
 		def->body.attr.id = (ID)(VALUE)opts;
 
-		cfp = rb_vm_get_ruby_level_next_cfp(th, th->cfp);
+		cfp = rb_vm_get_ruby_level_next_cfp(th, th->ec.cfp);
 
 		if (cfp && (line = rb_vm_get_sourceline(cfp))) {
-		    VALUE location = rb_ary_new3(2, cfp->iseq->body->location.path, INT2FIX(line));
+		    VALUE location = rb_ary_new3(2, rb_iseq_path(cfp->iseq), INT2FIX(line));
 		    RB_OBJ_WRITE(me, &def->body.attr.location, rb_ary_freeze(location));
 		}
 		else {
@@ -279,7 +279,7 @@ method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, 
 	    RB_OBJ_WRITE(me, &def->body.proc, (VALUE)opts);
 	    return;
 	  case VM_METHOD_TYPE_NOTIMPLEMENTED:
-	    setup_method_cfunc_struct(&def->body.cfunc, rb_f_notimplement, -1);
+	    setup_method_cfunc_struct(UNALIGNED_MEMBER_PTR(def, body.cfunc), rb_f_notimplement, -1);
 	    return;
 	  case VM_METHOD_TYPE_OPTIMIZED:
 	    def->body.optimize_type = (enum method_optimized_type)opts;
@@ -541,6 +541,7 @@ rb_method_entry_make(VALUE klass, ID mid, VALUE defined_class, rb_method_visibil
 	if (RTEST(ruby_verbose) &&
 	    type != VM_METHOD_TYPE_UNDEF &&
 	    (old_def->alias_count == 0) &&
+	    !make_refined &&
 	    old_def->type != VM_METHOD_TYPE_UNDEF &&
 	    old_def->type != VM_METHOD_TYPE_ZSUPER &&
 	    old_def->type != VM_METHOD_TYPE_ALIAS) {
@@ -558,7 +559,7 @@ rb_method_entry_make(VALUE klass, ID mid, VALUE defined_class, rb_method_visibil
 		break;
 	    }
 	    if (iseq) {
-		rb_compile_warning(RSTRING_PTR(iseq->body->location.path),
+		rb_compile_warning(RSTRING_PTR(rb_iseq_path(iseq)),
 				   FIX2INT(iseq->body->location.first_lineno),
 				   "previous definition of %"PRIsVALUE" was here",
 				   rb_id2str(old_def->original_id));
@@ -1088,7 +1089,7 @@ static rb_method_visibility_t
 rb_scope_visibility_get(void)
 {
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, th->cfp);
+    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, th->ec.cfp);
 
     if (!vm_env_cref_by_cref(cfp->ep)) {
 	return METHOD_VISI_PUBLIC;
@@ -1102,7 +1103,7 @@ static int
 rb_scope_module_func_check(void)
 {
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, th->cfp);
+    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(th, th->ec.cfp);
 
     if (!vm_env_cref_by_cref(cfp->ep)) {
 	return FALSE;

@@ -133,6 +133,50 @@ class TestHash < Test::Unit::TestCase
     assert_equal(100, h['a'])
     assert_equal(200, h['b'])
     assert_nil(h['c'])
+
+    h = @cls["a", 100, "b", 200]
+    assert_equal(100, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+
+    h = @cls[[["a", 100], ["b", 200]]]
+    assert_equal(100, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+
+    h = @cls[[["a", 100], ["b"], ["c", 300]]]
+    assert_equal(100, h['a'])
+    assert_equal(nil, h['b'])
+    assert_equal(300, h['c'])
+
+    h = @cls[[["a", 100], "b", ["c", 300]]]
+    assert_equal(100, h['a'])
+    assert_equal(nil, h['b'])
+    assert_equal(300, h['c'])
+  end
+
+  def test_s_AREF_duplicated_key
+    alist = [["a", 100], ["b", 200], ["a", 300], ["a", 400]]
+    h = @cls[alist]
+    assert_equal(2, h.size)
+    assert_equal(400, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+    assert_equal(nil, h.key('300'))
+  end
+
+  def test_s_AREF_frozen_key_id
+    key = "a".freeze
+    h = @cls[key, 100]
+    assert_equal(100, h['a'])
+    assert_same(key, *h.keys)
+  end
+
+  def test_s_AREF_key_tampering
+    key = "a".dup
+    h = @cls[key, 100]
+    key.upcase!
+    assert_equal(100, h['a'])
   end
 
   def test_s_new
@@ -145,7 +189,6 @@ class TestHash < Test::Unit::TestCase
     assert_instance_of(@cls, h)
     assert_equal('default', h.default)
     assert_equal('default', h['spurious'])
-
   end
 
   def test_try_convert
@@ -255,6 +298,17 @@ class TestHash < Test::Unit::TestCase
     b = {"ABC" => :t}
     assert_same a.keys[0], b.keys[0]
     assert_same "ABC".freeze, a.keys[0]
+  end
+
+  def test_tainted_string_key
+    str = 'str'.taint
+    h = {}
+    h[str] = nil
+    key = h.keys.first
+    assert_equal true, str.tainted?
+    assert_equal false, str.frozen?
+    assert_equal true, key.tainted?
+    assert_equal true, key.frozen?
   end
 
   def test_EQUAL # '=='
@@ -1474,6 +1528,34 @@ class TestHash < Test::Unit::TestCase
     }
 
     assert_equal([10, 20, 30], [1, 2, 3].map(&h))
+  end
+
+  def test_transform_keys
+    x = @cls[a: 1, b: 2, c: 3]
+    y = x.transform_keys {|k| :"#{k}!" }
+    assert_equal({a: 1, b: 2, c: 3}, x)
+    assert_equal({a!: 1, b!: 2, c!: 3}, y)
+
+    enum = x.transform_keys
+    assert_equal(x.size, enum.size)
+    assert_instance_of(Enumerator, enum)
+
+    y = x.transform_keys.with_index {|k, i| "#{k}.#{i}" }
+    assert_equal(%w(a.0 b.1 c.2), y.keys)
+  end
+
+  def test_transform_keys_bang
+    x = @cls[a: 1, b: 2, c: 3]
+    y = x.transform_keys! {|k| :"#{k}!" }
+    assert_equal({a!: 1, b!: 2, c!: 3}, x)
+    assert_same(x, y)
+
+    enum = x.transform_keys!
+    assert_equal(x.size, enum.size)
+    assert_instance_of(Enumerator, enum)
+
+    x.transform_keys!.with_index {|k, i| "#{k}.#{i}" }
+    assert_equal(%w(a!.0 b!.1 c!.2), x.keys)
   end
 
   def test_transform_values

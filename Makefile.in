@@ -75,9 +75,11 @@ XLDFLAGS = @XLDFLAGS@ $(EXTLDFLAGS)
 EXTLIBS =
 LIBS = @LIBS@ $(EXTLIBS)
 MISSING = @LIBOBJS@ @ALLOCA@
+ENABLE_SHARED = @ENABLE_SHARED@
 LDSHARED = @LIBRUBY_LDSHARED@
 DLDFLAGS = @LIBRUBY_DLDFLAGS@ $(XLDFLAGS) $(ARCH_FLAG)
 SOLIBS = @SOLIBS@
+ENABLE_DEBUG_ENV = @ENABLE_DEBUG_ENV@
 MAINLIBS = @MAINLIBS@
 ARCHMINIOBJS = @MINIOBJS@
 DLNOBJ = @DLNOBJ@
@@ -164,7 +166,7 @@ RMDIRS        = @RMDIRS@
 RMALL         = @RMALL@
 NM            = @NM@
 AR            = @AR@
-ARFLAGS       = @ARFLAGS@
+ARFLAGS       = @ARFLAGS@$(empty)
 RANLIB        = @RANLIB@
 AS            = @AS@
 ASFLAGS       = @ASFLAGS@ $(INCFLAGS)
@@ -172,6 +174,8 @@ IFCHANGE      = $(srcdir)/tool/ifchange
 SET_LC_MESSAGES = env LC_MESSAGES=C
 OBJDUMP       = @OBJDUMP@
 OBJCOPY       = @OBJCOPY@
+HAVE_GIT      = @HAVE_GIT@
+GIT           = @GIT@
 VCS           = @VCS@
 VCSUP         = @VCSUP@
 DTRACE        = @DTRACE@ @DTRACE_OPT@
@@ -192,6 +196,8 @@ NEWLINE_C     = enc/trans/newline.c
 MINIPRELUDE_C = miniprelude.c
 PRELUDE_C     = prelude.c
 RBCONFIG      = .rbconfig.time
+
+MAINSRC = $(MAINOBJ:@OBJEXT@=c)
 
 SRC_FILE      = $<
 OS_SRC_FILE   = $<
@@ -219,6 +225,7 @@ miniruby$(EXEEXT):
 		@-if test -f $@; then $(MV) -f $@ $@.old; $(RM) $@.old; fi
 		$(ECHO) linking $@
 		$(Q) $(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(NORMALMAINOBJ) $(MINIOBJS) $(COMMONOBJS) $(MAINLIBS) $(LIBS) $(OUTFLAG)$@
+		$(Q) $(POSTLINK)
 
 $(PROGRAM):
 		@$(RM) $@
@@ -318,6 +325,8 @@ $(srcdir)/aclocal.m4:
 	type $(ACLOCAL) >/dev/null 2>&1 && exec $(ACLOCAL); \
 	touch $(@F)
 
+prereq: $(srcdir)/$(CONFIGURE)
+
 incs: id.h
 all-incs: probes.h
 
@@ -345,7 +354,7 @@ lex.c: defs/keywords
 
 JIS_PROPS_OPTIONS = -k1,3 -7 -c -j1 -i1 -t -C -P -t --ignore-case -H onig_jis_property_hash -Q onig_jis_property_pool -N onig_jis_property
 
-enc/jis/props.h: enc/jis/props.kwd
+$(srcdir)/enc/jis/props.h: enc/jis/props.kwd
 	$(MAKEDIRS) $(@D)
 	@set +e; \
 	if cmp -s $(?:.kwd=.src) $?; then \
@@ -421,7 +430,7 @@ ext/distclean.sub gems/distclean.sub:: ext/distclean.mk
 ext/realclean.sub gems/realclean.sub:: ext/realclean.mk
 
 ext/clean.mk ext/distclean.mk ext/realclean.mk::
-	$(Q) [ -f $(EXTS_MK) ] && exec $(MAKE) -f $(EXTS_MK) $(@F:.mk=)
+	-$(Q) if [ -f $(EXTS_MK) ]; then exec $(MAKE) -f $(EXTS_MK) $(@F:.mk=); fi
 
 ext/clean:: ext/clean.sub
 ext/distclean:: ext/distclean.sub
@@ -452,7 +461,7 @@ ext/distclean ext/realclean gems/distclean gems/realclean::
 	test "$$#" = 0 && set .; \
 	cd $(@D) 2>/dev/null && \
 	find "$$@" -type d -empty -exec $(RMDIRS) {} + 2> /dev/null || true
-	$(Q) $(RMDIRS) $(@D)
+	$(Q) $(RMDIRS) $(@D) 2> /dev/null || true
 
 clean-enc distclean-enc realclean-enc:
 	@test -f "$(ENC_MK)" || exit 0; \
@@ -470,79 +479,29 @@ update-src::
 
 update-download:: update-config_files
 
-after-update:: common-srcs
+after-update:: prereq
 
-update-mspec:
-	@$(CHDIR) $(srcdir); \
-	if [ -d spec/mspec ]; then \
-	  echo updating mspec ...; \
-	  $(Q1:0=:) set -x; \
-	  cd spec/mspec && \
-	  exec git pull; \
-	else \
-	  echo retrieving mspec ...; \
-	  $(Q1:0=:) set -x; \
-	  exec git clone $(MSPEC_GIT_URL) spec/mspec; \
-	fi
-	$(Q)$(CHDIR) $(srcdir)/spec/mspec && exec git --no-pager log -1 --oneline
+gcov:
+	$(Q) $(BASERUBY) $(srcdir)/tool/run-gcov.rb
 
-update-rubyspec: update-mspec
-	@$(CHDIR) $(srcdir); \
-	if [ -d spec/rubyspec ]; then \
-	  echo updating rubyspec ...; \
-	  $(Q1:0=:) set -x; \
-	  cd spec/rubyspec && \
-	  exec git pull; \
-	else \
-	  echo retrieving rubyspec ...; \
-	  $(Q1:0=:) set -x; \
-	  exec git clone $(RUBYSPEC_GIT_URL) spec/rubyspec; \
-	fi
-	$(Q)$(CHDIR) $(srcdir)/spec/rubyspec && exec git --no-pager log -1 --oneline
-
-test-rubyspec-precheck:
-	@if [ ! -d $(srcdir)/spec/rubyspec ]; then echo No rubyspec here.  make update-rubyspec first.; exit 1; fi
+lcov:
+	$(Q) $(BASERUBY) $(srcdir)/tool/run-lcov.rb
+	$(Q) genhtml --ignore-errors source lcov-c-all.info -o lcov-out
 
 update-doclie:
-	@$(CHDIR) $(srcdir); \
-	if [ -d coverage/doclie ]; then \
-	  echo updating doclie ...; \
-	  $(Q1:0=:) set -x; \
-	  cd coverage/doclie && \
-	  git fetch && \
-	  exec git checkout $(DOCLIE_GIT_REF); \
-	else \
-	  echo retrieving doclie ...; \
-	  $(Q1:0=:) set -x; \
-	  exec git clone --branch $(DOCLIE_GIT_REF) $(DOCLIE_GIT_URL) coverage/doclie; \
-	fi
+	$(Q) $(srcdir)/tool/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
+		--branch $(DOCLIE_GIT_REF) \
+		$(DOCLIE_GIT_URL) doclie $(GIT_OPTS)
 
 update-simplecov-html:
-	@$(CHDIR) $(srcdir); \
-	if [ -d coverage/simplecov-html ]; then \
-	  echo updating simplecov-html ...; \
-	  $(Q1:0=:) set -x; \
-	  cd coverage/simplecov-html && \
-	  git fetch && \
-	  exec git checkout $(SIMPLECOV_HTML_GIT_REF); \
-	else \
-	  echo retrieving simplecov-html ...; \
-	  exec git clone --branch $(SIMPLECOV_HTML_GIT_REF) $(SIMPLECOV_HTML_GIT_URL) coverage/simplecov-html; \
-	fi
+	$(Q) $(srcdir)/tool/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
+		--branch $(SIMPLECOV_HTML_GIT_REF) \
+		$(SIMPLECOV_HTML_GIT_URL) simplecov-html $(GIT_OPTS)
 
 update-simplecov:
-	@$(CHDIR) $(srcdir); \
-	if [ -d coverage/simplecov ]; then \
-	  echo updating simplecov ...; \
-	  $(Q1:0=:) set -x; \
-	  cd coverage/simplecov && \
-	  git fetch && \
-	  exec git checkout $(SIMPLECOV_GIT_REF); \
-	else \
-	  echo retrieving simplecov ...; \
-	  $(Q1:0=:) set -x; \
-	  exec git clone --branch $(SIMPLECOV_GIT_REF) $(SIMPLECOV_GIT_URL) coverage/simplecov; \
-	fi
+	$(Q) $(srcdir)/tool/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \
+		--branch $(SIMPLECOV_GIT_REF)  \
+		$(SIMPLECOV_GIT_URL) simplecov $(GIT_OPTS)
 
 update-coverage: update-simplecov update-simplecov-html update-doclie
 

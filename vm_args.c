@@ -29,8 +29,7 @@ struct args_info {
 
 enum arg_setup_type {
     arg_setup_method,
-    arg_setup_block,
-    arg_setup_lambda
+    arg_setup_block
 };
 
 static inline int
@@ -526,7 +525,7 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
     int given_argc;
     struct args_info args_body, *args;
     VALUE keyword_hash = Qnil;
-    VALUE * const orig_sp = th->cfp->sp;
+    VALUE * const orig_sp = th->ec.cfp->sp;
     unsigned int i;
 
     /*
@@ -546,7 +545,7 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
     for (i=calling->argc; i<iseq->body->param.size; i++) {
 	locals[i] = Qnil;
     }
-    th->cfp->sp = &locals[i];
+    th->ec.cfp->sp = &locals[i];
 
     /* setup args */
     args = &args_body;
@@ -595,8 +594,6 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
 	    given_argc = RARRAY_LENINT(args->rest);
 	}
 	break;
-      case arg_setup_lambda:
-	break;
     }
 
     /* argc check */
@@ -607,7 +604,7 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
 	}
 	else {
 	    if (arg_setup_type == arg_setup_block) {
-		CHECK_VM_STACK_OVERFLOW(th->cfp, min_argc);
+		CHECK_VM_STACK_OVERFLOW(th->ec.cfp, min_argc);
 		given_argc = min_argc;
 		args_extend(args, min_argc);
 	    }
@@ -618,7 +615,9 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
     }
 
     if (given_argc > min_argc &&
-	(iseq->body->param.flags.has_kw || iseq->body->param.flags.has_kwrest) &&
+	(iseq->body->param.flags.has_kw || iseq->body->param.flags.has_kwrest ||
+	 (!iseq->body->param.flags.has_rest && given_argc > max_argc &&
+	  (ci->flag & VM_CALL_KW_SPLAT))) &&
 	args->kw_argv == NULL) {
 	if (args_pop_keyword_hash(args, &keyword_hash, th)) {
 	    given_argc--;
@@ -679,6 +678,9 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
     else if (iseq->body->param.flags.has_kwrest) {
 	args_setup_kw_rest_parameter(keyword_hash, locals + iseq->body->param.keyword->rest_start);
     }
+    else if (!NIL_P(keyword_hash) && RHASH_SIZE(keyword_hash) > 0) {
+	argument_kw_error(th, iseq, "unknown", rb_hash_keys(keyword_hash));
+    }
 
     if (iseq->body->param.flags.has_block) {
 	args_setup_block_parameter(th, calling, locals + iseq->body->param.block_start);
@@ -693,7 +695,7 @@ setup_parameters_complex(rb_thread_t * const th, const rb_iseq_t * const iseq,
     }
 #endif
 
-    th->cfp->sp = orig_sp;
+    th->ec.cfp->sp = orig_sp;
     return opt_pc;
 }
 
@@ -705,12 +707,13 @@ raise_argument_error(rb_thread_t *th, const rb_iseq_t *iseq, const VALUE exc)
     if (iseq) {
 	vm_push_frame(th, iseq, VM_FRAME_MAGIC_DUMMY | VM_ENV_FLAG_LOCAL, Qnil /* self */,
 		      VM_BLOCK_HANDLER_NONE /* specval*/, Qfalse /* me or cref */,
-		      iseq->body->iseq_encoded, th->cfp->sp, 0, 0 /* stack_max */);
-	at = rb_vm_backtrace_object();
+		      iseq->body->iseq_encoded,
+		      th->ec.cfp->sp, 0, 0 /* stack_max */);
+	at = rb_threadptr_backtrace_object(th);
 	rb_vm_pop_frame(th);
     }
     else {
-	at = rb_vm_backtrace_object();
+	at = rb_threadptr_backtrace_object(th);
     }
 
     rb_ivar_set(exc, idBt_locations, at);
@@ -721,7 +724,26 @@ raise_argument_error(rb_thread_t *th, const rb_iseq_t *iseq, const VALUE exc)
 static void
 argument_arity_error(rb_thread_t *th, const rb_iseq_t *iseq, const int miss_argc, const int min_argc, const int max_argc)
 {
-    raise_argument_error(th, iseq, rb_arity_error_new(miss_argc, min_argc, max_argc));
+    VALUE exc = rb_arity_error_new(miss_argc, min_argc, max_argc);
+    if (iseq->body->param.flags.has_kw) {
+	const struct rb_iseq_param_keyword *const kw = iseq->body->param.keyword;
+	const ID *keywords = kw->table;
+	int req_key_num = kw->required_num;
+	if (req_key_num > 0) {
+	    static const char required[] = "; required keywords";
+	    VALUE mesg = rb_attr_get(exc, idMesg);
+	    rb_str_resize(mesg, RSTRING_LEN(mesg)-1);
+	    rb_str_cat(mesg, required, sizeof(required) - 1 - (req_key_num == 1));
+	    rb_str_cat_cstr(mesg, ":");
+	    do {
+		rb_str_cat_cstr(mesg, " ");
+		rb_str_append(mesg, rb_id2str(*keywords++));
+		rb_str_cat_cstr(mesg, ",");
+	    } while (--req_key_num);
+	    RSTRING_PTR(mesg)[RSTRING_LEN(mesg)-1] = ')';
+	}
+    }
+    raise_argument_error(th, iseq, exc);
 }
 
 static void
@@ -776,7 +798,7 @@ vm_to_proc(VALUE proc)
 {
     if (UNLIKELY(!rb_obj_is_proc(proc))) {
 	VALUE b;
-	b = rb_check_convert_type(proc, T_DATA, "Proc", "to_proc");
+	b = rb_check_convert_type_with_id(proc, T_DATA, "Proc", idTo_proc);
 
 	if (NIL_P(b) || !rb_obj_is_proc(b)) {
 	    rb_raise(rb_eTypeError,

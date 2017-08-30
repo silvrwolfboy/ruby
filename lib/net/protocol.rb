@@ -119,12 +119,14 @@ module Net # :nodoc:
       read_bytes = 0
       begin
         while read_bytes + @rbuf.size < len
-          dest << (s = rbuf_consume(@rbuf.size))
+          s = rbuf_consume(@rbuf.size)
           read_bytes += s.size
+          dest << s
           rbuf_fill
         end
-        dest << (s = rbuf_consume(len - read_bytes))
+        s = rbuf_consume(len - read_bytes)
         read_bytes += s.size
+        dest << s
       rescue EOFError
         raise unless ignore_eof
       end
@@ -137,8 +139,9 @@ module Net # :nodoc:
       read_bytes = 0
       begin
         while true
-          dest << (s = rbuf_consume(@rbuf.size))
+          s = rbuf_consume(@rbuf.size)
           read_bytes += s.size
+          dest << s
           rbuf_fill
         end
       rescue EOFError
@@ -171,7 +174,9 @@ module Net # :nodoc:
     def rbuf_fill
       case rv = @io.read_nonblock(BUFSIZE, exception: false)
       when String
-        return @rbuf << rv
+        @rbuf << rv
+        rv.clear
+        return
       when :wait_readable
         @io.to_io.wait_readable(@read_timeout) or raise Net::ReadTimeout
         # continue looping

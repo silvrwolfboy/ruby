@@ -23,6 +23,7 @@
 #include <CoreFoundation/CFString.h>
 #endif
 
+#include "id.h"
 #include "internal.h"
 #include "ruby/io.h"
 #include "ruby/util.h"
@@ -126,6 +127,14 @@ int flock(int, int);
 #define STAT(p, s)	stat((p), (s))
 #endif
 
+#if defined _WIN32 || defined __APPLE__
+# define USE_OSPATH 1
+# define TO_OSPATH(str) rb_str_encode_ospath(str)
+#else
+# define USE_OSPATH 0
+# define TO_OSPATH(str) (str)
+#endif
+
 VALUE rb_cFile;
 VALUE rb_mFileTest;
 VALUE rb_cStat;
@@ -178,10 +187,7 @@ rb_get_path_check_to_string(VALUE obj, int level)
 	return obj;
     }
     CONST_ID(to_path, "to_path");
-    tmp = rb_check_funcall(obj, to_path, 0, 0);
-    if (tmp == Qundef) {
-	tmp = obj;
-    }
+    tmp = rb_check_funcall_default(obj, to_path, 0, 0, obj);
     StringValue(tmp);
     return tmp;
 }
@@ -202,7 +208,7 @@ rb_get_path_check_convert(VALUE obj, VALUE tmp, int level)
     return rb_str_new4(tmp);
 }
 
-static VALUE
+VALUE
 rb_get_path_check(VALUE obj, int level)
 {
     VALUE tmp = rb_get_path_check_to_string(obj, level);
@@ -224,7 +230,7 @@ rb_get_path(VALUE obj)
 VALUE
 rb_str_encode_ospath(VALUE path)
 {
-#if defined _WIN32 || defined __APPLE__
+#if USE_OSPATH
     int encidx = ENCODING_GET(path);
 #ifdef _WIN32
     if (encidx == ENCINDEX_ASCII) {
@@ -371,6 +377,9 @@ apply2files(void (*func)(const char *, VALUE, void *), int argc, VALUE *argv, vo
  *
  *  Returns the pathname used to create <i>file</i> as a string. Does
  *  not normalize the name.
+ *
+ *  The pathname may not point the file corresponding to <i>file</i>.
+ *  e.g. file has been moved, deleted, or created with <code>File::TMPFILE</code> option.
  *
  *     File.new("testfile").path               #=> "testfile"
  *     File.new("/tmp/../tmp/xxx", "w").path   #=> "/tmp/../tmp/xxx"
@@ -1011,7 +1020,7 @@ rb_stat(VALUE file, struct stat *st)
 {
     VALUE tmp;
 
-    tmp = rb_check_convert_type(file, T_FILE, "IO", "to_io");
+    tmp = rb_check_convert_type_with_id(file, T_FILE, "IO", idTo_io);
     if (!NIL_P(tmp)) {
 	rb_io_t *fptr;
 
@@ -1030,7 +1039,7 @@ w32_io_info(VALUE *file, BY_HANDLE_FILE_INFORMATION *st)
     VALUE tmp;
     HANDLE f, ret = 0;
 
-    tmp = rb_check_convert_type(*file, T_FILE, "IO", "to_io");
+    tmp = rb_check_convert_type_with_id(*file, T_FILE, "IO", idTo_io);
     if (!NIL_P(tmp)) {
 	rb_io_t *fptr;
 
@@ -3810,11 +3819,10 @@ realpath_rec(long *prefixlenp, VALUE *resolvedp, const char *unresolved, VALUE l
             else {
                 struct stat sbuf;
                 int ret;
-                VALUE testpath2 = rb_str_encode_ospath(testpath);
 #ifdef __native_client__
-                ret = stat(RSTRING_PTR(testpath2), &sbuf);
+                ret = stat(RSTRING_PTR(testpath), &sbuf);
 #else
-                ret = lstat(RSTRING_PTR(testpath2), &sbuf);
+                ret = lstat(RSTRING_PTR(testpath), &sbuf);
 #endif
                 if (ret == -1) {
 		    int e = errno;
@@ -3889,9 +3897,12 @@ rb_realpath_internal(VALUE basedir, VALUE path, int strict)
 
     if (!NIL_P(basedir)) {
         FilePathValue(basedir);
-        basedir = rb_str_dup_frozen(basedir);
+        basedir = TO_OSPATH(rb_str_dup_frozen(basedir));
     }
 
+    enc = rb_enc_get(unresolved_path);
+    origenc = enc;
+    unresolved_path = TO_OSPATH(unresolved_path);
     RSTRING_GETMEM(unresolved_path, ptr, len);
     path_names = skipprefixroot(ptr, ptr + len, rb_enc_get(unresolved_path));
     if (ptr != path_names) {
@@ -3908,7 +3919,7 @@ rb_realpath_internal(VALUE basedir, VALUE path, int strict)
         }
     }
 
-    curdir = rb_dir_getwd();
+    curdir = rb_dir_getwd_ospath();
     RSTRING_GETMEM(curdir, ptr, len);
     curdir_names = skipprefixroot(ptr, ptr + len, rb_enc_get(curdir));
     resolved = rb_str_subseq(curdir, 0, curdir_names - ptr);
@@ -3916,7 +3927,6 @@ rb_realpath_internal(VALUE basedir, VALUE path, int strict)
   root_found:
     RSTRING_GETMEM(resolved, prefixptr, prefixlen);
     pend = prefixptr + prefixlen;
-    enc = rb_enc_get(resolved);
     ptr = chompdirsep(prefixptr, pend, enc);
     if (ptr < pend) {
         prefixlen = ++ptr - prefixptr;
@@ -3931,7 +3941,6 @@ rb_realpath_internal(VALUE basedir, VALUE path, int strict)
     }
 #endif
 
-    origenc = enc;
     switch (rb_enc_to_index(enc)) {
       case ENCINDEX_ASCII:
       case ENCINDEX_US_ASCII:
@@ -3945,8 +3954,14 @@ rb_realpath_internal(VALUE basedir, VALUE path, int strict)
         realpath_rec(&prefixlen, &resolved, basedir_names, loopcheck, 1, 0);
     realpath_rec(&prefixlen, &resolved, path_names, loopcheck, strict, 1);
 
-    if (origenc != enc && rb_enc_str_asciionly_p(resolved))
-	rb_enc_associate(resolved, origenc);
+    if (origenc != rb_enc_get(resolved)) {
+	if (rb_enc_str_asciionly_p(resolved)) {
+	    rb_enc_associate(resolved, origenc);
+	}
+	else {
+	    resolved = rb_str_conv_enc(resolved, NULL, origenc);
+	}
+    }
 
     OBJ_TAINT(resolved);
     return resolved;
@@ -5536,6 +5551,7 @@ rb_stat_sticky(VALUE obj)
 #define HAVE_MKFIFO
 #endif
 
+#ifdef HAVE_MKFIFO
 /*
  *  call-seq:
  *     File.mkfifo(file_name, mode=0666)  => 0
@@ -5546,7 +5562,6 @@ rb_stat_sticky(VALUE obj)
  *  (mode & ~umask).
  */
 
-#ifdef HAVE_MKFIFO
 static VALUE
 rb_file_s_mkfifo(int argc, VALUE *argv)
 {
@@ -5633,9 +5648,9 @@ path_check_0(VALUE path, int execpath)
 	    && !(p && execpath && (st.st_mode & S_ISVTX))
 #endif
 	    && !access(p0, W_OK)) {
-	    rb_warn("Insecure world writable dir %s in %sPATH, mode 0%"
-		    PRI_MODET_PREFIX"o",
-		    p0, (execpath ? "" : "LOAD_"), st.st_mode);
+	    rb_enc_warn(enc, "Insecure world writable dir %s in %sPATH, mode 0%"
+			PRI_MODET_PREFIX"o",
+			p0, (execpath ? "" : "LOAD_"), st.st_mode);
 	    if (p) *p = '/';
 	    RB_GC_GUARD(path);
 	    return 0;
@@ -5839,7 +5854,7 @@ rb_find_file_safe(VALUE path, int safe_level)
     if (f[0] == '~') {
 	tmp = file_expand_path_1(path);
 	if (safe_level >= 1 && OBJ_TAINTED(tmp)) {
-	    rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
+	    rb_raise(rb_eSecurityError, "loading from unsafe file %"PRIsVALUE, tmp);
 	}
 	path = copy_path_class(tmp, path);
 	f = RSTRING_PTR(path);
@@ -5848,7 +5863,7 @@ rb_find_file_safe(VALUE path, int safe_level)
 
     if (expanded || rb_is_absolute_path(f) || is_explicit_relative(f)) {
 	if (safe_level >= 1 && !fpath_check(path)) {
-	    rb_raise(rb_eSecurityError, "loading from unsafe path %s", f);
+	    rb_raise(rb_eSecurityError, "loading from unsafe path %"PRIsVALUE, path);
 	}
 	if (!rb_file_load_ok(f)) return 0;
 	if (!expanded)
@@ -5880,7 +5895,7 @@ rb_find_file_safe(VALUE path, int safe_level)
 
   found:
     if (safe_level >= 1 && !fpath_check(tmp)) {
-	rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
+	rb_raise(rb_eSecurityError, "loading from unsafe file %"PRIsVALUE, tmp);
     }
 
     return copy_path_class(tmp, path);

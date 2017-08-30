@@ -4,6 +4,13 @@
 # generating HTTP responses.
 #++
 class CGI
+  unless const_defined?(:Util)
+    module Util
+      @@accept_charset = "UTF-8" # :nodoc:
+    end
+    include Util
+    extend Util
+  end
 
   $CGI_ENV = ENV    # for FCGI support
 
@@ -146,7 +153,7 @@ class CGI
   #               "language"   => "ja",
   #               "expires"    => Time.now + 30,
   #               "cookie"     => [cookie1, cookie2],
-  #               "my_header1" => "my_value"
+  #               "my_header1" => "my_value",
   #               "my_header2" => "my_value")
   #
   # This method does not perform charset conversion.
@@ -734,7 +741,7 @@ class CGI
   #
   #   CGI.accept_charset = "EUC-JP"
   #
-  @@accept_charset="UTF-8"
+  @@accept_charset="UTF-8" if false # needed for rdoc?
 
   # Return the accept character set for all new CGI instances.
   def self.accept_charset

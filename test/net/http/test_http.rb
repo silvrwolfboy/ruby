@@ -134,6 +134,23 @@ class TestNetHTTP < Test::Unit::TestCase
     end
   end
 
+  def test_proxy_eh_ENV_with_user
+    clean_http_proxy_env do
+      ENV['http_proxy'] = 'http://foo:bar@proxy.example:8000'
+
+      http = Net::HTTP.new 'hostname.example'
+
+      assert_equal true, http.proxy?
+      if Net::HTTP::ENVIRONMENT_VARIABLE_IS_MULTIUSER_SAFE
+        assert_equal 'foo', http.proxy_user
+        assert_equal 'bar', http.proxy_pass
+      else
+        assert_nil http.proxy_user
+        assert_nil http.proxy_pass
+      end
+    end
+  end
+
   def test_proxy_eh_ENV_none_set
     clean_http_proxy_env do
       assert_equal false, Net::HTTP.new('hostname.example').proxy?
@@ -208,13 +225,42 @@ class TestNetHTTP < Test::Unit::TestCase
     def host.to_str; raise SocketError, "open failure"; end
     uri = Struct.new(:scheme, :hostname, :port).new("http", host, port)
     assert_raise_with_message(SocketError, /#{host}:#{port}/) do
-      Net::HTTP.get(uri)
+      clean_http_proxy_env{ Net::HTTP.get(uri) }
     end
   end
 
 end
 
 module TestNetHTTP_version_1_1_methods
+
+  def test_s_start
+    begin
+      h = Net::HTTP.start(config('host'), config('port'))
+    ensure
+      h&.finish
+    end
+    assert_equal config('host'), h.address
+    assert_equal config('port'), h.port
+    assert_equal true, h.instance_variable_get(:@proxy_from_env)
+
+    begin
+      h = Net::HTTP.start(config('host'), config('port'), :ENV)
+    ensure
+      h&.finish
+    end
+    assert_equal config('host'), h.address
+    assert_equal config('port'), h.port
+    assert_equal true, h.instance_variable_get(:@proxy_from_env)
+
+    begin
+      h = Net::HTTP.start(config('host'), config('port'), nil)
+    ensure
+      h&.finish
+    end
+    assert_equal config('host'), h.address
+    assert_equal config('port'), h.port
+    assert_equal false, h.instance_variable_get(:@proxy_from_env)
+  end
 
   def test_s_get
     assert_equal $test_net_http_data,

@@ -532,6 +532,19 @@ class TestIO < Test::Unit::TestCase
   end
 
   if have_nonblock?
+    def test_copy_stream_no_busy_wait
+      msg = 'r58534 [ruby-core:80969] [Backport #13533]'
+      IO.pipe do |r,w|
+        r.nonblock = true
+        assert_cpu_usage_low(msg) do
+          th = Thread.new { IO.copy_stream(r, IO::NULL) }
+          sleep 0.1
+          w.close
+          th.join
+        end
+      end
+    end
+
     def test_copy_stream_pipe_nonblock
       mkcdtmpdir {
         with_read_pipe("abc") {|r1|
@@ -2810,6 +2823,28 @@ __END__
     end;
   end
 
+  def test_single_exception_on_close
+    a = []
+    t = []
+    10.times do
+      r, w = IO.pipe
+      a << [r, w]
+      t << Thread.new do
+        while r.gets
+        end rescue IOError
+        Thread.current.pending_interrupt?
+      end
+    end
+    a.each do |r, w|
+      w.write -"\n"
+      w.close
+      r.close
+    end
+    t.each do |th|
+      assert_equal false, th.value, '[ruby-core:81581] [Bug #13632]'
+    end
+  end
+
   def test_open_mode
     feature4742 = "[ruby-core:36338]"
     bug6055 = '[ruby-dev:45268]'
@@ -3398,24 +3433,30 @@ __END__
   end
 
   def test_race_closed_stream
-    bug13158 = '[ruby-core:79262] [Bug #13158]'
-    closed = nil
-    IO.pipe do |r, w|
-      thread = Thread.new do
-        begin
-          while r.gets
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      bug13158 = '[ruby-core:79262] [Bug #13158]'
+      closed = nil
+      q = Queue.new
+      IO.pipe do |r, w|
+        thread = Thread.new do
+          begin
+            q << true
+            while r.gets
+            end
+          ensure
+            closed = r.closed?
           end
-        ensure
-          closed = r.closed?
         end
+        q.pop
+        sleep 0.01 until thread.stop?
+        r.close
+        assert_raise_with_message(IOError, /stream closed/) do
+          thread.join
+        end
+        assert_equal(true, closed, bug13158 + ': stream should be closed')
       end
-      sleep 0.01
-      r.close
-      assert_raise_with_message(IOError, /stream closed/) do
-        thread.join
-      end
-      assert_equal(true, closed, "#{bug13158}: stream should be closed")
-    end
+    end;
   end
 
   if RUBY_ENGINE == "ruby" # implementation details
@@ -3525,5 +3566,42 @@ __END__
         end
       end
     end
+
+    def test_pread
+      make_tempfile { |t|
+        open(t.path) do |f|
+          assert_equal("bar", f.pread(3, 4))
+          buf = "asdf"
+          assert_equal("bar", f.pread(3, 4, buf))
+          assert_equal("bar", buf)
+          assert_raise(EOFError) { f.pread(1, f.size) }
+        end
+      }
+    end if IO.method_defined?(:pread)
+
+    def test_pwrite
+      make_tempfile { |t|
+        open(t.path, IO::RDWR) do |f|
+          assert_equal(3, f.pwrite("ooo", 4))
+          assert_equal("ooo", f.pread(3, 4))
+        end
+      }
+    end if IO.method_defined?(:pread) and IO.method_defined?(:pwrite)
   end
+
+  def test_select_exceptfds
+    if Etc.uname[:sysname] == 'SunOS' && Etc.uname[:release] == '5.11'
+      skip "Solaris 11 fails this"
+    end
+
+    TCPServer.open('localhost', 0) do |svr|
+      con = TCPSocket.new('localhost', svr.addr[1])
+      acc = svr.accept
+      assert_equal 5, con.send('hello', Socket::MSG_OOB)
+      set = IO.select(nil, nil, [acc], 30)
+      assert_equal([[], [], [acc]], set, 'IO#select exceptions array OK')
+      acc.close
+      con.close
+    end
+  end if Socket.const_defined?(:MSG_OOB)
 end

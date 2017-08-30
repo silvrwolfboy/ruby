@@ -84,6 +84,18 @@ class TestSprintf < Test::Unit::TestCase
     assert_equal("NaN", sprintf("%-f", nan))
     assert_equal("+NaN", sprintf("%+f", nan))
 
+    assert_equal("NaN", sprintf("%3f", nan))
+    assert_equal("NaN", sprintf("%-3f", nan))
+    assert_equal("+NaN", sprintf("%+3f", nan))
+
+    assert_equal(" NaN", sprintf("% 3f", nan))
+    assert_equal(" NaN", sprintf("%- 3f", nan))
+    assert_equal("+NaN", sprintf("%+ 3f", nan))
+
+    assert_equal(" NaN", sprintf("% 03f", nan))
+    assert_equal(" NaN", sprintf("%- 03f", nan))
+    assert_equal("+NaN", sprintf("%+ 03f", nan))
+
     assert_equal("     NaN", sprintf("%8f", nan))
     assert_equal("NaN     ", sprintf("%-8f", nan))
     assert_equal("    +NaN", sprintf("%+8f", nan))
@@ -107,6 +119,26 @@ class TestSprintf < Test::Unit::TestCase
     assert_equal("Inf", sprintf("%-f", inf))
     assert_equal("+Inf", sprintf("%+f", inf))
 
+    assert_equal(" Inf", sprintf("% f", inf))
+    assert_equal(" Inf", sprintf("%- f", inf))
+    assert_equal("+Inf", sprintf("%+ f", inf))
+
+    assert_equal(" Inf", sprintf("% 0f", inf))
+    assert_equal(" Inf", sprintf("%- 0f", inf))
+    assert_equal("+Inf", sprintf("%+ 0f", inf))
+
+    assert_equal("Inf", sprintf("%3f", inf))
+    assert_equal("Inf", sprintf("%-3f", inf))
+    assert_equal("+Inf", sprintf("%+3f", inf))
+
+    assert_equal(" Inf", sprintf("% 3f", inf))
+    assert_equal(" Inf", sprintf("%- 3f", inf))
+    assert_equal("+Inf", sprintf("%+ 3f", inf))
+
+    assert_equal(" Inf", sprintf("% 03f", inf))
+    assert_equal(" Inf", sprintf("%- 03f", inf))
+    assert_equal("+Inf", sprintf("%+ 03f", inf))
+
     assert_equal("     Inf", sprintf("%8f", inf))
     assert_equal("Inf     ", sprintf("%-8f", inf))
     assert_equal("    +Inf", sprintf("%+8f", inf))
@@ -126,6 +158,26 @@ class TestSprintf < Test::Unit::TestCase
     assert_equal("-Inf", sprintf("%f", -inf))
     assert_equal("-Inf", sprintf("%-f", -inf))
     assert_equal("-Inf", sprintf("%+f", -inf))
+
+    assert_equal("-Inf", sprintf("% f", -inf))
+    assert_equal("-Inf", sprintf("%- f", -inf))
+    assert_equal("-Inf", sprintf("%+ f", -inf))
+
+    assert_equal("-Inf", sprintf("% 0f", -inf))
+    assert_equal("-Inf", sprintf("%- 0f", -inf))
+    assert_equal("-Inf", sprintf("%+ 0f", -inf))
+
+    assert_equal("-Inf", sprintf("%4f", -inf))
+    assert_equal("-Inf", sprintf("%-4f", -inf))
+    assert_equal("-Inf", sprintf("%+4f", -inf))
+
+    assert_equal("-Inf", sprintf("% 4f", -inf))
+    assert_equal("-Inf", sprintf("%- 4f", -inf))
+    assert_equal("-Inf", sprintf("%+ 4f", -inf))
+
+    assert_equal("-Inf", sprintf("% 04f", -inf))
+    assert_equal("-Inf", sprintf("%- 04f", -inf))
+    assert_equal("-Inf", sprintf("%+ 04f", -inf))
 
     assert_equal("    -Inf", sprintf("%8f", -inf))
     assert_equal("-Inf    ", sprintf("%-8f", -inf))
@@ -372,6 +424,16 @@ class TestSprintf < Test::Unit::TestCase
     assert_equal("%" * BSIZ, sprintf("%%" * BSIZ))
   end
 
+  def test_percent_sign_at_end
+    assert_raise_with_message(ArgumentError, "incomplete format specifier; use %% (double %) instead") do
+      sprintf("%")
+    end
+
+    assert_raise_with_message(ArgumentError, "incomplete format specifier; use %% (double %) instead") do
+      sprintf("abc%")
+    end
+  end
+
   def test_rb_sprintf
     assert_match(/^#<TestSprintf::T012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789:0x[0-9a-f]+>$/,
                  T012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789.new.inspect)
@@ -450,6 +512,12 @@ class TestSprintf < Test::Unit::TestCase
   def test_width_underflow
     bug = 'https://github.com/mruby/mruby/issues/3347'
     assert_equal("!", sprintf("%*c", 0, ?!.ord), bug)
+  end
+
+  def test_negative_width_overflow
+    assert_raise_with_message(ArgumentError, /too big/) do
+      sprintf("%*s", RbConfig::LIMITS["INT_MIN"], "")
+    end
   end
 
   def test_no_hidden_garbage

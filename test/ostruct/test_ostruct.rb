@@ -183,4 +183,37 @@ class TC_OpenStruct < Test::Unit::TestCase
     os.foo = 44
     assert_equal(43, os.foo)
   end
+
+  def test_allocate_subclass
+    bug = '[ruby-core:80292] [Bug #13358] allocate should not call initialize'
+    c = Class.new(OpenStruct) {
+      def initialize(x,y={})super(y);end
+    }
+    os = assert_nothing_raised(ArgumentError, bug) {c.allocate}
+    assert_instance_of(c, os)
+  end
+
+  def test_private_method
+    os = OpenStruct.new
+    class << os
+      private
+      def foo
+      end
+    end
+    assert_raise_with_message(NoMethodError, /private method/) do
+      os.foo true, true
+    end
+  end
+
+  def test_protected_method
+    os = OpenStruct.new
+    class << os
+      protected
+      def foo
+      end
+    end
+    assert_raise_with_message(NoMethodError, /protected method/) do
+      os.foo true, true
+    end
+  end
 end

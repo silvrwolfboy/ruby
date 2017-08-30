@@ -855,6 +855,21 @@ imemo_type(VALUE imemo)
     return (RBASIC(imemo)->flags >> FL_USHIFT) & imemo_mask;
 }
 
+static inline int
+imemo_type_p(VALUE imemo, enum imemo_type imemo_type)
+{
+    if (LIKELY(!RB_SPECIAL_CONST_P(imemo))) {
+	/* fixed at compile time if imemo_type is given. */
+	const VALUE mask = (imemo_mask << FL_USHIFT) | RUBY_T_MASK;
+	const VALUE expected_type = (imemo_type << FL_USHIFT) | T_IMEMO;
+	/* fixed at runtime. */
+	return expected_type == (RBASIC(imemo)->flags & mask);
+    }
+    else {
+	return 0;
+    }
+}
+
 /* FL_USER0 to FL_USER2 is for type */
 #define IMEMO_FL_USHIFT (FL_USHIFT + 3)
 #define IMEMO_FL_USER0 FL_USER3
@@ -877,6 +892,8 @@ struct vm_svar {
 
 /* THROW_DATA */
 
+#define THROW_DATA_CONSUMED IMEMO_FL_USER0
+
 struct vm_throw_data {
     VALUE flags;
     VALUE reserved;
@@ -885,19 +902,34 @@ struct vm_throw_data {
     VALUE throw_state;
 };
 
-#define THROW_DATA_P(err) RB_TYPE_P((err), T_IMEMO)
+#define THROW_DATA_P(err) RB_TYPE_P((VALUE)(err), T_IMEMO)
 
 /* IFUNC */
+
+struct vm_ifunc_argc {
+#if SIZEOF_INT * 2 > SIZEOF_VALUE
+    int min: (SIZEOF_VALUE * CHAR_BIT) / 2;
+    int max: (SIZEOF_VALUE * CHAR_BIT) / 2;
+#else
+    int min, max;
+#endif
+};
 
 struct vm_ifunc {
     VALUE flags;
     VALUE reserved;
     VALUE (*func)(ANYARGS);
     void *data;
-    ID id;
+    struct vm_ifunc_argc argc;
 };
 
 #define IFUNC_NEW(a, b, c) ((struct vm_ifunc *)rb_imemo_new(imemo_ifunc, (VALUE)(a), (VALUE)(b), (VALUE)(c), 0))
+struct vm_ifunc *rb_vm_ifunc_new(VALUE (*func)(ANYARGS), const void *data, int min_argc, int max_argc);
+static inline struct vm_ifunc *
+rb_vm_ifunc_proc_new(VALUE (*func)(ANYARGS), const void *data)
+{
+    return rb_vm_ifunc_new(func, data, 0, UNLIMITED_ARGUMENTS);
+}
 
 /* MEMO */
 
@@ -941,6 +973,7 @@ struct MEMO {
 enum {
     cmp_opt_Fixnum,
     cmp_opt_String,
+    cmp_opt_Float,
     cmp_optimizable_count
 };
 
@@ -964,6 +997,8 @@ struct cmp_opt_data {
      (((long)a > (long)b) ? 1 : ((long)a < (long)b) ? -1 : 0) : \
      (STRING_P(a) && STRING_P(b) && CMP_OPTIMIZABLE(data, String)) ? \
      rb_str_cmp(a, b) : \
+     (RB_FLOAT_TYPE_P(a) && RB_FLOAT_TYPE_P(b) && CMP_OPTIMIZABLE(data, Float)) ? \
+     rb_float_cmp(a, b) : \
      rb_cmpint(rb_funcallv(a, id_cmp, 1, &b), a, b))
 
 /* ment is in method.h */
@@ -1035,7 +1070,6 @@ VALUE rb_obj_methods(int argc, const VALUE *argv, VALUE obj);
 VALUE rb_obj_protected_methods(int argc, const VALUE *argv, VALUE obj);
 VALUE rb_obj_private_methods(int argc, const VALUE *argv, VALUE obj);
 VALUE rb_obj_public_methods(int argc, const VALUE *argv, VALUE obj);
-int rb_obj_basic_to_s_p(VALUE);
 VALUE rb_special_singleton_class(VALUE);
 VALUE rb_singleton_class_clone_and_attach(VALUE obj, VALUE attach);
 VALUE rb_singleton_class_get(VALUE obj);
@@ -1067,6 +1101,9 @@ void ruby_register_rollback_func_for_ensure(VALUE (*ensure_func)(ANYARGS), VALUE
 
 /* debug.c */
 PRINTF_ARGS(void ruby_debug_printf(const char*, ...), 1, 2);
+
+/* dir.c */
+VALUE rb_dir_getwd_ospath(void);
 
 /* dmyext.c */
 void Init_enc(void);
@@ -1100,9 +1137,22 @@ VALUE rb_check_backtrace(VALUE);
 NORETURN(void rb_async_bug_errno(const char *,int));
 const char *rb_builtin_type_name(int t);
 const char *rb_builtin_class_name(VALUE x);
+PRINTF_ARGS(void rb_sys_warn(const char *fmt, ...), 1, 2);
+PRINTF_ARGS(void rb_syserr_warn(int err, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_enc_warn(rb_encoding *enc, const char *fmt, ...), 2, 3);
+PRINTF_ARGS(void rb_sys_enc_warn(rb_encoding *enc, const char *fmt, ...), 2, 3);
+PRINTF_ARGS(void rb_syserr_enc_warn(int err, rb_encoding *enc, const char *fmt, ...), 3, 4);
+PRINTF_ARGS(void rb_sys_warning(const char *fmt, ...), 1, 2);
+PRINTF_ARGS(void rb_syserr_warning(int err, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_sys_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
+PRINTF_ARGS(void rb_syserr_enc_warning(int err, rb_encoding *enc, const char *fmt, ...), 3, 4);
+
+#define rb_raise_cstr(etype, mesg) \
+    rb_exc_raise(rb_exc_new_str(etype, rb_str_new_cstr(mesg)))
+#define rb_raise_static(etype, mesg) \
+    rb_exc_raise(rb_exc_new_str(etype, rb_str_new_static(mesg, rb_strlen_lit(mesg))))
+
 VALUE rb_name_err_new(VALUE mesg, VALUE recv, VALUE method);
 #define rb_name_err_raise_str(mesg, recv, name) \
     rb_exc_raise(rb_name_err_new(mesg, recv, name))
@@ -1111,12 +1161,13 @@ VALUE rb_name_err_new(VALUE mesg, VALUE recv, VALUE method);
 NORETURN(void ruby_deprecated_internal_feature(const char *));
 #define DEPRECATED_INTERNAL_FEATURE(func) \
     (ruby_deprecated_internal_feature(func), UNREACHABLE)
+VALUE rb_warning_warn(VALUE mod, VALUE str);
+VALUE rb_warning_string(const char *fmt, ...);
 
 /* eval.c */
 VALUE rb_refinement_module_get_refined_class(VALUE module);
 
 /* eval_error.c */
-void ruby_error_print(void);
 VALUE rb_get_backtrace(VALUE info);
 
 /* eval_jump.c */
@@ -1133,6 +1184,7 @@ VALUE rb_file_expand_path_fast(VALUE, VALUE);
 VALUE rb_file_expand_path_internal(VALUE, VALUE, int, int, VALUE);
 VALUE rb_get_path_check_to_string(VALUE, int);
 VALUE rb_get_path_check_convert(VALUE, VALUE, int);
+VALUE rb_get_path_check(VALUE, int);
 void Init_File(void);
 int ruby_is_fd_loadable(int fd);
 
@@ -1178,8 +1230,6 @@ void *ruby_sized_xrealloc2(void *ptr, size_t new_count, size_t element_size, siz
 void ruby_sized_xfree(void *x, size_t size);
 #define SIZED_REALLOC_N(var,type,n,old_n) ((var)=(type*)ruby_sized_xrealloc((char*)(var), (n) * sizeof(type), (old_n) * sizeof(type)))
 #endif
-
-void rb_gc_resurrect(VALUE ptr);
 
 /* optimized version of NEWOBJ() */
 #undef NEWOBJF_OF
@@ -1293,6 +1343,7 @@ VALUE rb_int2str(VALUE num, int base);
 VALUE rb_dbl_hash(double d);
 VALUE rb_fix_plus(VALUE x, VALUE y);
 VALUE rb_int_gt(VALUE x, VALUE y);
+int rb_float_cmp(VALUE x, VALUE y);
 VALUE rb_float_gt(VALUE x, VALUE y);
 VALUE rb_int_ge(VALUE x, VALUE y);
 enum ruby_num_rounding_mode rb_num_get_rounding_option(VALUE opts);
@@ -1308,6 +1359,7 @@ VALUE rb_int_div(VALUE x, VALUE y);
 VALUE rb_int_abs(VALUE num);
 VALUE rb_float_abs(VALUE flt);
 VALUE rb_float_equal(VALUE x, VALUE y);
+VALUE rb_float_eql(VALUE x, VALUE y);
 
 #if USE_FLONUM
 #define RUBY_BIT_ROTL(v, n) (((v) << (n)) | ((v) >> ((sizeof(v) * 8) - n)))
@@ -1392,6 +1444,9 @@ NORETURN(void rb_undefined_alloc(VALUE klass));
 double rb_num_to_dbl(VALUE val);
 VALUE rb_obj_dig(int argc, VALUE *argv, VALUE self, VALUE notfound);
 VALUE rb_immutable_obj_clone(int, VALUE *, VALUE);
+VALUE rb_obj_not_equal(VALUE obj1, VALUE obj2);
+VALUE rb_convert_type_with_id(VALUE,int,const char*,ID);
+VALUE rb_check_convert_type_with_id(VALUE,int,const char*,ID);
 
 struct RBasicRaw {
     VALUE flags;
@@ -1437,8 +1492,10 @@ ID rb_id_attrget(ID id);
 VALUE rb_proc_location(VALUE self);
 st_index_t rb_hash_proc(st_index_t hash, VALUE proc);
 int rb_block_arity(void);
+int rb_block_min_max_arity(int *max);
 VALUE rb_func_proc_new(rb_block_call_func_t func, VALUE val);
-VALUE rb_func_lambda_new(rb_block_call_func_t func, VALUE val);
+VALUE rb_func_lambda_new(rb_block_call_func_t func, VALUE val, int min_argc, int max_argc);
+VALUE rb_block_to_s(VALUE self, const struct rb_block *block, const char *additional_info);
 
 /* process.c */
 #define RB_MAX_GROUPS (65536)
@@ -1504,6 +1561,7 @@ VALUE rb_rational_reciprocal(VALUE x);
 VALUE rb_cstr_to_rat(const char *, int);
 VALUE rb_rational_abs(VALUE self);
 VALUE rb_rational_cmp(VALUE self, VALUE other);
+VALUE rb_numeric_quo(VALUE x, VALUE y);
 
 /* re.c */
 VALUE rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourceline);
@@ -1519,6 +1577,9 @@ extern int ruby_enable_coredump;
 int rb_get_next_signal(void);
 int rb_sigaltstack_size(void);
 
+/* st.c */
+extern void rb_hash_bulk_insert(long, const VALUE *, VALUE);
+
 /* strftime.c */
 #ifdef RUBY_ENCODING_H
 VALUE rb_strftime_timespec(const char *format, size_t format_len, rb_encoding *enc,
@@ -1528,7 +1589,6 @@ VALUE rb_strftime(const char *format, size_t format_len, rb_encoding *enc,
 #endif
 
 /* string.c */
-void Init_frozen_strings(void);
 VALUE rb_fstring(VALUE);
 VALUE rb_fstring_new(const char *ptr, long len);
 #define rb_fstring_lit(str) rb_fstring_new((str), rb_strlen_lit(str))
@@ -1571,6 +1631,7 @@ VALUE rb_external_str_with_enc(VALUE str, rb_encoding *eenc);
 VALUE rb_str_cat_conv_enc_opts(VALUE newstr, long ofs, const char *ptr, long len,
 			       rb_encoding *from, int ecflags, VALUE ecopts);
 VALUE rb_enc_str_scrub(rb_encoding *enc, VALUE str, VALUE repl);
+VALUE rb_str_initialize(VALUE str, const char *ptr, long len, rb_encoding *enc);
 #endif
 #define STR_NOEMBED      FL_USER1
 #define STR_SHARED       FL_USER2 /* = ELTS_SHARED */
@@ -1582,6 +1643,7 @@ size_t rb_str_memsize(VALUE);
 VALUE rb_sym_proc_call(ID mid, int argc, const VALUE *argv, VALUE passed_proc);
 VALUE rb_sym_to_proc(VALUE sym);
 char *rb_str_to_cstr(VALUE str);
+VALUE rb_str_eql(VALUE str1, VALUE str2);
 
 /* symbol.c */
 #ifdef RUBY_ENCODING_H
@@ -1628,7 +1690,6 @@ int rb_thread_to_be_killed(VALUE thread);
 void rb_mutex_allow_trap(VALUE self, int val);
 VALUE rb_uninterruptible(VALUE (*b_proc)(ANYARGS), VALUE data);
 VALUE rb_mutex_owned_p(VALUE self);
-void ruby_kill(rb_pid_t pid, int sig);
 
 /* thread_pthread.c, thread_win32.c */
 void Init_native_thread(void);
@@ -1696,12 +1757,15 @@ typedef void rb_check_funcall_hook(int, VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 				 rb_check_funcall_hook *hook, VALUE arg);
 VALUE rb_check_funcall_default(VALUE, ID, int, const VALUE *, VALUE);
-VALUE rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, int *stateptr);
 VALUE rb_yield_1(VALUE val);
-VALUE rb_yield_lambda(VALUE values);
+VALUE rb_yield_force_blockarg(VALUE values);
+VALUE rb_lambda_call(VALUE obj, ID mid, int argc, const VALUE *argv,
+		     rb_block_call_func_t bl_proc, int min_argc, int max_argc,
+		     VALUE data2);
 
 /* vm_insnhelper.c */
 VALUE rb_equal_opt(VALUE obj1, VALUE obj2);
+VALUE rb_eql_opt(VALUE obj1, VALUE obj2);
 
 /* vm_method.c */
 void Init_eval_method(void);
@@ -1720,8 +1784,7 @@ void rb_backtrace_print_as_bugreport(void);
 int rb_backtrace_p(VALUE obj);
 VALUE rb_backtrace_to_str_ary(VALUE obj);
 VALUE rb_backtrace_to_location_ary(VALUE obj);
-void rb_backtrace_print_to(VALUE output);
-VALUE rb_vm_backtrace_object(void);
+void rb_backtrace_each(VALUE (*iter)(VALUE recv, VALUE str), VALUE output);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 const char *rb_objspace_data_type_name(VALUE obj);

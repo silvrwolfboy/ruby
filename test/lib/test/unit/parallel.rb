@@ -1,4 +1,4 @@
-# frozen_string_literal: false
+# frozen_string_literal: true
 $LOAD_PATH.unshift "#{File.dirname(__FILE__)}/../.."
 require 'test/unit'
 
@@ -61,7 +61,7 @@ module Test
         begin
           th.join
         rescue IOError
-          raise unless ["stream closed","closed stream"].include? $!.message
+          raise unless /stream closed|closed stream/ =~ $!.message
         end
         i.close
 

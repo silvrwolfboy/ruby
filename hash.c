@@ -18,6 +18,7 @@
 #include "probes.h"
 #include "id.h"
 #include "symbol.h"
+#include "gc.h"
 
 #ifdef __APPLE__
 # ifdef HAVE_CRT_EXTERNS_H
@@ -650,7 +651,6 @@ static VALUE
 rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
 {
     VALUE hash, tmp;
-    int i;
 
     if (argc == 1) {
 	tmp = rb_hash_s_try_convert(Qnil, argv[0]);
@@ -704,12 +704,7 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
     }
 
     hash = hash_alloc(klass);
-    if (argc > 0) {
-        RHASH(hash)->ntbl = st_init_table_with_size(&objhash, argc / 2);
-    }
-    for (i=0; i<argc; i+=2) {
-        rb_hash_aset(hash, argv[i], argv[i + 1]);
-    }
+    rb_hash_bulk_insert(argc, argv, hash);
 
     return hash;
 }
@@ -717,13 +712,13 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
 static VALUE
 to_hash(VALUE hash)
 {
-    return rb_convert_type(hash, T_HASH, "Hash", "to_hash");
+    return rb_convert_type_with_id(hash, T_HASH, "Hash", idTo_hash);
 }
 
 VALUE
 rb_check_hash_type(VALUE hash)
 {
-    return rb_check_convert_type(hash, T_HASH, "Hash", "to_hash");
+    return rb_check_convert_type_with_id(hash, T_HASH, "Hash", idTo_hash);
 }
 
 /*
@@ -1033,7 +1028,7 @@ rb_hash_set_default_proc(VALUE hash, VALUE proc)
 	SET_DEFAULT(hash, proc);
 	return proc;
     }
-    b = rb_check_convert_type(proc, T_DATA, "Proc", "to_proc");
+    b = rb_check_convert_type_with_id(proc, T_DATA, "Proc", idTo_proc);
     if (NIL_P(b) || !rb_obj_is_proc(b)) {
 	rb_raise(rb_eTypeError,
 		 "wrong default_proc type %s (expected Proc)",
@@ -1521,11 +1516,38 @@ hash_aset(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
     return ST_CONTINUE;
 }
 
+static VALUE
+fstring_existing_str(VALUE str)
+{
+    st_data_t fstr;
+    st_table *tbl = rb_vm_fstring_table();
+
+    if (st_lookup(tbl, str, &fstr)) {
+	if (rb_objspace_garbage_object_p(fstr)) {
+	    return rb_fstring(str);
+	}
+	else {
+	    return (VALUE)fstr;
+	}
+    }
+    else {
+	return Qnil;
+    }
+}
+
 static int
 hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
 {
-    if (!existing) {
-	*key = rb_str_new_frozen(*key);
+    if (!existing && !RB_OBJ_FROZEN(*key)) {
+	VALUE k;
+
+	if (!RB_OBJ_TAINTED(*key) &&
+	    (k = fstring_existing_str(*key)) != Qnil) {
+	    *key = k;
+	}
+	else {
+	    *key = rb_str_new_frozen(*key);
+	}
     }
     return hash_aset(key, val, arg, existing);
 }
@@ -1803,6 +1825,78 @@ rb_hash_each_pair(VALUE hash)
 }
 
 static int
+transform_keys_i(VALUE key, VALUE value, VALUE result)
+{
+    VALUE new_key = rb_yield(key);
+    rb_hash_aset(result, new_key, value);
+    return ST_CONTINUE;
+}
+
+/*
+ *  call-seq:
+ *     hsh.transform_keys {|key| block } -> new_hash
+ *     hsh.transform_keys                -> an_enumerator
+ *
+ *  Returns a new hash with the results of running the block once for
+ *  every key.
+ *  This method does not change the values.
+ *
+ *     h = { a: 1, b: 2, c: 3 }
+ *     h.transform_keys {|k| k.to_s }  #=> { "a" => 1, "b" => 2, "c" => 3 }
+ *     h.transform_keys(&:to_s)        #=> { "a" => 1, "b" => 2, "c" => 3 }
+ *     h.transform_keys.with_index {|k, i| "#{k}.#{i}" }
+ *                                     #=> { "a.0" => 1, "b.1" => 2, "c.2" => 3 }
+ *
+ *  If no block is given, an enumerator is returned instead.
+ */
+static VALUE
+rb_hash_transform_keys(VALUE hash)
+{
+    VALUE result;
+
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
+    result = rb_hash_new();
+    if (!RHASH_EMPTY_P(hash)) {
+        rb_hash_foreach(hash, transform_keys_i, result);
+    }
+
+    return result;
+}
+
+/*
+ *  call-seq:
+ *     hsh.transform_keys! {|key| block } -> hsh
+ *     hsh.transform_keys!                -> an_enumerator
+ *
+ *  Invokes the given block once for each key in <i>hsh</i>, replacing it
+ *  with the new key returned by the block, and then returns <i>hsh</i>.
+ *  This method does not change the values.
+ *
+ *     h = { a: 1, b: 2, c: 3 }
+ *     h.transform_keys! {|k| k.to_s }  #=> { "a" => 1, "b" => 2, "c" => 3 }
+ *     h.transform_keys!(&:to_sym)      #=> { a: 1, b: 2, c: 3 }
+ *     h.transform_keys!.with_index {|k, i| "#{k}.#{i}" }
+ *                                      #=> { "a.0" => 1, "b.1" => 2, "c.2" => 3 }
+ *
+ *  If no block is given, an enumerator is returned instead.
+ */
+static VALUE
+rb_hash_transform_keys_bang(VALUE hash)
+{
+    RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
+    rb_hash_modify_check(hash);
+    if (RHASH(hash)->ntbl) {
+	long i;
+	VALUE keys = rb_hash_keys(hash);
+	for (i = 0; i < RARRAY_LEN(keys); ++i) {
+	    VALUE key = RARRAY_AREF(keys, i), new_key = rb_yield(key);
+	    rb_hash_aset(hash, new_key, rb_hash_delete(hash, key));
+	}
+    }
+    return hash;
+}
+
+static int
 transform_values_i(VALUE key, VALUE value, VALUE result)
 {
     VALUE new_value = rb_yield(value);
@@ -1812,10 +1906,11 @@ transform_values_i(VALUE key, VALUE value, VALUE result)
 
 /*
  *  call-seq:
- *     hsh.transform_values {|value| block } -> hsh
+ *     hsh.transform_values {|value| block } -> new_hash
  *     hsh.transform_values                  -> an_enumerator
  *
- *  Return a new with the results of running block once for every value.
+ *  Returns a new hash with the results of running the block once for
+ *  every value.
  *  This method does not change the keys.
  *
  *     h = { a: 1, b: 2, c: 3 }
@@ -1845,14 +1940,15 @@ rb_hash_transform_values(VALUE hash)
  *     hsh.transform_values! {|value| block } -> hsh
  *     hsh.transform_values!                  -> an_enumerator
  *
- *  Return a new with the results of running block once for every value.
+ *  Invokes the given block once for each value in <i>hsh</i>, replacing it
+ *  with the new value returned by the block, and then returns <i>hsh</i>.
  *  This method does not change the keys.
  *
  *     h = { a: 1, b: 2, c: 3 }
  *     h.transform_values! {|v| v * v + 1 }  #=> { a: 2, b: 5, c: 10 }
- *     h.transform_values!(&:to_s)           #=> { a: "1", b: "2", c: "3" }
+ *     h.transform_values!(&:to_s)           #=> { a: "2", b: "5", c: "10" }
  *     h.transform_values!.with_index {|v, i| "#{v}.#{i}" }
- *                                           #=> { a: "1.0", b: "2.1", c: "3.2" }
+ *                                           #=> { a: "2.0", b: "5.1", c: "10.2" }
  *
  *  If no block is given, an enumerator is returned instead.
  */
@@ -2502,7 +2598,7 @@ rb_hash_update_by(VALUE hash1, VALUE hash2, rb_hash_update_func *func)
 static VALUE
 rb_hash_merge(VALUE hash1, VALUE hash2)
 {
-    return rb_hash_update(rb_obj_dup(hash1), hash2);
+    return rb_hash_update(rb_hash_dup(hash1), hash2);
 }
 
 static int
@@ -3072,20 +3168,17 @@ extern char **environ;
 #define ENVNMATCH(s1, s2, n) (memcmp((s1), (s2), (n)) == 0)
 #endif
 
-#ifdef _WIN32
-static VALUE
-env_str_transcode(VALUE str, rb_encoding *enc)
-{
-    return rb_str_conv_enc_opts(str, NULL, enc,
-				ECONV_INVALID_REPLACE | ECONV_UNDEF_REPLACE, Qnil);
-}
-#endif
-
 static VALUE
 env_enc_str_new(const char *ptr, long len, rb_encoding *enc)
 {
 #ifdef _WIN32
-    VALUE str = env_str_transcode(rb_utf8_str_new(ptr, len), enc);
+    rb_encoding *internal = rb_default_internal_encoding();
+    const int ecflags = ECONV_INVALID_REPLACE | ECONV_UNDEF_REPLACE;
+    rb_encoding *utf8 = rb_utf8_encoding();
+    VALUE str = rb_enc_str_new(NULL, 0, (internal ? internal : enc));
+    if (NIL_P(rb_str_cat_conv_enc_opts(str, 0, ptr, len, utf8, ecflags, Qnil))) {
+	rb_str_initialize(str, ptr, len, utf8);
+    }
 #else
     VALUE str = rb_external_str_new_with_enc(ptr, len, enc);
 #endif
@@ -4476,6 +4569,8 @@ Init_Hash(void)
     rb_define_method(rb_cHash, "each_pair", rb_hash_each_pair, 0);
     rb_define_method(rb_cHash, "each", rb_hash_each_pair, 0);
 
+    rb_define_method(rb_cHash, "transform_keys", rb_hash_transform_keys, 0);
+    rb_define_method(rb_cHash, "transform_keys!", rb_hash_transform_keys_bang, 0);
     rb_define_method(rb_cHash, "transform_values", rb_hash_transform_values, 0);
     rb_define_method(rb_cHash, "transform_values!", rb_hash_transform_values_bang, 0);
 

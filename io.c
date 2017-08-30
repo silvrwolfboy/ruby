@@ -655,13 +655,13 @@ rb_io_get_fptr(VALUE io)
 VALUE
 rb_io_get_io(VALUE io)
 {
-    return rb_convert_type(io, T_FILE, "IO", "to_io");
+    return rb_convert_type_with_id(io, T_FILE, "IO", idTo_io);
 }
 
 VALUE
 rb_io_check_io(VALUE io)
 {
-    return rb_check_convert_type(io, T_FILE, "IO", "to_io");
+    return rb_check_convert_type_with_id(io, T_FILE, "IO", idTo_io);
 }
 
 VALUE
@@ -4832,6 +4832,148 @@ rb_io_sysread(int argc, VALUE *argv, VALUE io)
     return str;
 }
 
+#if defined(HAVE_PREAD) || defined(HAVE_PWRITE)
+struct prdwr_internal_arg {
+    int fd;
+    void *buf;
+    size_t count;
+    off_t offset;
+};
+#endif /* HAVE_PREAD || HAVE_PWRITE */
+
+#if defined(HAVE_PREAD)
+static VALUE
+internal_pread_func(void *arg)
+{
+    struct prdwr_internal_arg *p = arg;
+    return (VALUE)pread(p->fd, p->buf, p->count, p->offset);
+}
+
+static VALUE
+pread_internal_call(VALUE arg)
+{
+    struct prdwr_internal_arg *p = (struct prdwr_internal_arg *)arg;
+    return rb_thread_io_blocking_region(internal_pread_func, p, p->fd);
+}
+
+/*
+ *  call-seq:
+ *     ios.pread(maxlen, offset[, outbuf])    -> string
+ *
+ *  Reads <i>maxlen</i> bytes from <em>ios</em> using the pread system call
+ *  and returns them as a string without modifying the underlying
+ *  descriptor offset.  This is advantageous compared to combining IO#seek
+ *  and IO#read in that it is atomic, allowing multiple threads/process to
+ *  share the same IO object for reading the file at various locations.
+ *  This bypasses any userspace buffering of the IO layer.
+ *  If the optional <i>outbuf</i> argument is present, it must
+ *  reference a String, which will receive the data.
+ *  Raises <code>SystemCallError</code> on error, <code>EOFError</code>
+ *  at end of file and <code>NotImplementedError</code> if platform does not
+ *  implement the system call.
+ *
+ *     f = File.new("testfile")
+ *     f.read           #=> "This is line one\nThis is line two\n"
+ *     f.pread(12, 0)   #=> "This is line"
+ *     f.pread(9, 8)    #=> "line one\n"
+ */
+static VALUE
+rb_io_pread(int argc, VALUE *argv, VALUE io)
+{
+    VALUE len, offset, str;
+    rb_io_t *fptr;
+    ssize_t n;
+    struct prdwr_internal_arg arg;
+
+    rb_scan_args(argc, argv, "21", &len, &offset, &str);
+    arg.count = NUM2SIZET(len);
+    arg.offset = NUM2OFFT(offset);
+
+    io_setstrbuf(&str, (long)arg.count);
+    if (arg.count == 0) return str;
+    arg.buf = RSTRING_PTR(str);
+
+    GetOpenFile(io, fptr);
+    rb_io_check_byte_readable(fptr);
+
+    arg.fd = fptr->fd;
+    rb_io_check_closed(fptr);
+
+    rb_str_locktmp(str);
+    n = (ssize_t)rb_ensure(pread_internal_call, (VALUE)&arg, rb_str_unlocktmp, str);
+
+    if (n == -1) {
+	rb_sys_fail_path(fptr->pathv);
+    }
+    io_set_read_length(str, n);
+    if (n == 0 && arg.count > 0) {
+	rb_eof_error();
+    }
+    OBJ_TAINT(str);
+
+    return str;
+}
+#else
+# define rb_io_pread rb_f_notimplement
+#endif /* HAVE_PREAD */
+
+#if defined(HAVE_PWRITE)
+static VALUE
+internal_pwrite_func(void *ptr)
+{
+    struct prdwr_internal_arg *arg = ptr;
+
+    return (VALUE)pwrite(arg->fd, arg->buf, arg->count, arg->offset);
+}
+
+/*
+ *  call-seq:
+ *     ios.pwrite(string, offset)    -> integer
+ *
+ *  Writes the given string to <em>ios</em> at <i>offset</i> using pwrite()
+ *  system call.  This is advantageous to combining IO#seek and IO#write
+ *  in that it is atomic, allowing multiple threads/process to share the
+ *  same IO object for reading the file at various locations.
+ *  This bypasses any userspace buffering of the IO layer.
+ *  Returns the number of bytes written.
+ *  Raises <code>SystemCallError</code> on error and <code>NotImplementedError</code>
+ *  if platform does not implement the system call.
+ *
+ *     f = File.new("out", "w")
+ *     f.pwrite("ABCDEF", 3)   #=> 6
+ *
+ *     File.read("out")        #=> "\u0000\u0000\u0000ABCDEF"
+ */
+static VALUE
+rb_io_pwrite(VALUE io, VALUE str, VALUE offset)
+{
+    rb_io_t *fptr;
+    ssize_t n;
+    struct prdwr_internal_arg arg;
+
+    if (!RB_TYPE_P(str, T_STRING))
+	str = rb_obj_as_string(str);
+
+    arg.buf = RSTRING_PTR(str);
+    arg.count = (size_t)RSTRING_LEN(str);
+    arg.offset = NUM2OFFT(offset);
+
+    io = GetWriteIO(io);
+    GetOpenFile(io, fptr);
+    rb_io_check_writable(fptr);
+    arg.fd = fptr->fd;
+
+    n = (ssize_t)rb_thread_io_blocking_region(internal_pwrite_func, &arg, fptr->fd);
+    RB_GC_GUARD(str);
+
+    if (n == -1) rb_sys_fail_path(fptr->pathv);
+
+    return SSIZET2NUM(n);
+}
+#else
+# define rb_io_pwrite rb_f_notimplement
+#endif /* HAVE_PWRITE */
+
 VALUE
 rb_io_binmode(VALUE io)
 {
@@ -5309,9 +5451,12 @@ validate_enc_binmode(int *fmode_p, int ecflags, rb_encoding *enc, rb_encoding *e
         !rb_enc_asciicompat(enc ? enc : rb_default_external_encoding()))
         rb_raise(rb_eArgError, "ASCII incompatible encoding needs binmode");
 
+    if ((fmode & FMODE_BINMODE) && (ecflags & ECONV_NEWLINE_DECORATOR_MASK)) {
+	rb_raise(rb_eArgError, "newline decorator with binary mode");
+    }
     if (!(fmode & FMODE_BINMODE) &&
 	(DEFAULT_TEXTMODE || (ecflags & ECONV_NEWLINE_DECORATOR_MASK))) {
-	fmode |= DEFAULT_TEXTMODE;
+	fmode |= FMODE_TEXTMODE;
 	*fmode_p = fmode;
     }
 #if !DEFAULT_TEXTMODE
@@ -6274,7 +6419,7 @@ pipe_close(VALUE io)
  *
  *  If <i>cmd</i> is an +Array+ of +String+,
  *  then it will be used as the subprocess's +argv+ bypassing a shell.
- *  The array can contains a hash at first for environments and
+ *  The array can contain a hash at first for environments and
  *  a hash at last for options similar to <code>spawn</code>.
  *
  *  The default mode for the new file object is ``r'',
@@ -7185,15 +7330,17 @@ io_puts_ary(VALUE ary, VALUE out, int recur)
  *  call-seq:
  *     ios.puts(obj, ...)    -> nil
  *
- *  Writes the given object(s) to <em>ios</em> as with <code>IO#write</code>.
+ *  Writes the given object(s) to <em>ios</em>.
  *  Writes a newline after any that do not already end
- *  with a newline sequence.
+ *  with a newline sequence. Returns +nil+.
  *
+ *  The stream must be opened for writing.
  *  If called with an array argument, writes each element on a new line.
+ *  Each given object that isn't a string or array will be converted
+ *  by calling its +to_s+ method.
  *  If called without arguments, outputs a single newline.
- *  This doesn't affect $/. ($RS or $INPUT_RECORD_SEPARATOR in English.rb)
  *
- *     $stdout.puts("this", "is", "a", "test")
+ *     $stdout.puts("this", "is", ["a", "test"])
  *
  *  <em>produces:</em>
  *
@@ -7201,6 +7348,9 @@ io_puts_ary(VALUE ary, VALUE out, int recur)
  *     is
  *     a
  *     test
+ *
+ *  Note that +puts+ always uses newlines and is not affected
+ *  by the output record separator (<code>$\\</code>).
  */
 
 VALUE
@@ -9333,11 +9483,17 @@ do_fcntl(int fd, int cmd, long narg)
     arg.narg = narg;
 
     retval = (int)rb_thread_io_blocking_region(nogvl_fcntl, &arg, fd);
+    if (retval != -1) {
+	switch (cmd) {
 #if defined(F_DUPFD)
-    if (retval != -1 && cmd == F_DUPFD) {
-	rb_update_max_fd(retval);
-    }
+	  case F_DUPFD:
 #endif
+#if defined(F_DUPFD_CLOEXEC)
+	  case F_DUPFD_CLOEXEC:
+#endif
+	    rb_update_max_fd(retval);
+	}
+    }
 
     return retval;
 }
@@ -9785,7 +9941,7 @@ open_key_args(int argc, VALUE *argv, VALUE opt, struct foreach_arg *arg)
 	VALUE args;
 	long n;
 
-	v = rb_convert_type(v, T_ARRAY, "Array", "to_ary");
+	v = rb_convert_type_with_id(v, T_ARRAY, "Array", idTo_ary);
 	n = RARRAY_LEN(v) + 1;
 #if SIZEOF_LONG > SIZEOF_INT
 	if (n > INT_MAX) {
@@ -10223,7 +10379,7 @@ nogvl_wait_for_single_fd(int fd, short events)
     fds.fd = fd;
     fds.events = events;
 
-    return poll(&fds, 1, 0);
+    return poll(&fds, 1, -1);
 }
 
 static int
@@ -11841,7 +11997,7 @@ argf_filename_getter(ID id, VALUE *var)
  *     ARGF.file  -> IO or File object
  *
  *  Returns the current file as an +IO+ or +File+ object.
- *  <code>#<IO:<STDIN>></code> is returned when the current file is STDIN.
+ *  <code>$stdin</code> is returned when the current file is STDIN.
  *
  *  For example:
  *
@@ -12458,6 +12614,9 @@ Init_IO(void)
 
     rb_define_method(rb_cIO, "syswrite", rb_io_syswrite, 1);
     rb_define_method(rb_cIO, "sysread",  rb_io_sysread, -1);
+
+    rb_define_method(rb_cIO, "pread", rb_io_pread, -1);
+    rb_define_method(rb_cIO, "pwrite", rb_io_pwrite, 2);
 
     rb_define_method(rb_cIO, "fileno", rb_io_fileno, 0);
     rb_define_alias(rb_cIO, "to_i", "fileno");

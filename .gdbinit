@@ -861,7 +861,7 @@ end
 
 define nd_tree
   set $buf = (struct RString *)rb_str_buf_new(0)
-  call dump_node((VALUE)($buf), rb_str_new(0, 0), 0, ($arg0))
+  call dump_node((VALUE)($buf), rb_str_tmp_new(0), 0, ($arg0))
   printf "%s\n", $buf->as.heap.ptr
 end
 
@@ -1094,8 +1094,8 @@ define rb_ps_thread
   set $ps_thread_th = (rb_thread_t*)$ps_thread->data
   printf "* #<Thread:%p rb_thread_t:%p native_thread:%p>\n", \
     $ps_thread, $ps_thread_th, $ps_thread_th->thread_id
-  set $cfp = $ps_thread_th->cfp
-  set $cfpend = (rb_control_frame_t *)($ps_thread_th->stack + $ps_thread_th->stack_size)-1
+  set $cfp = $ps_thread_th->ec.cfp
+  set $cfpend = (rb_control_frame_t *)($ps_thread_th->ec.stack + $ps_thread_th->ec.stack_size)-1
   while $cfp < $cfpend
     if $cfp->iseq
       if $cfp->pc
