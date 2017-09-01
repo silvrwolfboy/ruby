@@ -5093,7 +5093,7 @@ tr_types	: tr_types ',' tr_type
 		;
 
 tr_type		: tr_cpath
-		| tr_cpath tCOLON2 '[' tr_types rbracket
+		| tr_cpath tCOLON2 '[' { SET_LEX_STATE(EXPR_BEG); } tr_types rbracket
 		| tLBRACK tr_type rbracket
 		| tLBRACK tr_type ',' tr_types rbracket
 		| tLBRACE tr_type tASSOC tr_type '}'
