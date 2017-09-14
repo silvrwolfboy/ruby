@@ -5119,19 +5119,23 @@ tr_returnsig	: tASSOC tr_type
 		|
 		;
 
+tr_constraints	: tr_constraints ';' tr_constraint
+		|
+		;
+
 tr_constraint	: tr_type '=' tr_type
-		| tr_type '<' tr_type
+		| tr_type ':' tr_type
 		;
 
 tr_gendeclarg	: tCONSTANT
-		| tCONSTANT ':' tr_constraint
+		| tCONSTANT ':' tr_type
 		;
 
 tr_gendeclargs	: tr_gendeclargs ',' tr_gendeclarg
 		| tr_gendeclarg
 		;
 
-tr_methodgenargs: '[' tr_gendeclargs rbracket
+tr_methodgenargs: '[' tr_gendeclargs tr_constraints rbracket
 		|
 		;
 
