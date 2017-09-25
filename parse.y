@@ -2080,6 +2080,10 @@ arg		: lhs '=' arg_rhs
 			$$ = const_path_field($1, $3);
 			$$ = new_const_op_assign($$, $4, $5);
 		    }
+		| primary_value tCOLON2 '[' tr_types rbracket
+		    {
+			$$ = $1;
+		    }
 		| tCOLON3 tCONSTANT tOP_ASGN arg_rhs
 		    {
 			$$ = top_const_field($2);
