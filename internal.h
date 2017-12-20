@@ -115,7 +115,7 @@ extern "C" {
 /* __builtin_mul_overflow_p can take bitfield */
 /* and GCC permits bitfields for integers other than int */
 #define MUL_OVERFLOW_FIXNUM_P(a, b) ({ \
-    struct { SIGNED_VALUE fixnum : SIZEOF_VALUE * CHAR_BIT - 1; } c; \
+    struct { long fixnum : SIZEOF_LONG * CHAR_BIT - 1; } c; \
     __builtin_mul_overflow_p((a), (b), c.fixnum); \
 })
 #else
@@ -371,8 +371,6 @@ ntz_intptr(uintptr_t x)
 # define DL2NUM(x) (RB_FIXABLE(x) ? LONG2FIX(x) : rb_int128t2big(x))
 VALUE rb_int128t2big(int128_t n);
 #endif
-
-#define ST2FIX(h) LONG2FIX((long)(h))
 
 static inline long
 rb_overflowed_fix_to_int(long x)
@@ -838,21 +836,24 @@ struct RIMemo {
 };
 
 enum imemo_type {
-    imemo_env        = 0,
-    imemo_cref       = 1,
-    imemo_svar       = 2,
-    imemo_throw_data = 3,
-    imemo_ifunc      = 4,
-    imemo_memo       = 5,
-    imemo_ment       = 6,
-    imemo_iseq       = 7,
-    imemo_mask       = 0x07
+    imemo_env            =  0,
+    imemo_cref           =  1, /*!< class reference */
+    imemo_svar           =  2, /*!< special variable */
+    imemo_throw_data     =  3,
+    imemo_ifunc          =  4, /*!< iterator function */
+    imemo_memo           =  5,
+    imemo_ment           =  6,
+    imemo_iseq           =  7,
+    imemo_alloc          =  8,
+    imemo_ast            =  9,
+    imemo_parser_strterm = 10
 };
+#define IMEMO_MASK   0x0f
 
 static inline enum imemo_type
 imemo_type(VALUE imemo)
 {
-    return (RBASIC(imemo)->flags >> FL_USHIFT) & imemo_mask;
+    return (RBASIC(imemo)->flags >> FL_USHIFT) & IMEMO_MASK;
 }
 
 static inline int
@@ -860,7 +861,7 @@ imemo_type_p(VALUE imemo, enum imemo_type imemo_type)
 {
     if (LIKELY(!RB_SPECIAL_CONST_P(imemo))) {
 	/* fixed at compile time if imemo_type is given. */
-	const VALUE mask = (imemo_mask << FL_USHIFT) | RUBY_T_MASK;
+	const VALUE mask = (IMEMO_MASK << FL_USHIFT) | RUBY_T_MASK;
 	const VALUE expected_type = (imemo_type << FL_USHIFT) | T_IMEMO;
 	/* fixed at runtime. */
 	return expected_type == (RBASIC(imemo)->flags & mask);
@@ -870,30 +871,29 @@ imemo_type_p(VALUE imemo, enum imemo_type imemo_type)
     }
 }
 
-/* FL_USER0 to FL_USER2 is for type */
-#define IMEMO_FL_USHIFT (FL_USHIFT + 3)
-#define IMEMO_FL_USER0 FL_USER3
-#define IMEMO_FL_USER1 FL_USER4
-#define IMEMO_FL_USER2 FL_USER5
-#define IMEMO_FL_USER3 FL_USER6
-#define IMEMO_FL_USER4 FL_USER7
+/* FL_USER0 to FL_USER3 is for type */
+#define IMEMO_FL_USHIFT (FL_USHIFT + 4)
+#define IMEMO_FL_USER0 FL_USER4
+#define IMEMO_FL_USER1 FL_USER5
+#define IMEMO_FL_USER2 FL_USER6
+#define IMEMO_FL_USER3 FL_USER7
+#define IMEMO_FL_USER4 FL_USER8
 
-/* CREF in method.h */
+/* CREF (Class REFerence) is defined in method.h */
 
-/* SVAR */
-
+/*! SVAR (Special VARiable) */
 struct vm_svar {
     VALUE flags;
-    VALUE cref_or_me;
+    VALUE cref_or_me; /*!< class reference or rb_method_entry_t */
     VALUE lastline;
     VALUE backref;
     VALUE others;
 };
 
-/* THROW_DATA */
 
 #define THROW_DATA_CONSUMED IMEMO_FL_USER0
 
+/*! THROW_DATA */
 struct vm_throw_data {
     VALUE flags;
     VALUE reserved;
@@ -904,7 +904,7 @@ struct vm_throw_data {
 
 #define THROW_DATA_P(err) RB_TYPE_P((VALUE)(err), T_IMEMO)
 
-/* IFUNC */
+/* IFUNC (Internal FUNCtion) */
 
 struct vm_ifunc_argc {
 #if SIZEOF_INT * 2 > SIZEOF_VALUE
@@ -915,6 +915,7 @@ struct vm_ifunc_argc {
 #endif
 };
 
+/*! IFUNC (Internal FUNCtion) */
 struct vm_ifunc {
     VALUE flags;
     VALUE reserved;
@@ -931,8 +932,22 @@ rb_vm_ifunc_proc_new(VALUE (*func)(ANYARGS), const void *data)
     return rb_vm_ifunc_new(func, data, 0, UNLIMITED_ARGUMENTS);
 }
 
-/* MEMO */
+typedef struct rb_imemo_alloc_struct {
+    VALUE flags;
+    VALUE reserved;
+    VALUE *ptr; /* malloc'ed buffer */
+    struct rb_imemo_alloc_struct *next; /* next imemo */
+    size_t cnt; /* buffer size in VALUE */
+} rb_imemo_alloc_t;
 
+rb_imemo_alloc_t *rb_imemo_alloc_new(VALUE, VALUE, VALUE, VALUE);
+
+void rb_strterm_mark(VALUE obj);
+
+/*! MEMO
+ *
+ * @see imemo_type
+ * */
 struct MEMO {
     VALUE flags;
     VALUE reserved;
@@ -1023,7 +1038,10 @@ void rb_ary_set_len(VALUE, long);
 void rb_ary_delete_same(VALUE, VALUE);
 VALUE rb_ary_tmp_new_fill(long capa);
 VALUE rb_ary_at(VALUE, VALUE);
+VALUE rb_ary_aref1(VALUE ary, VALUE i);
+VALUE rb_ary_aref2(VALUE ary, VALUE b, VALUE e);
 size_t rb_ary_memsize(VALUE);
+VALUE rb_to_array_type(VALUE obj);
 #ifdef __GNUC__
 #define rb_ary_new_from_args(n, ...) \
     __extension__ ({ \
@@ -1158,6 +1176,9 @@ VALUE rb_name_err_new(VALUE mesg, VALUE recv, VALUE method);
     rb_exc_raise(rb_name_err_new(mesg, recv, name))
 #define rb_name_err_raise(mesg, recv, name) \
     rb_name_err_raise_str(rb_fstring_cstr(mesg), (recv), (name))
+VALUE rb_key_err_new(VALUE mesg, VALUE recv, VALUE name);
+#define rb_key_err_raise(mesg, recv, name) \
+    rb_exc_raise(rb_key_err_new(mesg, recv, name))
 NORETURN(void ruby_deprecated_internal_feature(const char *));
 #define DEPRECATED_INTERNAL_FEATURE(func) \
     (ruby_deprecated_internal_feature(func), UNREACHABLE)
@@ -1178,6 +1199,7 @@ void rb_mark_end_proc(void);
 VALUE rb_home_dir_of(VALUE user, VALUE result);
 VALUE rb_default_home_dir(VALUE result);
 VALUE rb_realpath_internal(VALUE basedir, VALUE path, int strict);
+VALUE rb_check_realpath(VALUE basedir, VALUE path);
 void rb_file_const(const char*, VALUE);
 int rb_file_load_ok(const char *);
 VALUE rb_file_expand_path_fast(VALUE, VALUE);
@@ -1242,6 +1264,7 @@ void ruby_sized_xfree(void *x, size_t size);
 
 /* hash.c */
 struct st_table *rb_hash_tbl_raw(VALUE hash);
+VALUE rb_hash_new_with_size(st_index_t size);
 VALUE rb_hash_has_key(VALUE hash, VALUE key);
 VALUE rb_hash_default_value(VALUE hash, VALUE key);
 VALUE rb_hash_set_default_proc(VALUE hash, VALUE proc);
@@ -1250,13 +1273,13 @@ long rb_dbl_long_hash(double d);
 st_table *rb_init_identtable(void);
 st_table *rb_init_identtable_with_size(st_index_t size);
 VALUE rb_hash_compare_by_id_p(VALUE hash);
+VALUE rb_to_hash_type(VALUE obj);
 
 #define RHASH_TBL_RAW(h) rb_hash_tbl_raw(h)
 VALUE rb_hash_keys(VALUE hash);
 VALUE rb_hash_values(VALUE hash);
 VALUE rb_hash_rehash(VALUE hash);
 int rb_hash_add_new_element(VALUE hash, VALUE key, VALUE val);
-#define HASH_DELETED  FL_USER1
 #define HASH_PROC_DEFAULT FL_USER2
 
 /* inits.c */
@@ -1568,6 +1591,7 @@ VALUE rb_reg_compile(VALUE str, int options, const char *sourcefile, int sourcel
 VALUE rb_reg_check_preprocess(VALUE);
 long rb_reg_search0(VALUE, VALUE, long, int, int);
 VALUE rb_reg_match_p(VALUE re, VALUE str, long pos);
+bool rb_reg_start_with_p(VALUE re, VALUE str);
 void rb_backref_set_string(VALUE string, long pos, long len);
 int rb_match_count(VALUE match);
 int rb_match_nth_defined(int nth, VALUE match);
@@ -1668,6 +1692,7 @@ VALUE rb_sym_intern_ascii_cstr(const char *ptr);
 	rb_sym_intern_ascii_cstr(ptr); \
 })
 #endif
+VALUE rb_to_symbol_type(VALUE obj);
 
 /* struct.c */
 VALUE rb_struct_init_copy(VALUE copy, VALUE s);
@@ -1677,11 +1702,19 @@ VALUE rb_struct_lookup(VALUE s, VALUE idx);
 struct timeval rb_time_timeval(VALUE);
 
 /* thread.c */
+#define COVERAGE_INDEX_LINES    0
+#define COVERAGE_INDEX_BRANCHES 1
+#define COVERAGE_INDEX_METHODS  2
+#define COVERAGE_TARGET_LINES    1
+#define COVERAGE_TARGET_BRANCHES 2
+#define COVERAGE_TARGET_METHODS  4
+
 VALUE rb_obj_is_mutex(VALUE obj);
 VALUE rb_suppress_tracing(VALUE (*func)(VALUE), VALUE arg);
 void rb_thread_execute_interrupts(VALUE th);
 void rb_clear_trace_func(void);
 VALUE rb_get_coverages(void);
+VALUE rb_default_coverage(int);
 VALUE rb_thread_shield_new(void);
 VALUE rb_thread_shield_wait(VALUE self);
 VALUE rb_thread_shield_release(VALUE self);
@@ -1692,7 +1725,6 @@ VALUE rb_uninterruptible(VALUE (*b_proc)(ANYARGS), VALUE data);
 VALUE rb_mutex_owned_p(VALUE self);
 
 /* thread_pthread.c, thread_win32.c */
-void Init_native_thread(void);
 int rb_divert_reserved_fd(int fd);
 
 /* transcode.c */
@@ -1733,11 +1765,9 @@ PUREFUNC(VALUE rb_vm_top_self(void));
 void rb_thread_recycle_stack_release(VALUE *);
 void rb_vm_change_state(void);
 void rb_vm_inc_const_missing_count(void);
-void rb_thread_mark(void *th);
 const void **rb_vm_get_insns_address_table(void);
-VALUE rb_sourcefilename(void);
 VALUE rb_source_location(int *pline);
-const char *rb_source_loc(int *pline);
+const char *rb_source_location_cstr(int *pline);
 void rb_vm_pop_cfunc_frame(void);
 int rb_vm_add_root_module(ID id, VALUE module);
 void rb_vm_check_redefinition_by_prepend(VALUE klass);
@@ -1884,6 +1914,7 @@ extern unsigned long ruby_scan_digits(const char *str, ssize_t len, int base, si
 
 /* variable.c (export) */
 void rb_mark_generic_ivar(VALUE);
+void rb_mv_generic_ivar(VALUE src, VALUE dst);
 VALUE rb_const_missing(VALUE klass, VALUE name);
 int rb_class_ivar_set(VALUE klass, ID vid, VALUE value);
 st_table *rb_st_copy(VALUE obj, struct st_table *orig_tbl);
@@ -1898,6 +1929,7 @@ void rb_gc_verify_internal_consistency(void);
 #define RB_OBJ_GC_FLAGS_MAX 6
 size_t rb_obj_gc_flags(VALUE, ID[], size_t);
 void rb_gc_mark_values(long n, const VALUE *values);
+void rb_gc_mark_stack_values(long n, const VALUE *values);
 
 #if IMEMO_DEBUG
 VALUE rb_imemo_new_debug(enum imemo_type type, VALUE v1, VALUE v2, VALUE v3, VALUE v0, const char *file, int line);
@@ -1914,7 +1946,7 @@ RUBY_SYMBOL_EXPORT_END
 do { \
     if (UNLIKELY(RUBY_DTRACE_##name##_ENABLED())) { \
 	int dtrace_line; \
-	const char *dtrace_file = rb_source_loc(&dtrace_line); \
+	const char *dtrace_file = rb_source_location_cstr(&dtrace_line); \
 	if (!dtrace_file) dtrace_file = ""; \
 	RUBY_DTRACE_##name(arg, dtrace_file, dtrace_line); \
     } \

@@ -89,7 +89,7 @@ class TestClass < Test::Unit::TestCase
     end
   end
 
-  def test_instanciate_singleton_class
+  def test_instantiate_singleton_class
     c = class << Object.new; self; end
     assert_raise(TypeError) { c.new }
   end
@@ -241,13 +241,28 @@ class TestClass < Test::Unit::TestCase
     assert_equal("TestClass::C\u{df}", c.name, '[ruby-core:24600]')
   end
 
-  def test_invalid_jump_from_class_definition
+  def test_invalid_next_from_class_definition
     assert_raise(SyntaxError) { eval("class C; next; end") }
+  end
+
+  def test_invalid_break_from_class_definition
     assert_raise(SyntaxError) { eval("class C; break; end") }
+  end
+
+  def test_invalid_redo_from_class_definition
     assert_raise(SyntaxError) { eval("class C; redo; end") }
+  end
+
+  def test_invalid_retry_from_class_definition
     assert_raise(SyntaxError) { eval("class C; retry; end") }
+  end
+
+  def test_invalid_return_from_class_definition
     assert_raise(SyntaxError) { eval("class C; return; end") }
-    assert_raise(SyntaxError) { eval("class C; yield; end") }
+  end
+
+  def test_invalid_yield_from_class_definition
+    assert_raise(LocalJumpError) { eval("class C; yield; end") }
   end
 
   def test_clone

@@ -2,8 +2,6 @@
 require_relative "testbase"
 require 'bigdecimal/math'
 
-require 'thread'
-
 class TestBigDecimal < Test::Unit::TestCase
   include TestBigDecimalBase
 
@@ -549,6 +547,7 @@ class TestBigDecimal < Test::Unit::TestCase
     a.each_with_index do |x, i|
       assert_equal(i, h[x])
     end
+    assert_instance_of(String, b.hash.to_s)
   end
 
   def test_marshal

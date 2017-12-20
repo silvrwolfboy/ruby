@@ -92,6 +92,7 @@ POSTLINK = @POSTLINK@
 
 RUBY_BASE_NAME=@RUBY_BASE_NAME@
 RUBY_PROGRAM_VERSION=@RUBY_PROGRAM_VERSION@
+RUBY_API_VERSION=@RUBY_API_VERSION@
 RUBY_INSTALL_NAME=@RUBY_INSTALL_NAME@
 RUBY_SO_NAME=@RUBY_SO_NAME@
 EXEEXT = @EXEEXT@
@@ -127,6 +128,7 @@ RUBY_PROGRAM_VERSION = @RUBY_PROGRAM_VERSION@
 
 LIBRUBY_A     = @LIBRUBY_A@
 LIBRUBY_SO    = @LIBRUBY_SO@
+LIBRUBY_SONAME= @LIBRUBY_SONAME@
 LIBRUBY_ALIASES= @LIBRUBY_ALIASES@
 LIBRUBY	      = @LIBRUBY@
 LIBRUBYARG    = @LIBRUBYARG@
@@ -186,6 +188,7 @@ DTRACE_GLOMMED_OBJ = $(DTRACE_REBUILD:yes=ruby-glommed.$(OBJEXT))
 
 OBJEXT        = @OBJEXT@
 ASMEXT        = S
+SOEXT         = @SOEXT@
 DLEXT         = @DLEXT@
 MANTYPE	      = @MANTYPE@
 SYMBOL_PREFIX = @SYMBOL_PREFIX@
@@ -252,7 +255,7 @@ $(LIBRUBY_SO):
 		$(ECHO) linking shared-library $@
 		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)ruby_static_id_*' \
-			-L '$(SYMBOL_PREFIX)*_threadptr_*' $@
+			-L '$(SYMBOL_PREFIX)*_threadptr_*' -L '$(SYMBOL_PREFIX)*_ec_*' $@
 		$(Q) $(POSTLINK)
 		@-$(MINIRUBY) -e 'ARGV.each{|link| File.delete link rescue nil; \
 						  File.symlink "$(LIBRUBY_SO)", link}' \
@@ -264,9 +267,6 @@ $(ruby_pc):
 
 ruby-runner.h: template/ruby-runner.h.in
 		@./config.status --file=$@:$(srcdir)/template/$(@F).in
-
-ruby-runner$(EXEEXT): ruby-runner.c ruby-runner.h
-	$(Q) $(PURIFY) $(CC) $(CFLAGS) $(CPPFLAGS) -DRUBY_INSTALL_NAME=$(RUBY_INSTALL_NAME) $(LDFLAGS) $(LIBS) $(OUTFLAG)$@ $<
 
 $(RBCONFIG): $(PREP)
 
@@ -317,7 +317,7 @@ reconfig config.status:	$(srcdir)/$(CONFIGURE) $(srcdir)/enc/Makefile.in \
 	@PWD= MINIRUBY="$(MINIRUBY)"; export MINIRUBY; \
 	set $(SHELL) $($@-args); $(reconfig-exec-$(V))
 
-$(srcdir)/$(CONFIGURE): $(srcdir)/configure.in $(srcdir)/aclocal.m4
+$(srcdir)/$(CONFIGURE): $(srcdir)/configure.ac $(srcdir)/aclocal.m4
 	$(CHDIR) $(srcdir) && exec $(AUTOCONF) -o $(@F)
 
 $(srcdir)/aclocal.m4:
@@ -417,7 +417,7 @@ clean-local::
 	$(Q)$(RM) ext/extinit.c ext/extinit.$(OBJEXT) ext/ripper/y.output \
 		enc/encinit.c enc/encinit.$(OBJEXT)
 	-$(Q)$(RM) $(pkgconfig_DATA)
-	-$(Q)$(RMALL) ruby-runner$(EXEEXT) ruby-runner.h *.dSYM
+	-$(Q)$(RMALL) exe/ ruby-runner.h *.dSYM
 
 distclean-local::
 	$(Q)$(RM) ext/config.cache $(RBCONFIG) Doxyfile
@@ -474,6 +474,12 @@ ext/extinit.$(OBJEXT): ext/extinit.c $(SETUP)
 
 enc/encinit.$(OBJEXT): enc/encinit.c $(SETUP)
 
+test-bundled-gems-run:
+	$(Q) set -e; while read gem _; do \
+	  echo testing $$gem gem && \
+	  $(XRUBY) -C $(srcdir)/gems/src/$$gem -Ilib ../../../.bundle/bin/rake; \
+	done < $(srcdir)/gems/bundled_gems
+
 update-src::
 	@$(CHDIR) "$(srcdir)" && LC_TIME=C exec $(VCSUP)
 
@@ -486,7 +492,6 @@ gcov:
 
 lcov:
 	$(Q) $(BASERUBY) $(srcdir)/tool/run-lcov.rb
-	$(Q) genhtml --ignore-errors source lcov-c-all.info -o lcov-out
 
 update-doclie:
 	$(Q) $(srcdir)/tool/git-refresh -C $(srcdir)/coverage $(Q1:0=-q) \

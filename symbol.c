@@ -51,7 +51,7 @@ Init_op_tbl(void)
     }
 }
 
-enum {ID_ENTRY_UNIT = 512};
+static const int ID_ENTRY_UNIT = 512;
 
 enum id_entry_type {
     ID_ENTRY_STR,
@@ -1037,6 +1037,12 @@ VALUE
 rb_sym_intern_ascii_cstr(const char *ptr)
 {
     return rb_sym_intern_ascii(ptr, strlen(ptr));
+}
+
+VALUE
+rb_to_symbol_type(VALUE obj)
+{
+    return rb_convert_type_with_id(obj, T_SYMBOL, "Symbol", idTo_sym);
 }
 
 static ID

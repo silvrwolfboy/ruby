@@ -28,110 +28,8 @@ end
 #
 # The +Matrix+ class represents a mathematical matrix. It provides methods for creating
 # matrices, operating on them arithmetically and algebraically,
-# and determining their mathematical properties (trace, rank, inverse, determinant).
-#
-# == Method Catalogue
-#
-# To create a matrix:
-# * Matrix[*rows]
-# * Matrix.[](*rows)
-# * Matrix.rows(rows, copy = true)
-# * Matrix.columns(columns)
-# * Matrix.build(row_count, column_count, &block)
-# * Matrix.diagonal(*values)
-# * Matrix.scalar(n, value)
-# * Matrix.identity(n)
-# * Matrix.unit(n)
-# * Matrix.I(n)
-# * Matrix.zero(n)
-# * Matrix.row_vector(row)
-# * Matrix.column_vector(column)
-# * Matrix.empty(row_count, column_count)
-# * Matrix.hstack(*matrices)
-# * Matrix.vstack(*matrices)
-#
-# To access Matrix elements/columns/rows/submatrices/properties:
-# * #[](i, j)
-# * #row_count (row_size)
-# * #column_count (column_size)
-# * #row(i)
-# * #column(j)
-# * #collect
-# * #map
-# * #each
-# * #each_with_index
-# * #find_index
-# * #minor(*param)
-# * #first_minor(row, column)
-# * #cofactor(row, column)
-# * #adjugate
-# * #laplace_expansion(row_or_column: num)
-# * #cofactor_expansion(row_or_column: num)
-#
-# Properties of a matrix:
-# * #diagonal?
-# * #empty?
-# * #hermitian?
-# * #lower_triangular?
-# * #normal?
-# * #orthogonal?
-# * #permutation?
-# * #real?
-# * #regular?
-# * #singular?
-# * #square?
-# * #symmetric?
-# * #unitary?
-# * #upper_triangular?
-# * #zero?
-#
-# Matrix arithmetic:
-# * #*(m)
-# * #+(m)
-# * #-(m)
-# * #/(m)
-# * #inverse
-# * #inv
-# * #**
-# * #+@
-# * #-@
-#
-# Matrix functions:
-# * #determinant
-# * #det
-# * #hstack(*matrices)
-# * #rank
-# * #round
-# * #trace
-# * #tr
-# * #transpose
-# * #t
-# * #vstack(*matrices)
-#
-# Matrix decompositions:
-# * #eigen
-# * #eigensystem
-# * #lup
-# * #lup_decomposition
-#
-# Complex arithmetic:
-# * conj
-# * conjugate
-# * imag
-# * imaginary
-# * real
-# * rect
-# * rectangular
-#
-# Conversion to other data types:
-# * #coerce(other)
-# * #row_vectors
-# * #column_vectors
-# * #to_a
-#
-# String representations:
-# * #to_s
-# * #inspect
+# and determining their mathematical properties such as trace, rank, inverse, determinant,
+# or eigensystem.
 #
 class Matrix
   include Enumerable
@@ -1246,7 +1144,7 @@ class Matrix
   # deprecated; use Matrix#determinant
   #
   def determinant_e
-    warn "#{caller(1)[0]}: warning: Matrix#determinant_e is deprecated; use #determinant"
+    warn "#{caller(1, 1)[0]}: warning: Matrix#determinant_e is deprecated; use #determinant"
     determinant
   end
   alias det_e determinant_e
@@ -1304,7 +1202,7 @@ class Matrix
   # deprecated; use Matrix#rank
   #
   def rank_e
-    warn "#{caller(1)[0]}: warning: Matrix#rank_e is deprecated; use #rank"
+    warn "#{caller(1, 1)[0]}: warning: Matrix#rank_e is deprecated; use #rank"
     rank
   end
 
@@ -1490,17 +1388,17 @@ class Matrix
   end
 
   def elements_to_f
-    warn "#{caller(1)[0]}: warning: Matrix#elements_to_f is deprecated, use map(&:to_f)"
+    warn "#{caller(1, 1)[0]}: warning: Matrix#elements_to_f is deprecated, use map(&:to_f)"
     map(&:to_f)
   end
 
   def elements_to_i
-    warn "#{caller(1)[0]}: warning: Matrix#elements_to_i is deprecated, use map(&:to_i)"
+    warn "#{caller(1, 1)[0]}: warning: Matrix#elements_to_i is deprecated, use map(&:to_i)"
     map(&:to_i)
   end
 
   def elements_to_r
-    warn "#{caller(1)[0]}: warning: Matrix#elements_to_r is deprecated, use map(&:to_r)"
+    warn "#{caller(1, 1)[0]}: warning: Matrix#elements_to_r is deprecated, use map(&:to_r)"
     map(&:to_r)
   end
 
@@ -2142,17 +2040,17 @@ class Vector
   end
 
   def elements_to_f
-    warn "#{caller(1)[0]}: warning: Vector#elements_to_f is deprecated"
+    warn "#{caller(1, 1)[0]}: warning: Vector#elements_to_f is deprecated"
     map(&:to_f)
   end
 
   def elements_to_i
-    warn "#{caller(1)[0]}: warning: Vector#elements_to_i is deprecated"
+    warn "#{caller(1, 1)[0]}: warning: Vector#elements_to_i is deprecated"
     map(&:to_i)
   end
 
   def elements_to_r
-    warn "#{caller(1)[0]}: warning: Vector#elements_to_r is deprecated"
+    warn "#{caller(1, 1)[0]}: warning: Vector#elements_to_r is deprecated"
     map(&:to_r)
   end
 

@@ -452,8 +452,7 @@ module Test
           return
         end
 
-        # Require needed things for parallel running
-        require 'thread'
+        # Require needed thing for parallel running
         require 'timeout'
         @tasks = @files.dup # Array of filenames.
         @need_quit = false
@@ -843,7 +842,7 @@ module Test
         begin
           require "rbconfig"
         rescue LoadError
-          warn "#{caller(1)[0]}: warning: Parallel running disabled because can't get path to ruby; run specify with --ruby argument"
+          warn "#{caller(1, 1)[0]}: warning: Parallel running disabled because can't get path to ruby; run specify with --ruby argument"
           options[:parallel] = nil
         else
           options[:ruby] ||= [RbConfig.ruby]

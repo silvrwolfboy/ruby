@@ -620,6 +620,11 @@ CODE
     assert_raise(RuntimeError) { 'foo'.freeze.concat('bar') }
   end
 
+  def test_concat_literals
+    s="." * 50
+    assert_equal(Encoding::UTF_8, "#{s}x".encoding)
+  end
+
   def test_count
     a = S("hello world")
     assert_equal(5, a.count(S("lo")))
@@ -668,7 +673,7 @@ CODE
     assert_equal("a".hash, "a\u0101".delete("\u0101").hash, '[ruby-talk:329267]')
     assert_equal(true, "a\u0101".delete("\u0101").ascii_only?)
     assert_equal(true, "a\u3041".delete("\u3041").ascii_only?)
-    assert_equal(false, "a\u3041\u3042".tr("\u3041", "a").ascii_only?)
+    assert_equal(false, "a\u3041\u3042".delete("\u3041").ascii_only?)
 
     assert_equal("a", "abc\u{3042 3044 3046}".delete("^a"))
     assert_equal("bc\u{3042 3044 3046}", "abc\u{3042 3044 3046}".delete("a"))
@@ -807,12 +812,19 @@ CODE
         assert_equal [65, 66, 67], s.bytes {}
       }
     else
-      assert_warning(/deprecated/) {
+      warning = /passing a block to String#bytes is deprecated/
+      assert_warning(warning) {
         res = []
         assert_equal s.object_id, s.bytes {|x| res << x }.object_id
         assert_equal(65, res[0])
         assert_equal(66, res[1])
         assert_equal(67, res[2])
+      }
+      assert_warning(warning) {
+        s = S("ABC")
+        res = []
+        assert_same s, s.bytes {|x| res << x }
+        assert_equal [65, 66, 67], res
       }
     end
   end
@@ -844,12 +856,19 @@ CODE
         assert_equal [0x3042, 0x3044, 0x3046], s.codepoints {}
       }
     else
-      assert_warning(/deprecated/) {
+      warning = /passing a block to String#codepoints is deprecated/
+      assert_warning(warning) {
         res = []
         assert_equal s.object_id, s.codepoints {|x| res << x }.object_id
         assert_equal(0x3042, res[0])
         assert_equal(0x3044, res[1])
         assert_equal(0x3046, res[2])
+      }
+      assert_warning(warning) {
+        s = S("ABC")
+        res = []
+        assert_same s, s.codepoints {|x| res << x }
+        assert_equal [65, 66, 67], res
       }
     end
   end
@@ -875,9 +894,70 @@ CODE
         assert_equal ["A", "B", "C"], s.chars {}
       }
     else
-      assert_warning(/deprecated/) {
+      warning = /passing a block to String#chars is deprecated/
+      assert_warning(warning) {
         res = []
         assert_equal s.object_id, s.chars {|x| res << x }.object_id
+        assert_equal("A", res[0])
+        assert_equal("B", res[1])
+        assert_equal("C", res[2])
+      }
+    end
+  end
+
+  def test_each_grapheme_cluster
+    [
+      "\u{20 200d}",
+      "\u{600 600}",
+      "\u{600 20}",
+      "\u{261d 1F3FB}",
+      "\u{1f600}",
+      "\u{20 308}",
+      "\u{1F477 1F3FF 200D 2640 FE0F}",
+      "\u{1F468 200D 1F393}",
+      "\u{1F46F 200D 2642 FE0F}",
+      "\u{1f469 200d 2764 fe0f 200d 1f469}",
+    ].each do |g|
+      assert_equal [g], g.each_grapheme_cluster.to_a
+    end
+
+    assert_equal ["\u000A", "\u0308"], "\u{a 308}".each_grapheme_cluster.to_a
+    assert_equal ["\u000D", "\u0308"], "\u{d 308}".each_grapheme_cluster.to_a
+    assert_equal ["a", "b", "c"], "abc".b.each_grapheme_cluster.to_a
+    s = ("x"+"\u{10ABCD}"*250000)
+    assert_empty(s.each_grapheme_cluster {s.clear})
+  end
+
+  def test_grapheme_clusters
+    [
+      "\u{20 200d}",
+      "\u{600 600}",
+      "\u{600 20}",
+      "\u{261d 1F3FB}",
+      "\u{1f600}",
+      "\u{20 308}",
+      "\u{1F477 1F3FF 200D 2640 FE0F}",
+      "\u{1F468 200D 1F393}",
+      "\u{1F46F 200D 2642 FE0F}",
+      "\u{1f469 200d 2764 fe0f 200d 1f469}",
+    ].each do |g|
+      assert_equal [g], g.grapheme_clusters
+    end
+
+    assert_equal ["\u000A", "\u0308"], "\u{a 308}".grapheme_clusters
+    assert_equal ["\u000D", "\u0308"], "\u{d 308}".grapheme_clusters
+    assert_equal ["a", "b", "c"], "abc".b.grapheme_clusters
+
+    if ENUMERATOR_WANTARRAY
+      assert_warn(/block not used/) {
+        assert_equal ["A", "B", "C"], "ABC".grapheme_clusters {}
+      }
+    else
+      warning = /passing a block to String#grapheme_clusters is deprecated/
+      assert_warning(warning) {
+        s = "ABC".b
+        res = []
+        assert_same s, s.grapheme_clusters {|x| res << x }
         assert_equal("A", res[0])
         assert_equal("B", res[1])
         assert_equal("C", res[2])
@@ -990,7 +1070,7 @@ CODE
         assert_equal ["hello\n", "world"], s.lines {}
       }
     else
-      assert_warning(/deprecated/) {
+      assert_warning(/passing a block to String#lines is deprecated/) {
         res = []
         assert_equal s.object_id, s.lines {|x| res << x }.object_id
         assert_equal(S("hello\n"), res[0])
@@ -1611,6 +1691,11 @@ CODE
     }
   end
 
+  def test_split_dupped
+    s = "abc"
+    s.split("b", 1).map(&:upcase!)
+    assert_equal("abc", s)
+  end
   def test_squeeze
     assert_equal(S("abc"), S("aaabbbbccc").squeeze)
     assert_equal(S("aa bb cc"), S("aa   bb      cc").squeeze(S(" ")))
@@ -1643,6 +1728,11 @@ CODE
 
     bug5536 = '[ruby-core:40623]'
     assert_raise(TypeError, bug5536) {S("str").start_with? :not_convertible_to_string}
+
+    assert_equal(true, "hello".start_with?(/hel/))
+    assert_equal("hel", $&)
+    assert_equal(false, "hello".start_with?(/el/))
+    assert_nil($&)
   end
 
   def test_strip
@@ -1792,6 +1882,11 @@ CODE
 
     assert_equal("!", " ".succ)
     assert_equal("", "".succ)
+
+    bug = '[ruby-core:83062] [Bug #13952]'
+    s = "\xff".b
+    assert_not_predicate(s, :ascii_only?)
+    assert_predicate(s.succ, :ascii_only?, bug)
   end
 
   def test_succ!
@@ -1983,8 +2078,13 @@ CODE
     assert_equal(false, "\u3041\u3042".tr("\u3041", "a").ascii_only?)
 
     bug6156 = '[ruby-core:43335]'
+    bug13950 = '[ruby-core:83056] [Bug #13950]'
     str, range, star = %w[b a-z *].map{|s|s.encode("utf-16le")}
-    assert_equal(star, str.tr(range, star), bug6156)
+    result = str.tr(range, star)
+    assert_equal(star, result, bug6156)
+    assert_not_predicate(str, :ascii_only?)
+    assert_not_predicate(star, :ascii_only?)
+    assert_not_predicate(result, :ascii_only?, bug13950)
   end
 
   def test_tr!
@@ -2345,7 +2445,12 @@ CODE
     end
 
     assert_equal(["\u30E6\u30FC\u30B6", "@", "\u30C9\u30E1.\u30A4\u30F3"],
-      "\u30E6\u30FC\u30B6@\u30C9\u30E1.\u30A4\u30F3".partition(/[@.]/))
+                 "\u30E6\u30FC\u30B6@\u30C9\u30E1.\u30A4\u30F3".partition(/[@.]/))
+
+    bug = '[ruby-core:82911]'
+    hello = "hello"
+    hello.partition("hi").map(&:upcase!)
+    assert_equal("hello", hello, bug)
   end
 
   def test_rpartition
@@ -2365,6 +2470,11 @@ CODE
     bug8138 = '[ruby-dev:47183]'
     assert_equal(["\u30E6\u30FC\u30B6@\u30C9\u30E1", ".", "\u30A4\u30F3"],
       "\u30E6\u30FC\u30B6@\u30C9\u30E1.\u30A4\u30F3".rpartition(/[@.]/), bug8138)
+
+    bug = '[ruby-core:82911]'
+    hello = "hello"
+    hello.rpartition("hi").map(&:upcase!)
+    assert_equal("hello", hello, bug)
   end
 
   def test_setter

@@ -4576,13 +4576,28 @@ filetime_to_timeval(const FILETIME* ft, struct timeval *tv)
     return tv->tv_sec > 0 ? 0 : -1;
 }
 
+static void get_systemtime(FILETIME *ft)
+{
+    typedef void (WINAPI *get_time_func)(FILETIME *ft);
+    static get_time_func func = (get_time_func)-1;
+
+    if (func == (get_time_func)-1) {
+	/* GetSystemTimePreciseAsFileTime is available since Windows 8 and Windows Server 2012. */
+	func = (get_time_func)get_proc_address("kernel32", "GetSystemTimePreciseAsFileTime", NULL);
+	if (func == NULL) {
+	    func = GetSystemTimeAsFileTime;
+	}
+    }
+    func(ft);
+}
+
 /* License: Ruby's */
 int __cdecl
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
     FILETIME ft;
 
-    GetSystemTimeAsFileTime(&ft);
+    get_systemtime(&ft);
     filetime_to_timeval(&ft, tv);
 
     return 0;
@@ -5002,7 +5017,7 @@ rb_w32_read_reparse_point(const WCHAR *path, rb_w32_reparse_buffer_t *rp,
 	    ret = rp->SymbolicLinkReparseBuffer.PrintNameLength;
 	    *len = ret / sizeof(WCHAR);
 	}
-	else { /* IO_REPARSE_TAG_MOUNT_POINT */
+	else if (rp->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
 	    static const WCHAR *volume = L"Volume{";
 	    enum {volume_prefix_len = rb_strlen_lit("\\??\\")};
 	    name = ((char *)rp->MountPointReparseBuffer.PathBuffer +
@@ -5014,6 +5029,9 @@ rb_w32_read_reparse_point(const WCHAR *path, rb_w32_reparse_buffer_t *rp,
 	    if (ret > sizeof(volume) - 1 * sizeof(WCHAR) &&
 		memcmp(name, volume, sizeof(volume) - 1 * sizeof(WCHAR)) == 0)
 		return -1;
+	}
+	else {
+	    return -1;
 	}
 	*result = name;
 	if (e) {
@@ -7314,7 +7332,7 @@ wutime(const WCHAR *path, const struct utimbuf *times)
 	}
     }
     else {
-	GetSystemTimeAsFileTime(&atime);
+	get_systemtime(&atime);
 	mtime = atime;
     }
 

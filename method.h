@@ -37,6 +37,7 @@ typedef struct rb_scope_visi_struct {
     unsigned int module_func : 1;
 } rb_scope_visibility_t;
 
+/*! CREF (Class REFerence) */
 typedef struct rb_cref_struct {
     VALUE flags;
     VALUE refinements;
@@ -98,18 +99,18 @@ METHOD_ENTRY_FLAGS_COPY(rb_method_entry_t *dst, const rb_method_entry_t *src)
 }
 
 typedef enum {
-    VM_METHOD_TYPE_ISEQ,
-    VM_METHOD_TYPE_CFUNC,
-    VM_METHOD_TYPE_ATTRSET,
-    VM_METHOD_TYPE_IVAR,
+    VM_METHOD_TYPE_ISEQ,      /*!< Ruby method */
+    VM_METHOD_TYPE_CFUNC,     /*!< C method */
+    VM_METHOD_TYPE_ATTRSET,   /*!< attr_writer or attr_accessor */
+    VM_METHOD_TYPE_IVAR,      /*!< attr_reader or attr_accessor */
     VM_METHOD_TYPE_BMETHOD,
     VM_METHOD_TYPE_ZSUPER,
     VM_METHOD_TYPE_ALIAS,
     VM_METHOD_TYPE_UNDEF,
     VM_METHOD_TYPE_NOTIMPLEMENTED,
-    VM_METHOD_TYPE_OPTIMIZED, /* Kernel#send, Proc#call, etc */
-    VM_METHOD_TYPE_MISSING,   /* wrapper for method_missing(id) */
-    VM_METHOD_TYPE_REFINED,
+    VM_METHOD_TYPE_OPTIMIZED, /*!< Kernel#send, Proc#call, etc */
+    VM_METHOD_TYPE_MISSING,   /*!< wrapper for method_missing(id) */
+    VM_METHOD_TYPE_REFINED,   /*!< refinement */
 
     END_OF_ENUMERATION(VM_METHOD_TYPE)
 } rb_method_type_t;
@@ -120,8 +121,8 @@ typedef struct rb_iseq_struct rb_iseq_t;
 #endif
 
 typedef struct rb_method_iseq_struct {
-    rb_iseq_t * iseqptr;              /* should be separated from iseqval */
-    rb_cref_t * cref;                       /* should be marked */
+    rb_iseq_t * iseqptr; /*!< iseq pointer, should be separated from iseqval */
+    rb_cref_t * cref;          /*!< class reference, should be marked */
 } rb_method_iseq_t; /* check rb_add_method_iseq() when modify the fields */
 
 typedef struct rb_method_cfunc_struct {
@@ -187,14 +188,12 @@ rb_method_entry_t *rb_method_entry_create(ID called_id, VALUE klass, rb_method_v
 const rb_method_entry_t *rb_method_entry_at(VALUE obj, ID id);
 
 const rb_method_entry_t *rb_method_entry(VALUE klass, ID id);
-const rb_method_entry_t *rb_method_entry_with_refinements(VALUE klass, ID id);
-const rb_method_entry_t *rb_method_entry_without_refinements(VALUE klass, ID id);
+const rb_method_entry_t *rb_method_entry_without_refinements(VALUE klass, ID id, VALUE *defined_class);
 const rb_method_entry_t *rb_resolve_refined_method(VALUE refinements, const rb_method_entry_t *me);
 
 const rb_callable_method_entry_t *rb_callable_method_entry(VALUE klass, ID id);
-const rb_callable_method_entry_t *rb_callable_method_entry_with_refinements(VALUE klass, ID id);
-const rb_callable_method_entry_t *rb_callable_method_entry_without_refinements(VALUE klass, ID id);
-const rb_callable_method_entry_t *rb_resolve_refined_method_callable(VALUE refinements, const rb_callable_method_entry_t *me);
+const rb_callable_method_entry_t *rb_callable_method_entry_with_refinements(VALUE klass, ID id, VALUE *defined_class);
+const rb_callable_method_entry_t *rb_callable_method_entry_without_refinements(VALUE klass, ID id, VALUE *defined_class);
 
 int rb_method_entry_arity(const rb_method_entry_t *me);
 int rb_method_entry_eq(const rb_method_entry_t *m1, const rb_method_entry_t *m2);

@@ -366,6 +366,16 @@ class TestIO < Test::Unit::TestCase
     }
   end
 
+  def test_copy_stream_append
+    with_srccontent("foobar") {|src, content|
+      File.open('dst', 'ab') do |dst|
+        ret = IO.copy_stream(src, dst)
+        assert_equal(content.bytesize, ret)
+        assert_equal(content, File.read("dst"))
+      end
+    }
+  end
+
   def test_copy_stream_smaller
     with_srccontent {|src, content|
 
@@ -1214,6 +1224,63 @@ class TestIO < Test::Unit::TestCase
       f = true
       assert_equal("0" * 10000 + "1" * 10000, r.read)
     end)
+  end
+
+  def test_write_with_multiple_arguments
+    pipe(proc do |w|
+      w.write("foo", "bar")
+      w.close
+    end, proc do |r|
+      assert_equal("foobar", r.read)
+    end)
+  end
+
+  def test_write_with_multiple_arguments_and_buffer
+    mkcdtmpdir do
+      line = "x"*9+"\n"
+      file = "test.out"
+      open(file, "wb") do |w|
+        w.write(line)
+        assert_equal(11, w.write(line, "\n"))
+      end
+      open(file, "rb") do |r|
+        assert_equal([line, line, "\n"], r.readlines)
+      end
+
+      line = "x"*99+"\n"
+      open(file, "wb") do |w|
+        w.write(line*81)        # 8100 bytes
+        assert_equal(100, w.write("a"*99, "\n"))
+      end
+      open(file, "rb") do |r|
+        81.times {assert_equal(line, r.gets)}
+        assert_equal("a"*99+"\n", r.gets)
+      end
+    end
+  end
+
+  def test_write_with_many_arguments
+    [1023, 1024].each do |n|
+      pipe(proc do |w|
+        w.write(*(["a"] * n))
+        w.close
+      end, proc do |r|
+        assert_equal("a" * n, r.read)
+      end)
+    end
+  end
+
+  def test_write_with_multiple_nonstring_arguments
+    assert_in_out_err([], "STDOUT.write(:foo, :bar)", ["foobar"])
+  end
+
+  def test_write_buffered_with_multiple_arguments
+    out, err, (_, status) = EnvUtil.invoke_ruby(["-e", "sleep 0.1;puts 'foo'"], "", true, true) do |_, o, e, i|
+      [o.read, e.read, Process.waitpid2(i)]
+    end
+    assert_predicate(status, :success?)
+    assert_equal("foo\n", out)
+    assert_empty(err)
   end
 
   def test_write_non_writable
@@ -2401,6 +2468,36 @@ End
     end)
   end
 
+  def test_puts_parallel
+    skip "not portable"
+    pipe(proc do |w|
+      threads = []
+      100.times do
+        threads << Thread.new { w.puts "hey" }
+      end
+      threads.each(&:join)
+      w.close
+    end, proc do |r|
+      assert_equal("hey\n" * 100, r.read)
+    end)
+  end
+
+  def test_puts_old_write
+    capture = String.new
+    def capture.write(str)
+      self << str
+    end
+
+    capture.clear
+    assert_warning(/[.#]write is outdated/) do
+      stdout, $stdout = $stdout, capture
+      puts "hey"
+    ensure
+      $stdout = stdout
+    end
+    assert_equal("hey\n", capture)
+  end
+
   def test_display
     pipe(proc do |w|
       "foo".display(w)
@@ -2836,7 +2933,7 @@ __END__
       end
     end
     a.each do |r, w|
-      w.write -"\n"
+      w.write(-"\n")
       w.close
       r.close
     end
@@ -3554,13 +3651,18 @@ __END__
       ObjectSpace.count_objects(res) # creates strings on first call
       [ 'foo'.b, '*' * 24 ].each do |buf|
         with_pipe do |r, w|
-          before = ObjectSpace.count_objects(res)[:T_STRING]
-          n = w.write(buf)
-          s = w.syswrite(buf)
-          after = ObjectSpace.count_objects(res)[:T_STRING]
+          GC.disable
+          begin
+            before = ObjectSpace.count_objects(res)[:T_STRING]
+            n = w.write(buf)
+            s = w.syswrite(buf)
+            after = ObjectSpace.count_objects(res)[:T_STRING]
+          ensure
+            GC.enable
+          end
           assert_equal before, after,
-            'no strings left over after write [ruby-core:78898] [Bug #13085]'
-          assert_not_predicate buf, :frozen?, 'no inadvertant freeze'
+            "no strings left over after write [ruby-core:78898] [Bug #13085]: #{ before } strings before write -> #{ after } strings after write"
+          assert_not_predicate buf, :frozen?, 'no inadvertent freeze'
           assert_equal buf.bytesize, n, 'IO#write wrote expected size'
           assert_equal s, n, 'IO#syswrite wrote expected size'
         end

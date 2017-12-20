@@ -19,7 +19,7 @@
 language: c
 dist: trusty
 
-sudo: false
+sudo: required
 
 compiler:
   - gcc
@@ -45,8 +45,8 @@ before_script:
   - "requests=; for req in ${RUBYSPEC_PULL_REQUEST//,/ }; do
       requests=\"$requests +refs/pull/$req/merge:\";
     done"
-  - "${requests:+git -C spec/rubyspec -c user.email=none -c user.name=none pull --no-edit origin $requests}"
-  - "${requests:+git -C spec/rubyspec log --oneline origin/master..@}"
+  - "${requests:+git -C spec/ruby -c user.email=none -c user.name=none pull --no-edit origin $requests}"
+  - "${requests:+git -C spec/ruby log --oneline origin/master..@}"
   - "rm config.status Makefile rbconfig.rb .rbconfig.time"
   - "mkdir build config_1st config_2nd"
   - "chmod -R a-w ."
@@ -62,7 +62,7 @@ before_script:
 script:
   - "make -s test TESTOPTS=--color=never"
   - "make -s $JOBS test-all -o exts TESTOPTS='-q --color=never --job-status=normal'"
-  - "make -s $JOBS test-rubyspec MSPECOPT=-j"
+  - "make -s $JOBS test-spec MSPECOPT=-j"
 
 # Branch matrix.  Not all branches are Travis-ready so we limit branches here.
 branches:
@@ -86,7 +86,7 @@ notifications:
       - "%{message} by @%{author}: See %{build_url}"
 
   slack:
-    secure: lbYVj0Th1AOxovf44zjMr7v6JgWVcsw4tmK3LhzbdpR6GnPHRkrFxDBykk+tE1346qJJ0YLlyFn3ib3Z4QyttIO00Sg6mqk8NGPjG7DrwUJ6o43Yd1ePZr80W+8Wz20/LVEOAhidJI3LANU2+bWa/VdcHtFT1/Cr+CMrdITD+tI=
+    secure: TNRGiWGytGSLDAjJLR0NVXKlHhba6Kf584wU7mXqiOCDNBQ0LHUsrIMaL38uvpnzQ6NeV5j5k575LAZyuGXKczSrOTeIBJaHfw6Wj/8WUnifnNcIFozZ5DH9/S2EuiVcslDmoRflOFSTkocpE0MElt2KU2kNCzeq3/iVatNT8Nw=
     on_pull_requests: false
     on_success: change
     on_failure: always

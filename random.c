@@ -606,8 +606,10 @@ random_seed(void)
  * call-seq: Random.urandom(size) -> string
  *
  * Returns a string, using platform providing features.
- * Returned value expected to be a cryptographically secure
+ * Returned value is expected to be a cryptographically secure
  * pseudo-random number in binary form.
+ * This method raises a RuntimeError if the feature provided by platform
+ * failed to prepare the result.
  *
  * In 2017, Linux manpage random(7) writes that "no cryptographic
  * primitive available today can hope to promise more than 256 bits of
@@ -622,7 +624,8 @@ random_raw_seed(VALUE self, VALUE size)
     long n = NUM2ULONG(size);
     VALUE buf = rb_str_new(0, n);
     if (n == 0) return buf;
-    if (fill_random_bytes(RSTRING_PTR(buf), n, FALSE)) return Qnil;
+    if (fill_random_bytes(RSTRING_PTR(buf), n, FALSE))
+	rb_raise(rb_eRuntimeError, "failed to get urandom");
     return buf;
 }
 

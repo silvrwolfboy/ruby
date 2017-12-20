@@ -1743,8 +1743,8 @@ flo_is_nan_p(VALUE num)
  *     (+1.0/0.0).infinite?   #=> 1
  */
 
-static VALUE
-flo_is_infinite_p(VALUE num)
+VALUE
+rb_flo_is_infinite_p(VALUE num)
 {
     double value = RFLOAT_VALUE(num);
 
@@ -1763,8 +1763,8 @@ flo_is_infinite_p(VALUE num)
  *  i.e. it is not infinite and Float#nan? is +false+.
  */
 
-static VALUE
-flo_is_finite_p(VALUE num)
+VALUE
+rb_flo_is_finite_p(VALUE num)
 {
     double value = RFLOAT_VALUE(num);
 
@@ -3065,9 +3065,9 @@ rb_num2ll(VALUE val)
     if (FIXNUM_P(val)) return (LONG_LONG)FIX2LONG(val);
 
     else if (RB_TYPE_P(val, T_FLOAT)) {
-	if (RFLOAT_VALUE(val) < LLONG_MAX_PLUS_ONE
-            && (LLONG_MIN_MINUS_ONE_IS_LESS_THAN(RFLOAT_VALUE(val)))) {
-	    return (LONG_LONG)(RFLOAT_VALUE(val));
+	double d = RFLOAT_VALUE(val);
+	if (d < LLONG_MAX_PLUS_ONE && (LLONG_MIN_MINUS_ONE_IS_LESS_THAN(d))) {
+	    return (LONG_LONG)d;
 	}
 	else {
 	    FLOAT_OUT_OF_RANGE(val, "long long");
@@ -3097,11 +3097,11 @@ rb_num2ull(VALUE val)
 	return (LONG_LONG)FIX2LONG(val); /* this is FIX2LONG, intended */
     }
     else if (RB_TYPE_P(val, T_FLOAT)) {
-	if (RFLOAT_VALUE(val) < ULLONG_MAX_PLUS_ONE
-            && LLONG_MIN_MINUS_ONE_IS_LESS_THAN(RFLOAT_VALUE(val))) {
-            if (0 <= RFLOAT_VALUE(val))
-                return (unsigned LONG_LONG)(RFLOAT_VALUE(val));
-	    return (unsigned LONG_LONG)(LONG_LONG)(RFLOAT_VALUE(val));
+	double d = RFLOAT_VALUE(val);
+	if (d < ULLONG_MAX_PLUS_ONE && LLONG_MIN_MINUS_ONE_IS_LESS_THAN(d)) {
+	    if (0 <= d)
+		return (unsigned LONG_LONG)d;
+	    return (unsigned LONG_LONG)(LONG_LONG)d;
 	}
 	else {
 	    FLOAT_OUT_OF_RANGE(val, "unsigned long long");
@@ -3629,7 +3629,7 @@ fix_fdiv_double(VALUE x, VALUE y)
         return (double)FIX2LONG(x) / RFLOAT_VALUE(y);
     }
     else {
-        return RFLOAT_VALUE(rb_num_coerce_bin(x, y, rb_intern("fdiv")));
+        return NUM2DBL(rb_num_coerce_bin(x, y, rb_intern("fdiv")));
     }
 }
 
@@ -3983,13 +3983,13 @@ fix_pow(VALUE x, VALUE y)
 	return rb_big_pow(x, y);
     }
     else if (RB_TYPE_P(y, T_FLOAT)) {
-	if (RFLOAT_VALUE(y) == 0.0) return DBL2NUM(1.0);
+	double dy = RFLOAT_VALUE(y);
+	if (dy == 0.0) return DBL2NUM(1.0);
 	if (a == 0) {
-	    return DBL2NUM(RFLOAT_VALUE(y) < 0 ? INFINITY : 0.0);
+	    return DBL2NUM(dy < 0 ? INFINITY : 0.0);
 	}
 	if (a == 1) return DBL2NUM(1.0);
 	{
-	    double dy = RFLOAT_VALUE(y);
 	    if (a < 0 && dy != round(dy))
 		return num_funcall1(rb_complex_raw1(x), idPow, y);
 	    return DBL2NUM(pow((double)a, dy));
@@ -5591,8 +5591,8 @@ Init_Numeric(void)
     rb_define_method(rb_cFloat, "truncate", flo_truncate, -1);
 
     rb_define_method(rb_cFloat, "nan?",      flo_is_nan_p, 0);
-    rb_define_method(rb_cFloat, "infinite?", flo_is_infinite_p, 0);
-    rb_define_method(rb_cFloat, "finite?",   flo_is_finite_p, 0);
+    rb_define_method(rb_cFloat, "infinite?", rb_flo_is_infinite_p, 0);
+    rb_define_method(rb_cFloat, "finite?",   rb_flo_is_finite_p, 0);
     rb_define_method(rb_cFloat, "next_float", flo_next_float, 0);
     rb_define_method(rb_cFloat, "prev_float", flo_prev_float, 0);
     rb_define_method(rb_cFloat, "positive?", flo_positive_p, 0);

@@ -13,6 +13,7 @@
 *.log
 *.o
 *.obj
+*.old
 *.orig
 *.pdb
 *.rej
@@ -25,13 +26,13 @@
 .*.list
 .*.time
 .DS_Store
+.bundle
 .ccmalloc
 .ext
 .pc
 .ppack
 .svn
 Makefile
-Makefile.old
 cygruby*.def
 extconf.h
 y.output
@@ -50,12 +51,8 @@ lcov*.info
 /*.rc
 /*_prelude.c
 /COPYING.LIB
-/ChangeLog-*
-/ChangeLog.pre-alpha
-/ChangeLog.pre1_1
 /Doxyfile
 /GNUmakefile
-/GNUmakefile.old
 /README.atheos
 /README.fat-patch
 /README.v6
@@ -86,6 +83,8 @@ lcov*.info
 /goruby
 /id.[ch]
 /largefile.h
+/lcov-c-out
+/lcov-rb-out
 /lcov-out
 /lex.c
 /libruby*.*
@@ -102,6 +101,7 @@ lcov*.info
 /ppack
 /prelude.c
 /preview
+/probes.dmyh
 /probes.h
 /rbconfig.rb
 /rename2.h
@@ -116,6 +116,7 @@ lcov*.info
 /run.gdb
 /sizes.c
 /test.rb
+/test-coverage.dat
 /tmp
 /transdb.h
 /uncommon.mk
@@ -143,12 +144,17 @@ lcov*.info
 /enc/trans/*.lib
 /enc/trans/.time
 
+# /exe/
+/exe/ruby
+/exe/.time
+
 # /ext/
 /ext/extinit.c
 /ext/configure-ext.mk
 /ext/*/exts.mk
 
 # /ext/-test-/win32/dln/
+/ext/-test-/win32/dln/dlntest.dll
 /ext/-test-/win32/dln/dlntest.exp
 /ext/-test-/win32/dln/dlntest.lib
 
@@ -176,7 +182,11 @@ lcov*.info
 
 # /gems
 /gems/*.gem
+/gems/src
 /gems/*-*
+
+# /spec/bundler
+/.rspec_status
 
 # /tool/
 /tool/config.guess

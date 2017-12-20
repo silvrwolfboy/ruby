@@ -2329,4 +2329,22 @@ EOS
       end
     end
   end
+
+  def test_forked_child_handles_signal
+    skip "fork not supported" unless Process.respond_to?(:fork)
+    assert_normal_exit(<<-"end;", '[ruby-core:82883] [Bug #13916]')
+      require 'timeout'
+      pid = fork { sleep }
+      Process.kill(:TERM, pid)
+      assert_equal pid, Timeout.timeout(30) { Process.wait(pid) }
+    end;
+  end
+
+  if Process.respond_to?(:initgroups)
+    def test_initgroups
+      assert_raise(ArgumentError) do
+        Process.initgroups("\0", 0)
+      end
+    end
+  end
 end

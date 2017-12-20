@@ -245,7 +245,7 @@ define rp
   else
   if ($flags & RUBY_T_MASK) == RUBY_T_IMEMO
     printf "%sT_IMEMO%s(", $color_type, $color_end
-    output (enum imemo_type)(($flags>>RUBY_FL_USHIFT)&imemo_mask)
+    output (enum imemo_type)(($flags>>RUBY_FL_USHIFT)&RUBY_IMEMO_MASK)
     printf "): "
     rp_imemo $arg0
   else
@@ -398,12 +398,8 @@ define rp_id
       end
     end
     printf "(%ld): ", $id
-    set $str = lookup_id_str($id)
-    if $str
-      rp_string $str
-    else
-      echo undef\n
-    end
+    print_id $id
+    echo \n
   end
   end
   end
@@ -442,6 +438,18 @@ define output_string
 	    ((struct RString*)($arg0))->as.ary) @ $len
   else
     output ""
+  end
+end
+
+define print_string
+  set $flags = ((struct RBasic*)($arg0))->flags
+  set $len = ($flags & RUBY_FL_USER1) ? \
+          ((struct RString*)($arg0))->as.heap.len : \
+          (($flags & (RUBY_FL_USER2|RUBY_FL_USER3|RUBY_FL_USER4|RUBY_FL_USER5|RUBY_FL_USER6)) >> RUBY_FL_USHIFT+2)
+  if $len > 0
+    printf "%s", *(char *)(($flags & RUBY_FL_USER1) ? \
+	    ((struct RString*)($arg0))->as.heap.ptr : \
+	    ((struct RString*)($arg0))->as.ary) @ $len
   end
 end
 
@@ -538,7 +546,7 @@ document rp_class
 end
 
 define rp_imemo
-  set $flags = (enum imemo_type)((((struct RBasic *)($arg0))->flags >> RUBY_FL_USHIFT) & imemo_mask)
+  set $flags = (enum imemo_type)((((struct RBasic *)($arg0))->flags >> RUBY_FL_USHIFT) & RUBY_IMEMO_MASK)
   if $flags == imemo_cref
     printf "(rb_cref_t *) %p\n", (void*)$arg0
     print *(rb_cref_t *)$arg0
@@ -981,7 +989,7 @@ define iseq
 end
 
 define rb_ps
-  rb_ps_vm ruby_current_vm
+  rb_ps_vm ruby_current_vm_ptr
 end
 document rb_ps
 Dump all threads and their callstacks
@@ -1014,8 +1022,8 @@ define print_lineno
   end
 
   set $i = 0
-  set $size = $iseq->body->line_info_size
-  set $table = $iseq->body->line_info_table
+  set $size = $iseq->body->insns_info_size
+  set $table = $iseq->body->insns_info
   #printf "size: %d\n", $size
   if $size == 0
   else
@@ -1035,23 +1043,21 @@ define print_lineno
 end
 
 define check_method_entry
-  # get $immeo and $can_be_svar and return $me
   set $imemo = (struct RBasic *)$arg0
-  set $can_be_svar = $arg1
   if $imemo != RUBY_Qfalse
     set $type = ($imemo->flags >> 12) & 0x07
     if $type == imemo_ment
       set $me = (rb_callable_method_entry_t *)$imemo
     else
     if $type == imemo_svar
-      set $imemo == ((struct vm_svar *)$imemo)->cref_or_me
-      check_method_entry $imemo 0
+      set $imemo = ((struct vm_svar *)$imemo)->cref_or_me
+      check_method_entry $imemo
     end
     end
   end
 end
 
-define output_id
+define print_id
   set $id = $arg0
   # rb_id_to_serial
   if $id > tLAST_OP_ID
@@ -1083,9 +1089,28 @@ define output_id
           set $arylen = $ary->as.heap.len
         end
         set $result = $aryptr[($serial % ID_ENTRY_UNIT) * ID_ENTRY_SIZE + $t]
-        output_string $result
+	if $result != RUBY_Qnil
+          print_string $result
+	else
+	  echo undef
+	end
       end
     end
+  end
+end
+
+define print_pathobj
+  set $flags = ((struct RBasic*)($arg0))->flags
+  if ($flags & RUBY_T_MASK) == RUBY_T_STRING
+    print_string $arg0
+  end
+  if ($flags & RUBY_T_MASK) == RUBY_T_ARRAY
+    if $flags & RUBY_FL_USER1
+      set $str = ((struct RArray*)($arg0))->as.ary[0]
+    else
+      set $str = ((struct RArray*)($arg0))->as.heap.ptr[0]
+    end
+    print_string $str
   end
 end
 
@@ -1094,20 +1119,29 @@ define rb_ps_thread
   set $ps_thread_th = (rb_thread_t*)$ps_thread->data
   printf "* #<Thread:%p rb_thread_t:%p native_thread:%p>\n", \
     $ps_thread, $ps_thread_th, $ps_thread_th->thread_id
-  set $cfp = $ps_thread_th->ec.cfp
-  set $cfpend = (rb_control_frame_t *)($ps_thread_th->ec.stack + $ps_thread_th->ec.stack_size)-1
+  set $cfp = $ps_thread_th->ec->cfp
+  set $cfpend = (rb_control_frame_t *)($ps_thread_th->ec->vm_stack + $ps_thread_th->ec->vm_stack_size)-1
   while $cfp < $cfpend
     if $cfp->iseq
+      if !((VALUE)$cfp->iseq & RUBY_IMMEDIATE_MASK) && (((imemo_ifunc << RUBY_FL_USHIFT) | RUBY_T_IMEMO)==$cfp->iseq->flags & ((RUBY_IMEMO_MASK << RUBY_FL_USHIFT) | RUBY_T_MASK))
+        printf "%d:ifunc ", $cfpend-$cfp
+        set print symbol-filename on
+        output/a $cfp->iseq.body
+        set print symbol-filename off
+        printf "\n"
+      else
       if $cfp->pc
         set $location = $cfp->iseq->body->location
-        output_string $location.path
+        printf "%d:", $cfpend-$cfp
+        print_pathobj $location.pathobj
         printf ":"
         print_lineno $cfp
         printf ":in `"
-        output_string $location.label
+        print_string $location.label
         printf "'\n"
       else
-        printf "???.rb:???:in `???'\n"
+        printf "%d: ???.rb:???:in `???'\n", $cfpend-$cfp
+      end
       end
     else
       # if VM_FRAME_TYPE($cfp->flag) == VM_FRAME_MAGIC_CFUNC
@@ -1119,7 +1153,7 @@ define rb_ps_thread
         set $env_specval = $ep[-1]
         set $env_me_cref = $ep[-2]
         while ($env_specval & 0x02) != 0
-          check_method_entry $env_me_cref 0
+          check_method_entry $env_me_cref
           if $me != 0
             loop_break
           end
@@ -1128,17 +1162,18 @@ define rb_ps_thread
           set $env_me_cref = $ep[-2]
         end
         if $me == 0
-          check_method_entry $env_me_cref 1
+          check_method_entry $env_me_cref
         end
+        printf "%d:", $cfpend-$cfp
         set print symbol-filename on
         output/a $me->def->body.cfunc.func
         set print symbol-filename off
         set $mid = $me->def->original_id
         printf ":in `"
-        output_id $mid
+        print_id $mid
         printf "'\n"
       else
-        printf "unknown_frame:???:in `???'\n"
+        printf "%d:unknown_frame:???:in `???'\n", $cfpend-$cfp
       end
     end
     set $cfp = $cfp + 1
@@ -1146,7 +1181,7 @@ define rb_ps_thread
 end
 
 define rb_count_objects
-  set $objspace = ruby_current_vm->objspace
+  set $objspace = ruby_current_vm_ptr->objspace
   set $counts_00 = 0
   set $counts_01 = 0
   set $counts_02 = 0

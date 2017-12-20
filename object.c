@@ -2885,13 +2885,33 @@ static const struct conv_method_tbl {
 };
 #define IMPLICIT_CONVERSIONS 7
 
+static int
+conv_method_index(const char *method)
+{
+    static const char prefix[] = "to_";
+
+    if (strncmp(prefix, method, sizeof(prefix)-1) == 0) {
+	const char *const meth = &method[sizeof(prefix)-1];
+	int i;
+	for (i=0; i < numberof(conv_method_names); i++) {
+	    if (conv_method_names[i].method[0] == meth[0] &&
+		strcmp(conv_method_names[i].method, meth) == 0) {
+		return i;
+	    }
+	}
+    }
+    return numberof(conv_method_names);
+}
+
 static VALUE
 convert_type_with_id(VALUE val, const char *tname, ID method, int raise, int index)
 {
     VALUE r = rb_check_funcall(val, method, 0, 0);
     if (r == Qundef) {
 	if (raise) {
-	    const char *msg = index < IMPLICIT_CONVERSIONS ?
+	    const char *msg =
+		((index < 0 ? conv_method_index(rb_id2name(method)) : index)
+		 < IMPLICIT_CONVERSIONS) ?
 		"no implicit conversion of" : "can't convert";
 	    const char *cname = NIL_P(val) ? "nil" :
 		val == Qtrue ? "true" :
@@ -2911,21 +2931,9 @@ convert_type_with_id(VALUE val, const char *tname, ID method, int raise, int ind
 static VALUE
 convert_type(VALUE val, const char *tname, const char *method, int raise)
 {
-    ID m = 0;
-    int i = numberof(conv_method_names);
-    static const char prefix[] = "to_";
-
-    if (strncmp(prefix, method, sizeof(prefix)-1) == 0) {
-	const char *const meth = &method[sizeof(prefix)-1];
-	for (i=0; i < numberof(conv_method_names); i++) {
-	    if (conv_method_names[i].method[0] == meth[0] &&
-		strcmp(conv_method_names[i].method, meth) == 0) {
-		m = conv_method_names[i].id;
-		break;
-	    }
-	}
-    }
-    if (!m) m = rb_intern(method);
+    int i = conv_method_index(method);
+    ID m = i < numberof(conv_method_names) ?
+	conv_method_names[i].id : rb_intern(method);
     return convert_type_with_id(val, tname, m, raise, i);
 }
 
@@ -2973,7 +2981,7 @@ rb_convert_type_with_id(VALUE val, int type, const char *tname, ID method)
     VALUE v;
 
     if (TYPE(val) == type) return val;
-    v = convert_type_with_id(val, tname, method, TRUE, 0);
+    v = convert_type_with_id(val, tname, method, TRUE, -1);
     if (TYPE(v) != type) {
 	conversion_mismatch(val, tname, RSTRING_PTR(rb_id2str(method)), v);
     }
@@ -3017,7 +3025,7 @@ rb_check_convert_type_with_id(VALUE val, int type, const char *tname, ID method)
 
     /* always convert T_DATA */
     if (TYPE(val) == type && type != T_DATA) return val;
-    v = convert_type_with_id(val, tname, method, FALSE, 0);
+    v = convert_type_with_id(val, tname, method, FALSE, -1);
     if (NIL_P(v)) return Qnil;
     if (TYPE(v) != type) {
 	conversion_mismatch(val, tname, RSTRING_PTR(rb_id2str(method)), v);
@@ -3302,7 +3310,7 @@ rb_str_to_dbl(VALUE str, int badcheck)
 	    rb_raise(rb_eArgError, "string for Float contains null byte");
 	}
 	if (s[len]) {		/* no sentinel somehow */
-	    char *p =  ALLOCV(v, len);
+	    char *p = ALLOCV(v, (size_t)len + 1);
 	    MEMCPY(p, s, char, len);
 	    p[len] = '\0';
 	    s = p;
@@ -3601,8 +3609,17 @@ rb_Array(VALUE val)
  *  Returns +arg+ as an Array.
  *
  *  First tries to call <code>to_ary</code> on +arg+, then <code>to_a</code>.
+ *  If +arg+ does not respond to <code>to_ary</code> or <code>to_a</code>,
+ *  returns an Array of length 1 containing +arg+.
  *
- *     Array(1..5)   #=> [1, 2, 3, 4, 5]
+ *  If <code>to_ary</code> or <code>to_a</code> returns something other than
+ *  an Array, raises a <code>TypeError</code>.
+ *
+ *     Array(["a", "b"])  #=> ["a", "b"]
+ *     Array(1..5)        #=> [1, 2, 3, 4, 5]
+ *     Array(key: :value) #=> [[:key, :value]]
+ *     Array(nil)         #=> []
+ *     Array(1)           #=> [1]
  */
 
 static VALUE

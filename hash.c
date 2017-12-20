@@ -348,7 +348,6 @@ hash_foreach_iter(st_data_t key, st_data_t value, st_data_t argp, int error)
     }
     switch (status) {
       case ST_DELETE:
-	FL_SET(arg->hash, HASH_DELETED);
 	return ST_DELETE;
       case ST_CONTINUE:
 	break;
@@ -368,12 +367,7 @@ hash_foreach_ensure_rollback(VALUE hash)
 static VALUE
 hash_foreach_ensure(VALUE hash)
 {
-    if (--RHASH_ITER_LEV(hash) == 0) {
-	if (FL_TEST(hash, HASH_DELETED)) {
-	    st_cleanup_safe(RHASH(hash)->ntbl, (st_data_t)Qundef);
-	    FL_UNSET(hash, HASH_DELETED);
-	}
-    }
+    RHASH_ITER_LEV(hash)--;
     return 0;
 }
 
@@ -430,6 +424,15 @@ VALUE
 rb_hash_new(void)
 {
     return hash_alloc(rb_cHash);
+}
+
+VALUE
+rb_hash_new_with_size(st_index_t size)
+{
+    VALUE ret = rb_hash_new();
+    if (size)
+        RHASH(ret)->ntbl = st_init_table_with_size(&objhash, size);
+    return ret;
 }
 
 static VALUE
@@ -709,11 +712,12 @@ rb_hash_s_create(int argc, VALUE *argv, VALUE klass)
     return hash;
 }
 
-static VALUE
-to_hash(VALUE hash)
+VALUE
+rb_to_hash_type(VALUE hash)
 {
     return rb_convert_type_with_id(hash, T_HASH, "Hash", idTo_hash);
 }
+#define to_hash rb_to_hash_type
 
 VALUE
 rb_check_hash_type(VALUE hash)
@@ -903,7 +907,7 @@ rb_hash_fetch_m(int argc, VALUE *argv, VALUE hash)
 		desc = rb_any_to_s(key);
 	    }
 	    desc = rb_str_ellipsize(desc, 65);
-	    rb_raise(rb_eKeyError, "key not found: %"PRIsVALUE, desc);
+	    rb_key_err_raise(rb_sprintf("key not found: %"PRIsVALUE, desc), hash, key);
 	}
 	return argv[1];
     }
@@ -1098,11 +1102,6 @@ rb_hash_delete_entry(VALUE hash, VALUE key)
 
     if (!RHASH(hash)->ntbl) {
 	return Qundef;
-    }
-    else if (RHASH_ITER_LEV(hash) > 0 &&
-	     (st_delete_safe(RHASH(hash)->ntbl, &ktmp, &val, (st_data_t)Qundef))) {
-	FL_SET(hash, HASH_DELETED);
-	return (VALUE)val;
     }
     else if (st_delete(RHASH(hash)->ntbl, &ktmp, &val)) {
 	return (VALUE)val;
@@ -1323,6 +1322,38 @@ rb_hash_reject(VALUE hash)
     if (!RHASH_EMPTY_P(hash)) {
 	rb_hash_foreach(hash, reject_i, result);
     }
+    return result;
+}
+
+/*
+ *  call-seq:
+ *     hsh.slice(*keys) -> a_hash
+ *
+ *  Returns a hash containing only the given keys and their values.
+ *
+ *     h = { a: 100, b: 200, c: 300 }
+ *     h.slice(:a)           #=> {:a=>100}
+ *     h.slice(:b, :c, :d)   #=> {:b=>200, :c=>300}
+ */
+
+static VALUE
+rb_hash_slice(int argc, VALUE *argv, VALUE hash)
+{
+    int i;
+    VALUE key, value, result;
+
+    if (argc == 0 || RHASH_EMPTY_P(hash)) {
+	return rb_hash_new();
+    }
+    result = rb_hash_new_with_size(argc);
+
+    for (i = 0; i < argc; i++) {
+	key = argv[i];
+	value = rb_hash_lookup2(hash, key, Qundef);
+	if (value != Qundef)
+	    rb_hash_aset(result, key, value);
+    }
+
     return result;
 }
 
@@ -1927,7 +1958,7 @@ rb_hash_transform_values(VALUE hash)
     VALUE result;
 
     RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
-    result = rb_hash_new();
+    result = rb_hash_new_with_size(RHASH_SIZE(hash));
     if (!RHASH_EMPTY_P(hash)) {
         rb_hash_foreach(hash, transform_values_i, result);
     }
@@ -2111,7 +2142,7 @@ rb_hash_keys(VALUE hash)
 
 	rb_gc_writebarrier_remember(keys);
 	RARRAY_PTR_USE(keys, ptr, {
-	    size = st_keys_check(table, ptr, size, Qundef);
+	    size = st_keys(table, ptr, size);
 	});
 	rb_ary_set_len(keys, size);
     }
@@ -2155,7 +2186,7 @@ rb_hash_values(VALUE hash)
 
 	rb_gc_writebarrier_remember(values);
 	RARRAY_PTR_USE(values, ptr, {
-	    size = st_values_check(table, ptr, size, Qundef);
+	    size = st_values(table, ptr, size);
 	});
 	rb_ary_set_len(values, size);
     }
@@ -2428,7 +2459,7 @@ rb_hash_invert_i(VALUE key, VALUE value, VALUE hash)
 static VALUE
 rb_hash_invert(VALUE hash)
 {
-    VALUE h = rb_hash_new();
+    VALUE h = rb_hash_new_with_size(RHASH_SIZE(hash));
 
     rb_hash_foreach(hash, rb_hash_invert_i, h);
     return h;
@@ -2500,11 +2531,13 @@ rb_hash_update_block_i(VALUE key, VALUE value, VALUE hash)
  *     h1 = { "a" => 100, "b" => 200 }
  *     h2 = { "b" => 254, "c" => 300 }
  *     h1.merge!(h2)   #=> {"a"=>100, "b"=>254, "c"=>300}
+ *     h1              #=> {"a"=>100, "b"=>254, "c"=>300}
  *
  *     h1 = { "a" => 100, "b" => 200 }
  *     h2 = { "b" => 254, "c" => 300 }
  *     h1.merge!(h2) { |key, v1, v2| v1 }
  *                     #=> {"a"=>100, "b"=>200, "c"=>300}
+ *     h1              #=> {"a"=>100, "b"=>200, "c"=>300}
  */
 
 static VALUE
@@ -2755,17 +2788,23 @@ rb_hash_flatten(int argc, VALUE *argv, VALUE hash)
 {
     VALUE ary;
 
+    rb_check_arity(argc, 0, 1);
+
     if (argc) {
-	int level = NUM2INT(*argv);
+	int level = NUM2INT(argv[0]);
+
 	if (level == 0) return rb_hash_to_a(hash);
 
 	ary = rb_ary_new_capa(RHASH_SIZE(hash) * 2);
 	rb_hash_foreach(hash, flatten_i, ary);
-	if (level - 1 > 0) {
-	    *argv = INT2FIX(level - 1);
-	    rb_funcallv(ary, id_flatten_bang, argc, argv);
+	level--;
+
+	if (level > 0) {
+	    VALUE ary_flatten_level = INT2FIX(level);
+	    rb_funcallv(ary, id_flatten_bang, 1, &ary_flatten_level);
 	}
 	else if (level < 0) {
+	    /* flatten recursively */
 	    rb_funcallv(ary, id_flatten_bang, 0, 0);
 	}
     }
@@ -2819,10 +2858,10 @@ rb_hash_compact(VALUE hash)
 
 /*
  *  call-seq:
- *     hsh.compact! -> hsh
+ *     hsh.compact! -> hsh or nil
  *
  *  Removes all nil values from the hash.
- *  Returns the hash.
+ *  Returns nil if no changes were made, otherwise returns the hash.
  *
  *     h = { a: 1, b: false, c: nil }
  *     h.compact!     #=> { a: 1, b: false }
@@ -2861,10 +2900,16 @@ rb_hash_compact_bang(VALUE hash)
 static VALUE
 rb_hash_compare_by_id(VALUE hash)
 {
+    st_table *identtable;
     if (rb_hash_compare_by_id_p(hash)) return hash;
-    rb_hash_modify(hash);
-    RHASH(hash)->ntbl->type = &identhash;
-    rb_hash_rehash(hash);
+    rb_hash_modify_check(hash);
+
+    identtable = rb_init_identtable_with_size(RHASH_SIZE(hash));
+    rb_hash_foreach(hash, rb_hash_rehash_i, (VALUE)identtable);
+    if (RHASH(hash)->ntbl)
+	st_free_table(RHASH(hash)->ntbl);
+    RHASH(hash)->ntbl = identtable;
+
     return hash;
 }
 
@@ -3366,7 +3411,7 @@ env_fetch(int argc, VALUE *argv)
     if (!env) {
 	if (block_given) return rb_yield(key);
 	if (argc == 1) {
-	    rb_raise(rb_eKeyError, "key not found: \"%"PRIsVALUE"\"", key);
+	    rb_key_err_raise(rb_sprintf("key not found: \"%"PRIsVALUE"\"", key), envtbl, key);
 	}
 	return argv[1];
     }
@@ -4587,6 +4632,7 @@ Init_Hash(void)
     rb_define_method(rb_cHash, "select!", rb_hash_select_bang, 0);
     rb_define_method(rb_cHash, "reject", rb_hash_reject, 0);
     rb_define_method(rb_cHash, "reject!", rb_hash_reject_bang, 0);
+    rb_define_method(rb_cHash, "slice", rb_hash_slice, -1);
     rb_define_method(rb_cHash, "clear", rb_hash_clear, 0);
     rb_define_method(rb_cHash, "invert", rb_hash_invert, 0);
     rb_define_method(rb_cHash, "update", rb_hash_update, 1);

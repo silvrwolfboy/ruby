@@ -30,6 +30,7 @@ VALUE rb_cArray;
 
 #define ARY_DEFAULT_SIZE 16
 #define ARY_MAX_SIZE (LONG_MAX / (int)sizeof(VALUE))
+#define SMALL_ARRAY_LEN 16
 
 # define ARY_SHARED_P(ary) \
     (assert(!FL_TEST((ary), ELTS_SHARED) || !FL_TEST((ary), RARRAY_EMBED_FLAG)), \
@@ -640,11 +641,12 @@ rb_assoc_new(VALUE car, VALUE cdr)
     return rb_ary_new3(2, car, cdr);
 }
 
-static VALUE
-to_ary(VALUE ary)
+VALUE
+rb_to_array_type(VALUE ary)
 {
     return rb_convert_type_with_id(ary, T_ARRAY, "Array", idTo_ary);
 }
+#define to_ary rb_to_array_type
 
 VALUE
 rb_check_array_type(VALUE ary)
@@ -1283,21 +1285,29 @@ rb_ary_subseq(VALUE ary, long beg, long len)
 VALUE
 rb_ary_aref(int argc, const VALUE *argv, VALUE ary)
 {
-    VALUE arg;
+    rb_check_arity(argc, 1, 2);
+    if (argc == 2) {
+	return rb_ary_aref2(ary, argv[0], argv[1]);
+    }
+    return rb_ary_aref1(ary, argv[0]);
+}
+
+VALUE
+rb_ary_aref2(VALUE ary, VALUE b, VALUE e)
+{
+    long beg = NUM2LONG(b);
+    long len = NUM2LONG(e);
+    if (beg < 0) {
+	beg += RARRAY_LEN(ary);
+    }
+    return rb_ary_subseq(ary, beg, len);
+}
+
+VALUE
+rb_ary_aref1(VALUE ary, VALUE arg)
+{
     long beg, len;
 
-    if (argc == 2) {
-	beg = NUM2LONG(argv[0]);
-	len = NUM2LONG(argv[1]);
-	if (beg < 0) {
-	    beg += RARRAY_LEN(ary);
-	}
-	return rb_ary_subseq(ary, beg, len);
-    }
-    if (argc != 1) {
-	rb_scan_args(argc, argv, "11", NULL, NULL);
-    }
-    arg = argv[0];
     /* special case - speeding up */
     if (FIXNUM_P(arg)) {
 	return rb_ary_entry(ary, FIX2LONG(arg));
@@ -2179,7 +2189,7 @@ static VALUE
 rb_ary_to_h(VALUE ary)
 {
     long i;
-    VALUE hash = rb_hash_new();
+    VALUE hash = rb_hash_new_with_size(RARRAY_LEN(ary));
     for (i=0; i<RARRAY_LEN(ary); i++) {
 	const VALUE elt = rb_ary_elt(ary, i);
 	const VALUE key_value_pair = rb_check_array_type(elt);
@@ -2561,12 +2571,12 @@ static VALUE rb_ary_bsearch_index(VALUE ary);
  *  By using binary search, finds a value from this array which meets
  *  the given condition in O(log n) where n is the size of the array.
  *
- *  You can use this method in two use cases: a find-minimum mode and
+ *  You can use this method in two modes: a find-minimum mode and
  *  a find-any mode.  In either case, the elements of the array must be
  *  monotone (or sorted) with respect to the block.
  *
- *  In find-minimum mode (this is a good choice for typical use case),
- *  the block must return true or false, and there must be an index i
+ *  In find-minimum mode (this is a good choice for typical use cases),
+ *  the block must always return true or false, and there must be an index i
  *  (0 <= i <= ary.size) so that:
  *
  *  - the block returns false for any element whose index is less than
@@ -2584,7 +2594,7 @@ static VALUE rb_ary_bsearch_index(VALUE ary);
  *     ary.bsearch {|x| x >= 100 } #=> nil
  *
  *  In find-any mode (this behaves like libc's bsearch(3)), the block
- *  must return a number, and there must be two indices i and j
+ *  must always return a number, and there must be two indices i and j
  *  (0 <= i <= j <= ary.size) so that:
  *
  *  - the block returns a positive number for ary[k] if 0 <= k < i,
@@ -2625,8 +2635,8 @@ rb_ary_bsearch(VALUE ary)
  *  By using binary search, finds an index of a value from this array which
  *  meets the given condition in O(log n) where n is the size of the array.
  *
- *  It supports two modes, depending on the nature of the block and they are
- *  exactly the same as in the case of #bsearch method with the only difference
+ *  It supports two modes, depending on the nature of the block. They are
+ *  exactly the same as in the case of the #bsearch method, with the only difference
  *  being that this method returns the index of the element instead of the
  *  element itself. For more details consult the documentation for #bsearch.
  */
@@ -3985,6 +3995,20 @@ rb_ary_includes(VALUE ary, VALUE item)
     return Qfalse;
 }
 
+static VALUE
+rb_ary_includes_by_eql(VALUE ary, VALUE item)
+{
+    long i;
+    VALUE e;
+
+    for (i=0; i<RARRAY_LEN(ary); i++) {
+	e = RARRAY_AREF(ary, i);
+	if (rb_eql(item, e)) {
+	    return Qtrue;
+	}
+    }
+    return Qfalse;
+}
 
 static VALUE
 recursive_cmp(VALUE ary1, VALUE ary2, int recur)
@@ -4066,9 +4090,10 @@ ary_add_hash(VALUE hash, VALUE ary)
 }
 
 static inline VALUE
-ary_tmp_hash_new(void)
+ary_tmp_hash_new(VALUE ary)
 {
-    VALUE hash = rb_hash_new();
+    long size = RARRAY_LEN(ary);
+    VALUE hash = rb_hash_new_with_size(size);
 
     RBASIC_CLEAR_CLASS(hash);
     return hash;
@@ -4077,7 +4102,7 @@ ary_tmp_hash_new(void)
 static VALUE
 ary_make_hash(VALUE ary)
 {
-    VALUE hash = ary_tmp_hash_new();
+    VALUE hash = ary_tmp_hash_new(ary);
     return ary_add_hash(hash, ary);
 }
 
@@ -4096,7 +4121,7 @@ ary_add_hash_by(VALUE hash, VALUE ary)
 static VALUE
 ary_make_hash_by(VALUE ary)
 {
-    VALUE hash = ary_tmp_hash_new();
+    VALUE hash = ary_tmp_hash_new(ary);
     return ary_add_hash_by(hash, ary);
 }
 
@@ -4135,9 +4160,19 @@ rb_ary_diff(VALUE ary1, VALUE ary2)
     VALUE hash;
     long i;
 
-    hash = ary_make_hash(to_ary(ary2));
+    ary2 = to_ary(ary2);
     ary3 = rb_ary_new();
 
+    if (RARRAY_LEN(ary2) <= SMALL_ARRAY_LEN) {
+	for (i=0; i<RARRAY_LEN(ary1); i++) {
+	    VALUE elt = rb_ary_elt(ary1, i);
+	    if (rb_ary_includes_by_eql(ary2, elt)) continue;
+	    rb_ary_push(ary3, elt);
+	}
+	return ary3;
+    }
+
+    hash = ary_make_hash(ary2);
     for (i=0; i<RARRAY_LEN(ary1); i++) {
 	if (st_lookup(rb_hash_tbl_raw(hash), RARRAY_AREF(ary1, i), 0)) continue;
 	rb_ary_push(ary3, rb_ary_elt(ary1, i));
@@ -4173,6 +4208,17 @@ rb_ary_and(VALUE ary1, VALUE ary2)
     ary2 = to_ary(ary2);
     ary3 = rb_ary_new();
     if (RARRAY_LEN(ary2) == 0) return ary3;
+
+    if (RARRAY_LEN(ary1) <= SMALL_ARRAY_LEN && RARRAY_LEN(ary2) <= SMALL_ARRAY_LEN) {
+	for (i=0; i<RARRAY_LEN(ary1); i++) {
+	    v = RARRAY_AREF(ary1, i);
+	    if (!rb_ary_includes_by_eql(ary2, v)) continue;
+	    if (rb_ary_includes_by_eql(ary3, v)) continue;
+	    rb_ary_push(ary3, v);
+	}
+	return ary3;
+    }
+
     hash = ary_make_hash(ary2);
     table = rb_hash_tbl_raw(hash);
 
@@ -4218,8 +4264,22 @@ rb_ary_or(VALUE ary1, VALUE ary2)
     long i;
 
     ary2 = to_ary(ary2);
-    hash = ary_make_hash(ary1);
+    if (RARRAY_LEN(ary1) + RARRAY_LEN(ary2) <= SMALL_ARRAY_LEN) {
+	ary3 = rb_ary_new();
+	for (i=0; i<RARRAY_LEN(ary1); i++) {
+	    VALUE elt = rb_ary_elt(ary1, i);
+	    if (rb_ary_includes_by_eql(ary3, elt)) continue;
+	    rb_ary_push(ary3, elt);
+	}
+	for (i=0; i<RARRAY_LEN(ary2); i++) {
+	    VALUE elt = rb_ary_elt(ary2, i);
+	    if (rb_ary_includes_by_eql(ary3, elt)) continue;
+	    rb_ary_push(ary3, elt);
+	}
+	return ary3;
+    }
 
+    hash = ary_make_hash(ary1);
     for (i=0; i<RARRAY_LEN(ary2); i++) {
 	VALUE elt = RARRAY_AREF(ary2, i);
 	if (!st_update(RHASH_TBL_RAW(hash), (st_data_t)elt, ary_hash_orset, (st_data_t)elt)) {
@@ -4242,16 +4302,16 @@ rb_ary_or(VALUE ary1, VALUE ary2)
  *  first form assumes all objects implement <code>Comparable</code>;
  *  the second uses the block to return <em>a <=> b</em>.
  *
- *     a = %w(albatross dog horse)
- *     a.max                                   #=> "horse"
- *     a.max { |a, b| a.length <=> b.length }  #=> "albatross"
+ *     ary = %w(albatross dog horse)
+ *     ary.max                                   #=> "horse"
+ *     ary.max { |a, b| a.length <=> b.length }  #=> "albatross"
  *
  *  If the +n+ argument is given, maximum +n+ elements are returned
  *  as an array.
  *
- *     a = %w[albatross dog horse]
- *     a.max(2)                                  #=> ["horse", "dog"]
- *     a.max(2) {|a, b| a.length <=> b.length }  #=> ["albatross", "horse"]
+ *     ary = %w[albatross dog horse]
+ *     ary.max(2)                                  #=> ["horse", "dog"]
+ *     ary.max(2) {|a, b| a.length <=> b.length }  #=> ["albatross", "horse"]
  */
 static VALUE
 rb_ary_max(int argc, VALUE *argv, VALUE ary)
@@ -4297,16 +4357,16 @@ rb_ary_max(int argc, VALUE *argv, VALUE ary)
  *  first form assumes all objects implement <code>Comparable</code>;
  *  the second uses the block to return <em>a <=> b</em>.
  *
- *     a = %w(albatross dog horse)
- *     a.min                                   #=> "albatross"
- *     a.min { |a, b| a.length <=> b.length }  #=> "dog"
+ *     ary = %w(albatross dog horse)
+ *     ary.min                                   #=> "albatross"
+ *     ary.min { |a, b| a.length <=> b.length }  #=> "dog"
  *
  *  If the +n+ argument is given, minimum +n+ elements are returned
  *  as an array.
  *
- *     a = %w[albatross dog horse]
- *     a.min(2)                                  #=> ["albatross", "dog"]
- *     a.min(2) {|a, b| a.length <=> b.length }  #=> ["dog", "horse"]
+ *     ary = %w[albatross dog horse]
+ *     ary.min(2)                                  #=> ["albatross", "dog"]
+ *     ary.min(2) {|a, b| a.length <=> b.length }  #=> ["dog", "horse"]
  */
 static VALUE
 rb_ary_min(int argc, VALUE *argv, VALUE ary)

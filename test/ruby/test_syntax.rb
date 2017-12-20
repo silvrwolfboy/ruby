@@ -659,6 +659,14 @@ e"
     end
   end
 
+  def test_dedented_heredoc_expr_at_beginning
+    result = "  a\n" \
+             '#{1}'"\n"
+    expected = "  a\n" \
+             '#{1}'"\n"
+    assert_dedented_heredoc(expected, result)
+  end
+
   def test_lineno_after_heredoc
     bug7559 = '[ruby-dev:46737]'
     expected, _, actual = __LINE__, <<eom, __LINE__
@@ -982,11 +990,12 @@ eom
 
   def test_return_toplevel
     feature4840 = '[ruby-core:36785] [Feature #4840]'
-    code = "#{<<~"begin;"}\n#{<<~'end;'}"
+    line = __LINE__+2
+    code = "#{<<~"begin;"}#{<<~'end;'}"
     begin;
       return; raise
       begin return; rescue SystemExit; exit false; end
-      begin return; ensure exit false; end
+      begin return; ensure puts "ensured"; end #=> ensured
       begin ensure return; end
       begin raise; ensure; return; end
       begin raise; rescue; return; end
@@ -998,11 +1007,29 @@ eom
       begin raise; ensure return; end and self
       nil&defined?0--begin e=no_method_error(); return; 0;end
     end;
-    all_assertions(feature4840) do |a|
-      code.each_line do |s|
-        s.chomp!
-        a.for(s) do
-          assert_ruby_status([], s, proc {RubyVM::InstructionSequence.compile(s).disasm})
+      .split(/\n/).map {|s|[(line+=1), *s.split(/#=> /, 2)]}
+    failed = proc do |n, s|
+      RubyVM::InstructionSequence.compile(s, __FILE__, nil, n).disasm
+    end
+    Tempfile.create(%w"test_return_ .rb") do |lib|
+      lib.close
+      args = %W[-W0 -r#{lib.path}]
+      all_assertions_foreach(feature4840, *[:main, :lib].product([:class, :top], code)) do |main, klass, (n, s, *ex)|
+        if klass == :class
+          s = "class X; #{s}; end"
+          if main == :main
+            assert_in_out_err(%[-W0], s, [], /return/, proc {failed[n, s]}, success: false)
+          else
+            File.write(lib, s)
+            assert_in_out_err(args, "", [], /return/, proc {failed[n, s]}, success: false)
+          end
+        else
+          if main == :main
+            assert_in_out_err(%[-W0], s, ex, [], proc {failed[n, s]}, success: true)
+          else
+            File.write(lib, s)
+            assert_in_out_err(args, "", ex, [], proc {failed[n, s]}, success: true)
+          end
         end
       end
     end
@@ -1036,7 +1063,7 @@ eom
       begin;
         tap do
           result << :begin
-          raise "An exception occured!"
+          raise "An exception occurred!"
         ensure
           result << :ensure
         end
@@ -1052,7 +1079,7 @@ eom
       begin;
         tap do
           result << :begin
-          raise "An exception occured!"
+          raise "An exception occurred!"
         rescue
           result << :rescue
         else

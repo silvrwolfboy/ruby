@@ -1,7 +1,6 @@
 # -*- coding: us-ascii -*-
 # frozen_string_literal: false
 require 'test/unit'
-require 'thread'
 
 class TestThread < Test::Unit::TestCase
   class Thread < ::Thread
@@ -366,7 +365,8 @@ class TestThread < Test::Unit::TestCase
   end
 
   def test_report_on_exception
-    assert_separately([], <<~"end;") #do
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
       q1 = Thread::Queue.new
       q2 = Thread::Queue.new
 
@@ -417,6 +417,19 @@ class TestThread < Test::Unit::TestCase
         }
         assert_equal(true, q1.pop)
         Thread.pass while th.alive?
+      }
+
+      assert_warn(/report 5/, "should defaults to the global flag at the start") {
+        th = Thread.start {
+          Thread.current.report_on_exception = true
+          Thread.current.abort_on_exception = true
+          q2.pop
+          raise "report 5"
+        }
+        assert_raise_with_message(RuntimeError, "report 5") {
+          q2.push(true)
+          Thread.pass while th.alive?
+        }
       }
     end;
   end
@@ -952,7 +965,6 @@ _eom
 
   def test_main_thread_status_at_exit
     assert_in_out_err([], <<-'INPUT', ["false false aborting"], [])
-require 'thread'
 q = Thread::Queue.new
 Thread.new(Thread.current) {|mth|
   begin
@@ -1148,7 +1160,7 @@ q.pop
       end
       Process.wait2(f.pid)
     end
-    unless th.join(EnvUtil.apply_timeout_scale(3))
+    unless th.join(EnvUtil.apply_timeout_scale(30))
       Process.kill(:QUIT, f.pid)
       Process.kill(:KILL, f.pid) unless th.join(EnvUtil.apply_timeout_scale(1))
     end

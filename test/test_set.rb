@@ -200,6 +200,23 @@ class TC_Set < Test::Unit::TestCase
     assert_equal(false, set.include?(true))
   end
 
+  def test_eqq
+    set = Set[1,2,3]
+
+    assert_equal(true, set === 1)
+    assert_equal(true, set === 2)
+    assert_equal(true, set === 3)
+    assert_equal(false, set === 0)
+    assert_equal(false, set === nil)
+
+    set = Set["1",nil,"2",nil,"0","1",false]
+    assert_equal(true, set === nil)
+    assert_equal(true, set === false)
+    assert_equal(true, set === "1")
+    assert_equal(false, set === 0)
+    assert_equal(false, set === true)
+  end
+
   def test_superset?
     set = Set[1,2,3]
 
@@ -744,6 +761,19 @@ class TC_Set < Test::Unit::TestCase
     assert_equal(3, set.size)
     assert_equal(array.uniq.sort, set.sort)
   end
+
+  def test_reset
+    [Set, Class.new(Set)].each { |klass|
+      a = [1, 2]
+      b = [1]
+      set = klass.new([a, b])
+
+      b << 2
+      set.reset
+
+      assert_equal(klass.new([a]), set, klass.name)
+    }
+  end
 end
 
 class TC_SortedSet < Test::Unit::TestCase
@@ -811,6 +841,45 @@ class TC_SortedSet < Test::Unit::TestCase
     assert_equal(6, e.size)
     set << 42
     assert_equal(7, e.size)
+  end
+
+  def test_freeze
+    orig = set = SortedSet[3,2,1]
+    assert_equal false, set.frozen?
+    set << 4
+    assert_same orig, set.freeze
+    assert_equal true, set.frozen?
+    assert_raise(RuntimeError) {
+      set << 5
+    }
+    assert_equal 4, set.size
+
+    # https://bugs.ruby-lang.org/issues/12091
+    assert_nothing_raised {
+      assert_equal [1,2,3,4], set.to_a
+    }
+  end
+
+  def test_freeze_dup
+    set1 = SortedSet[1,2,3]
+    set1.freeze
+    set2 = set1.dup
+
+    assert_not_predicate set2, :frozen?
+    assert_nothing_raised {
+      set2.add 4
+    }
+  end
+
+  def test_freeze_clone
+    set1 = SortedSet[1,2,3]
+    set1.freeze
+    set2 = set1.clone
+
+    assert_predicate set2, :frozen?
+    assert_raise(RuntimeError) {
+      set2.add 5
+    }
   end
 end
 

@@ -1404,6 +1404,8 @@ str_shared_replace(VALUE str, VALUE str2)
     }
 }
 
+VALUE rb_obj_as_string_result(VALUE str, VALUE obj);
+
 VALUE
 rb_obj_as_string(VALUE obj)
 {
@@ -1413,6 +1415,12 @@ rb_obj_as_string(VALUE obj)
 	return obj;
     }
     str = rb_funcall(obj, idTo_s, 0);
+    return rb_obj_as_string_result(str, obj);
+}
+
+VALUE
+rb_obj_as_string_result(VALUE str, VALUE obj)
+{
     if (!RB_TYPE_P(str, T_STRING))
 	return rb_any_to_s(obj);
     if (!FL_TEST_RAW(str, RSTRING_FSTR) && FL_ABLE(obj))
@@ -2895,15 +2903,30 @@ rb_str_append(VALUE str, VALUE str2)
     return rb_str_buf_append(str, str2);
 }
 
+#define MIN_PRE_ALLOC_SIZE 48
+
 VALUE
 rb_str_concat_literals(size_t num, const VALUE *strary)
 {
     VALUE str;
-    size_t i;
+    size_t i, s;
+    long len = 1;
 
-    if (!num) return rb_str_new(0, 0);
-    str = rb_str_resurrect(strary[0]);
-    for (i = 1; i < num; ++i) {
+    if (UNLIKELY(!num)) return rb_str_new(0, 0);
+    if (UNLIKELY(num == 1)) return rb_str_resurrect(strary[0]);
+
+    for (i = 0; i < num; ++i) { len += RSTRING_LEN(strary[i]); }
+    if (LIKELY(len < MIN_PRE_ALLOC_SIZE)) {
+	str = rb_str_resurrect(strary[0]);
+	s = 1;
+    }
+    else {
+	str = rb_str_buf_new(len);
+	rb_enc_copy(str, strary[0]);
+	s = 0;
+    }
+
+    for (i = s; i < num; ++i) {
 	const VALUE v = strary[i];
 	int encidx = ENCODING_GET(v);
 
@@ -2919,29 +2942,25 @@ rb_str_concat_literals(size_t num, const VALUE *strary)
 }
 
 /*
- *  Document-method: String#<<
- *  Document-method: String#concat
- *
  *  call-seq:
- *     str << integer                      -> str
- *     str.concat(integer1, integer2,...)  -> str
- *     str << obj                          -> str
  *     str.concat(obj1, obj2,...)          -> str
  *
- *  Append---Concatenates the given object to <i>str</i>. If the object is an
- *  <code>Integer</code>, it is considered as a codepoint, and is converted
- *  to a character before concatenation. Concat can take multiple arguments.
- *  All the arguments are concatenated in order.
+ *  Concatenates the given object(s) to <i>str</i>. If an object is an
+ *  <code>Integer</code>, it is considered a codepoint and converted
+ *  to a character before concatenation.
+ *
+ *  +concat+ can take multiple arguments, and all the arguments are
+ *  concatenated in order.
  *
  *     a = "hello "
- *     a << "world"   #=> "hello world"
- *     a.concat(33)   #=> "hello world!"
- *     a              #=> "hello world!"
+ *     a.concat("world", 33)      #=> "hello world!"
+ *     a                          #=> "hello world!"
  *
  *     b = "sn"
- *     b.concat(b, b)    #=> "snsnsn"
+ *     b.concat("_", b, "_", b)   #=> "sn_sn_sn"
+ *
+ *  See also String#<<, which takes a single argument.
  */
-
 static VALUE
 rb_str_concat_multi(int argc, VALUE *argv, VALUE str)
 {
@@ -2963,6 +2982,21 @@ rb_str_concat_multi(int argc, VALUE *argv, VALUE str)
     return str;
 }
 
+/*
+ *  call-seq:
+ *     str << obj      -> str
+ *     str << integer  -> str
+ *
+ *  Appends the given object to <i>str</i>. If the object is an
+ *  <code>Integer</code>, it is considered a codepoint and converted
+ *  to a character before being appended.
+ *
+ *     a = "hello "
+ *     a << "world"   #=> "hello world"
+ *     a << 33        #=> "hello world!"
+ *
+ *  See also String#concat, which takes multiple arguments.
+ */
 VALUE
 rb_str_concat(VALUE str1, VALUE str2)
 {
@@ -3045,7 +3079,10 @@ rb_str_prepend_multi(int argc, VALUE *argv, VALUE str)
 {
     str_modifiable(str);
 
-    if (argc > 0) {
+    if (argc == 1) {
+	rb_str_update(str, 0L, 0L, argv[0]);
+    }
+    else if (argc > 1) {
 	int i;
 	VALUE arg_str = rb_str_tmp_new(0);
 	rb_enc_copy(arg_str, str);
@@ -3386,43 +3423,50 @@ str_casecmp_p(VALUE str1, VALUE str2)
 static long
 rb_strseq_index(VALUE str, VALUE sub, long offset, int in_byte)
 {
-    const char *s, *sptr, *e;
-    long pos, len, slen;
+    const char *str_ptr, *str_ptr_end, *sub_ptr, *search_start;
+    long pos, str_len, sub_len, search_len;
     int single_byte = single_byte_optimizable(str);
     rb_encoding *enc;
 
     enc = rb_enc_check(str, sub);
     if (is_broken_string(sub)) return -1;
 
-    len = (in_byte || single_byte) ? RSTRING_LEN(str) : str_strlen(str, enc); /* rb_enc_check */
-    slen = in_byte ? RSTRING_LEN(sub) : str_strlen(sub, enc); /* rb_enc_check */
-    if (offset < 0) {
-	offset += len;
-	if (offset < 0) return -1;
-    }
-    if (len - offset < slen) return -1;
+    str_ptr = RSTRING_PTR(str);
+    str_ptr_end = RSTRING_END(str);
+    str_len = RSTRING_LEN(str);
+    sub_ptr = RSTRING_PTR(sub);
+    sub_len = RSTRING_LEN(sub);
 
-    s = RSTRING_PTR(str);
-    e = RSTRING_END(str);
-    if (offset) {
-	if (!in_byte) offset = str_offset(s, e, offset, enc, single_byte);
-	s += offset;
+    if (str_len < sub_len) return -1;
+
+    if (offset != 0) {
+	long str_len_char, sub_len_char;
+	str_len_char = (in_byte || single_byte) ? str_len : str_strlen(str, enc);
+	sub_len_char = in_byte ? sub_len : str_strlen(sub, enc);
+	if (offset < 0) {
+	    offset += str_len_char;
+	    if (offset < 0) return -1;
+	}
+	if (str_len_char - offset < sub_len_char) return -1;
+	if (!in_byte) offset = str_offset(str_ptr, str_ptr_end, offset, enc, single_byte);
+	str_ptr += offset;
     }
-    if (slen == 0) return offset;
+    if (sub_len == 0) return offset;
+
     /* need proceed one character at a time */
-    sptr = RSTRING_PTR(sub);
-    slen = RSTRING_LEN(sub);
-    len = RSTRING_LEN(str) - offset;
+
+    search_start = str_ptr;
+    search_len = RSTRING_LEN(str) - offset;
     for (;;) {
 	const char *t;
-	pos = rb_memsearch(sptr, slen, s, len, enc);
+	pos = rb_memsearch(sub_ptr, sub_len, search_start, search_len, enc);
 	if (pos < 0) return pos;
-	t = rb_enc_right_char_head(s, s+pos, e, enc);
-	if (t == s + pos) break;
-	len -= t - s;
-	if (len <= 0) return -1;
-	offset += t - s;
-	s = t;
+	t = rb_enc_right_char_head(search_start, search_start+pos, str_ptr_end, enc);
+	if (t == search_start + pos) break;
+	search_len -= t - search_start;
+	if (search_len <= 0) return -1;
+	offset += t - search_start;
+	search_start = t;
     }
     return pos + offset;
 }
@@ -4071,6 +4115,7 @@ str_succ(VALUE str)
             }
             carry_pos = s - sbeg;
 	}
+	ENC_CODERANGE_SET(str, ENC_CODERANGE_UNKNOWN);
     }
     RESIZE_CAPA(str, slen + carry_len);
     sbeg = RSTRING_PTR(str);
@@ -5148,7 +5193,7 @@ rb_str_gsub_bang(int argc, VALUE *argv, VALUE str)
  *     str.gsub(pattern) {|match| block }   -> new_str
  *     str.gsub(pattern)                    -> enumerator
  *
- *  Returns a copy of <i>str</i> with the <em>all</em> occurrences of
+ *  Returns a copy of <i>str</i> with <em>all</em> occurrences of
  *  <i>pattern</i> substituted for the second argument. The <i>pattern</i> is
  *  typically a <code>Regexp</code>; if given as a <code>String</code>, any
  *  regular expression metacharacters it contains will be interpreted
@@ -6629,7 +6674,7 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 	}
     }
 
-    if (cr == ENC_CODERANGE_VALID)
+    if (cr == ENC_CODERANGE_VALID && rb_enc_asciicompat(e1))
 	cr = ENC_CODERANGE_7BIT;
     str_modify_keep_cr(str);
     s = RSTRING_PTR(str); send = RSTRING_END(str);
@@ -7363,7 +7408,7 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
 	else if (lim == 1) {
 	    if (RSTRING_LEN(str) == 0)
 		return rb_ary_new2(0);
-	    return rb_ary_new3(1, str);
+	    return rb_ary_new3(1, rb_str_dup(str));
 	}
 	i = 1;
     }
@@ -7568,6 +7613,38 @@ rb_str_split(VALUE str, const char *sep0)
     return rb_str_split_m(1, &sep, str);
 }
 
+static int
+enumerator_wantarray(const char *method)
+{
+    if (rb_block_given_p()) {
+#if STRING_ENUMERATORS_WANTARRAY
+	rb_warn("given block not used");
+#else
+	rb_warning("passing a block to String#%s is deprecated", method);
+	return 0;
+#endif
+    }
+    return 1;
+}
+
+#define WANTARRAY(m, size) \
+    (enumerator_wantarray(m) ? rb_ary_new_capa(size) : 0)
+
+static inline int
+enumerator_element(VALUE ary, VALUE e)
+{
+    if (ary) {
+	rb_ary_push(ary, e);
+	return 0;
+    }
+    else {
+	rb_yield(e);
+	return 1;
+    }
+}
+
+#define ENUM_ELEM(ary, e) enumerator_element(ary, e)
+
 static const char *
 chomp_newline(const char *p, const char *e, rb_encoding *enc)
 {
@@ -7582,14 +7659,13 @@ chomp_newline(const char *p, const char *e, rb_encoding *enc)
 }
 
 static VALUE
-rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
+rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, VALUE ary)
 {
     rb_encoding *enc;
     VALUE line, rs, orig = str, opts = Qnil, chomp = Qfalse;
     const char *ptr, *pend, *subptr, *subend, *rsptr, *hit, *adjusted;
     long pos, len, rslen;
     int rsnewline = 0;
-    VALUE ary = 0;
 
     if (rb_scan_args(argc, argv, "01:", &rs, &opts) == 0)
 	rs = rb_rs;
@@ -7602,31 +7678,11 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 	chomp = (chomp != Qundef && RTEST(chomp));
     }
 
-    if (rb_block_given_p()) {
-	if (wantarray) {
-#if STRING_ENUMERATORS_WANTARRAY
-	    rb_warn("given block not used");
-	    ary = rb_ary_new();
-#else
-	    rb_warning("passing a block to String#lines is deprecated");
-	    wantarray = 0;
-#endif
-	}
-    }
-    else {
-	if (wantarray)
-	    ary = rb_ary_new();
-	else
-	    return SIZED_ENUMERATOR(str, argc, argv, 0);
-    }
-
     if (NIL_P(rs)) {
-	if (wantarray) {
-	    rb_ary_push(ary, str);
+	if (!ENUM_ELEM(ary, str)) {
 	    return ary;
 	}
 	else {
-	    rb_yield(str);
 	    return orig;
 	}
     }
@@ -7668,11 +7724,7 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 	    if (!subptr) break;
 	    line = rb_str_subseq(str, subptr - ptr,
 				 subend - subptr + (chomp ? 0 : rslen));
-	    if (wantarray) {
-		rb_ary_push(ary, line);
-	    }
-	    else {
-		rb_yield(line);
+	    if (ENUM_ELEM(ary, line)) {
 		str_mod_check(str, ptr, len);
 	    }
 	    subptr = eol = NULL;
@@ -7713,11 +7765,7 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 	    }
 	}
 	line = rb_str_subseq(str, subptr - ptr, subend - subptr);
-	if (wantarray) {
-	    rb_ary_push(ary, line);
-	}
-	else {
-	    rb_yield(line);
+	if (ENUM_ELEM(ary, line)) {
 	    str_mod_check(str, ptr, len);
 	}
 	subptr = hit;
@@ -7728,15 +7776,12 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 	    pend = chomp_newline(subptr, pend, enc);
 	}
 	line = rb_str_subseq(str, subptr - ptr, pend - subptr);
-	if (wantarray)
-	    rb_ary_push(ary, line);
-	else
-	    rb_yield(line);
+	ENUM_ELEM(ary, line);
 	RB_GC_GUARD(str);
     }
 
   end:
-    if (wantarray)
+    if (ary)
 	return ary;
     else
 	return orig;
@@ -7744,14 +7789,16 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 
 /*
  *  call-seq:
- *     str.each_line(separator=$/) {|substr| block }   -> str
- *     str.each_line(separator=$/)                     -> an_enumerator
+ *     str.each_line(separator=$/ [, getline_args]) {|substr| block } -> str
+ *     str.each_line(separator=$/ [, getline_args])                   -> an_enumerator
  *
  *  Splits <i>str</i> using the supplied parameter as the record
  *  separator (<code>$/</code> by default), passing each substring in
  *  turn to the supplied block.  If a zero-length record separator is
  *  supplied, the string is split into paragraphs delimited by
  *  multiple successive newlines.
+ *
+ *  See IO.readlines for details about getline_args.
  *
  *  If no block is given, an enumerator is returned instead.
  *
@@ -7780,6 +7827,7 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, int wantarray)
 static VALUE
 rb_str_each_line(int argc, VALUE *argv, VALUE str)
 {
+    RETURN_SIZED_ENUMERATOR(str, argc, argv, 0);
     return rb_str_enumerate_lines(argc, argv, str, 0);
 }
 
@@ -7798,7 +7846,8 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 static VALUE
 rb_str_lines(int argc, VALUE *argv, VALUE str)
 {
-    return rb_str_enumerate_lines(argc, argv, str, 1);
+    VALUE ary = WANTARRAY("lines", 0);
+    return rb_str_enumerate_lines(argc, argv, str, ary);
 }
 
 static VALUE
@@ -7808,36 +7857,14 @@ rb_str_each_byte_size(VALUE str, VALUE args, VALUE eobj)
 }
 
 static VALUE
-rb_str_enumerate_bytes(VALUE str, int wantarray)
+rb_str_enumerate_bytes(VALUE str, VALUE ary)
 {
     long i;
-    VALUE MAYBE_UNUSED(ary);
-
-    if (rb_block_given_p()) {
-	if (wantarray) {
-#if STRING_ENUMERATORS_WANTARRAY
-	    rb_warn("given block not used");
-	    ary = rb_ary_new();
-#else
-	    rb_warning("passing a block to String#bytes is deprecated");
-	    wantarray = 0;
-#endif
-	}
-    }
-    else {
-	if (wantarray)
-	    ary = rb_ary_new2(RSTRING_LEN(str));
-	else
-	    return SIZED_ENUMERATOR(str, 0, 0, rb_str_each_byte_size);
-    }
 
     for (i=0; i<RSTRING_LEN(str); i++) {
-	if (wantarray)
-	    rb_ary_push(ary, INT2FIX(RSTRING_PTR(str)[i] & 0xff));
-	else
-	    rb_yield(INT2FIX(RSTRING_PTR(str)[i] & 0xff));
+	ENUM_ELEM(ary, INT2FIX(RSTRING_PTR(str)[i] & 0xff));
     }
-    if (wantarray)
+    if (ary)
 	return ary;
     else
 	return str;
@@ -7861,6 +7888,7 @@ rb_str_enumerate_bytes(VALUE str, int wantarray)
 static VALUE
 rb_str_each_byte(VALUE str)
 {
+    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_byte_size);
     return rb_str_enumerate_bytes(str, 0);
 }
 
@@ -7878,7 +7906,8 @@ rb_str_each_byte(VALUE str)
 static VALUE
 rb_str_bytes(VALUE str)
 {
-    return rb_str_enumerate_bytes(str, 1);
+    VALUE ary = WANTARRAY("bytes", RSTRING_LEN(str));
+    return rb_str_enumerate_bytes(str, ary);
 }
 
 static VALUE
@@ -7888,60 +7917,32 @@ rb_str_each_char_size(VALUE str, VALUE args, VALUE eobj)
 }
 
 static VALUE
-rb_str_enumerate_chars(VALUE str, int wantarray)
+rb_str_enumerate_chars(VALUE str, VALUE ary)
 {
     VALUE orig = str;
-    VALUE substr;
     long i, len, n;
     const char *ptr;
     rb_encoding *enc;
-    VALUE MAYBE_UNUSED(ary);
 
     str = rb_str_new_frozen(str);
     ptr = RSTRING_PTR(str);
     len = RSTRING_LEN(str);
     enc = rb_enc_get(str);
 
-    if (rb_block_given_p()) {
-	if (wantarray) {
-#if STRING_ENUMERATORS_WANTARRAY
-	    rb_warn("given block not used");
-	    ary = rb_ary_new_capa(str_strlen(str, enc)); /* str's enc*/
-#else
-	    rb_warning("passing a block to String#chars is deprecated");
-	    wantarray = 0;
-#endif
-	}
-    }
-    else {
-	if (wantarray)
-	    ary = rb_ary_new_capa(str_strlen(str, enc)); /* str's enc*/
-	else
-	    return SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
-    }
-
     if (ENC_CODERANGE_CLEAN_P(ENC_CODERANGE(str))) {
 	for (i = 0; i < len; i += n) {
 	    n = rb_enc_fast_mbclen(ptr + i, ptr + len, enc);
-	    substr = rb_str_subseq(str, i, n);
-	    if (wantarray)
-		rb_ary_push(ary, substr);
-	    else
-		rb_yield(substr);
+	    ENUM_ELEM(ary, rb_str_subseq(str, i, n));
 	}
     }
     else {
 	for (i = 0; i < len; i += n) {
 	    n = rb_enc_mbclen(ptr + i, ptr + len, enc);
-	    substr = rb_str_subseq(str, i, n);
-	    if (wantarray)
-		rb_ary_push(ary, substr);
-	    else
-		rb_yield(substr);
+	    ENUM_ELEM(ary, rb_str_subseq(str, i, n));
 	}
     }
     RB_GC_GUARD(str);
-    if (wantarray)
+    if (ary)
 	return ary;
     else
 	return orig;
@@ -7965,6 +7966,7 @@ rb_str_enumerate_chars(VALUE str, int wantarray)
 static VALUE
 rb_str_each_char(VALUE str)
 {
+    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
     return rb_str_enumerate_chars(str, 0);
 }
 
@@ -7982,56 +7984,34 @@ rb_str_each_char(VALUE str)
 static VALUE
 rb_str_chars(VALUE str)
 {
-    return rb_str_enumerate_chars(str, 1);
+    VALUE ary = WANTARRAY("chars", rb_str_strlen(str));
+    return rb_str_enumerate_chars(str, ary);
 }
 
-
 static VALUE
-rb_str_enumerate_codepoints(VALUE str, int wantarray)
+rb_str_enumerate_codepoints(VALUE str, VALUE ary)
 {
     VALUE orig = str;
     int n;
     unsigned int c;
     const char *ptr, *end;
     rb_encoding *enc;
-    VALUE MAYBE_UNUSED(ary);
 
     if (single_byte_optimizable(str))
-	return rb_str_enumerate_bytes(str, wantarray);
+	return rb_str_enumerate_bytes(str, ary);
 
     str = rb_str_new_frozen(str);
     ptr = RSTRING_PTR(str);
     end = RSTRING_END(str);
     enc = STR_ENC_GET(str);
 
-    if (rb_block_given_p()) {
-	if (wantarray) {
-#if STRING_ENUMERATORS_WANTARRAY
-	    rb_warn("given block not used");
-	    ary = rb_ary_new_capa(str_strlen(str, enc)); /* str's enc*/
-#else
-	    rb_warning("passing a block to String#codepoints is deprecated");
-	    wantarray = 0;
-#endif
-	}
-    }
-    else {
-	if (wantarray)
-	    ary = rb_ary_new_capa(str_strlen(str, enc)); /* str's enc*/
-	else
-	    return SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
-    }
-
     while (ptr < end) {
 	c = rb_enc_codepoint_len(ptr, end, &n, enc);
-	if (wantarray)
-	    rb_ary_push(ary, UINT2NUM(c));
-	else
-	    rb_yield(UINT2NUM(c));
+	ENUM_ELEM(ary, UINT2NUM(c));
 	ptr += n;
     }
     RB_GC_GUARD(str);
-    if (wantarray)
+    if (ary)
 	return ary;
     else
 	return orig;
@@ -8060,6 +8040,7 @@ rb_str_enumerate_codepoints(VALUE str, int wantarray)
 static VALUE
 rb_str_each_codepoint(VALUE str)
 {
+    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
     return rb_str_enumerate_codepoints(str, 0);
 }
 
@@ -8078,9 +8059,102 @@ rb_str_each_codepoint(VALUE str)
 static VALUE
 rb_str_codepoints(VALUE str)
 {
-    return rb_str_enumerate_codepoints(str, 1);
+    VALUE ary = WANTARRAY("codepoints", rb_str_strlen(str));
+    return rb_str_enumerate_codepoints(str, ary);
 }
 
+static VALUE
+rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
+{
+    VALUE orig = str;
+    regex_t *reg_grapheme_cluster = NULL;
+    static regex_t *reg_grapheme_cluster_utf8 = NULL;
+    int encidx = ENCODING_GET(str);
+    rb_encoding *enc = rb_enc_from_index(encidx);
+    int unicode_p = rb_enc_unicode_p(enc);
+    const char *ptr, *end;
+
+    if (!unicode_p || single_byte_optimizable(str)) {
+	return rb_str_enumerate_chars(str, ary);
+    }
+
+    /* synchronize */
+    if (encidx == rb_utf8_encindex() && reg_grapheme_cluster_utf8) {
+	reg_grapheme_cluster = reg_grapheme_cluster_utf8;
+    }
+    if (!reg_grapheme_cluster) {
+	const OnigUChar source[] = "\\X";
+	int r = onig_new(&reg_grapheme_cluster, source, source + sizeof(source) - 1,
+			 ONIG_OPTION_DEFAULT, enc, OnigDefaultSyntax, NULL);
+	if (r) {
+	    rb_bug("cannot compile grapheme cluster regexp");
+	}
+	if (encidx == rb_utf8_encindex()) {
+	    reg_grapheme_cluster_utf8 = reg_grapheme_cluster;
+	}
+    }
+
+    if (!ary) str = rb_str_new_frozen(str);
+    ptr = RSTRING_PTR(str);
+    end = RSTRING_END(str);
+
+    while (ptr < end) {
+	OnigPosition len = onig_match(reg_grapheme_cluster,
+				      (const OnigUChar *)ptr, (const OnigUChar *)end,
+				      (const OnigUChar *)ptr, NULL, 0);
+	if (len == 0) break;
+	if (len < 0) {
+	    break;
+	}
+	ENUM_ELEM(ary, rb_enc_str_new(ptr, len, enc));
+	ptr += len;
+    }
+    RB_GC_GUARD(str);
+    if (ary)
+	return ary;
+    else
+	return orig;
+}
+
+/*
+ *  call-seq:
+ *     str.each_grapheme_cluster {|cstr| block }    -> str
+ *     str.each_grapheme_cluster                    -> an_enumerator
+ *
+ *  Passes each grapheme cluster in <i>str</i> to the given block, or returns
+ *  an enumerator if no block is given.
+ *  Unlike String#each_char, this enumerates by grapheme clusters defined by
+ *  Unicode Standard Annex #29 http://unicode.org/reports/tr29/
+ *
+ *     "a\u0300".each_char.to_a.size #=> 2
+ *     "a\u0300".each_grapheme_cluster.to_a.size #=> 1
+ *
+ */
+
+static VALUE
+rb_str_each_grapheme_cluster(VALUE str)
+{
+    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
+    return rb_str_enumerate_grapheme_clusters(str, 0);
+}
+
+/*
+ *  call-seq:
+ *     str.grapheme_clusters   -> an_array
+ *
+ *  Returns an array of grapheme clusters in <i>str</i>.  This is a shorthand
+ *  for <code>str.each_grapheme_cluster.to_a</code>.
+ *
+ *  If a block is given, which is a deprecated form, works the same as
+ *  <code>each_grapheme_cluster</code>.
+ */
+
+static VALUE
+rb_str_grapheme_clusters(VALUE str)
+{
+    VALUE ary = WANTARRAY("grapheme_clusters", rb_str_strlen(str));
+    return rb_str_enumerate_grapheme_clusters(str, ary);
+}
 
 static long
 chopped_length(VALUE str)
@@ -8250,6 +8324,11 @@ chompped_length(VALUE str, VALUE rs)
     return len;
 }
 
+/*!
+ * Returns the separator for arguments of rb_str_chomp.
+ *
+ * @return returns rb_ps ($/) as default, the default value of rb_ps ($/) is "\n".
+ */
 static VALUE
 chomp_rs(int argc, const VALUE *argv)
 {
@@ -8760,16 +8839,13 @@ rb_str_oct(VALUE str)
 static VALUE
 rb_str_crypt(VALUE str, VALUE salt)
 {
-#undef LARGE_CRYPT_DATA
 #ifdef HAVE_CRYPT_R
-# if defined SIZEOF_CRYPT_DATA && SIZEOF_CRYPT_DATA <= 256
-    struct crypt_data cdata, *const data = &cdata;
-# else
-#   define LARGE_CRYPT_DATA
-    struct crypt_data *data = ALLOC(struct crypt_data);
-# endif
+    VALUE databuf;
+    struct crypt_data *data;
+#   define CRYPT_END() ALLOCV_END(databuf)
 #else
     extern char *crypt(const char *, const char *);
+#   define CRYPT_END() (void)0
 #endif
     VALUE result;
     const char *s, *saltp;
@@ -8798,6 +8874,7 @@ rb_str_crypt(VALUE str, VALUE salt)
     }
 #endif
 #ifdef HAVE_CRYPT_R
+    data = ALLOCV(databuf, sizeof(struct crypt_data));
 # ifdef HAVE_STRUCT_CRYPT_DATA_INITIALIZED
     data->initialized = 0;
 # endif
@@ -8806,17 +8883,12 @@ rb_str_crypt(VALUE str, VALUE salt)
     res = crypt(s, saltp);
 #endif
     if (!res) {
-#ifdef LARGE_CRYPT_DATA
 	int err = errno;
-	xfree(data);
-	errno = err;
-#endif
-	rb_sys_fail("crypt");
+	CRYPT_END();
+	rb_syserr_fail(err, "crypt");
     }
     result = rb_str_new_cstr(res);
-#ifdef LARGE_CRYPT_DATA
-    xfree(data);
-#endif
+    CRYPT_END();
     FL_SET_RAW(result, OBJ_TAINTED_RAW(str) | OBJ_TAINTED_RAW(salt));
     return result;
 }
@@ -9089,7 +9161,7 @@ rb_str_partition(VALUE str, VALUE sep)
 	pos = rb_reg_search(sep, str, 0, 0);
 	if (pos < 0) {
 	  failed:
-	    return rb_ary_new3(3, str, str_new_empty(str), str_new_empty(str));
+	    return rb_ary_new3(3, rb_str_dup(str), str_new_empty(str), str_new_empty(str));
 	}
 	sep = rb_str_subpat(str, sep, INT2FIX(0));
 	if (pos == 0 && RSTRING_LEN(sep) == 0) goto failed;
@@ -9142,7 +9214,7 @@ rb_str_rpartition(VALUE str, VALUE sep)
 	pos = rb_str_rindex(str, sep, pos);
     }
     if (pos < 0) {
-	return rb_ary_new3(3, str_new_empty(str), str_new_empty(str), str);
+       return rb_ary_new3(3, str_new_empty(str), str_new_empty(str), rb_str_dup(str));
     }
     if (regex) {
 	sep = rb_reg_nth_match(0, rb_backref_get());
@@ -9176,11 +9248,20 @@ rb_str_start_with(int argc, VALUE *argv, VALUE str)
 
     for (i=0; i<argc; i++) {
 	VALUE tmp = argv[i];
-	StringValue(tmp);
-	rb_enc_check(str, tmp);
-	if (RSTRING_LEN(str) < RSTRING_LEN(tmp)) continue;
-	if (memcmp(RSTRING_PTR(str), RSTRING_PTR(tmp), RSTRING_LEN(tmp)) == 0)
-	    return Qtrue;
+	switch (TYPE(tmp)) {
+	  case T_REGEXP:
+	    {
+		bool r = rb_reg_start_with_p(tmp, str);
+		if (r) return Qtrue;
+	    }
+	    break;
+	  default:
+	    StringValue(tmp);
+	    rb_enc_check(str, tmp);
+	    if (RSTRING_LEN(str) < RSTRING_LEN(tmp)) continue;
+	    if (memcmp(RSTRING_PTR(str), RSTRING_PTR(tmp), RSTRING_LEN(tmp)) == 0)
+		return Qtrue;
+	}
     }
     return Qfalse;
 }
@@ -9221,6 +9302,15 @@ rb_str_end_with(int argc, VALUE *argv, VALUE str)
     return Qfalse;
 }
 
+/*!
+ * Returns the length of the <i>prefix</i> to be deleted in the given <i>str</i>,
+ * returning 0 if <i>str</i> does not start with the <i>prefix</i>.
+ *
+ * @param str the target
+ * @param prefix the prefix
+ * @retval 0 if the given <i>str</i> does not start with the given <i>prefix</i>
+ * @retval Positive-Integer otherwise
+ */
 static long
 deleted_prefix_length(VALUE str, VALUE prefix)
 {
@@ -9287,6 +9377,15 @@ rb_str_delete_prefix(VALUE str, VALUE prefix)
     return rb_str_subseq(str, prefixlen, RSTRING_LEN(str) - prefixlen);
 }
 
+/*!
+ * Returns the length of the <i>suffix</i> to be deleted in the given <i>str</i>,
+ * returning 0 if <i>str</i> does not end with the <i>suffix</i>.
+ *
+ * @param str the target
+ * @param suffix the suffix
+ * @retval 0 if the given <i>str</i> does not end with the given <i>suffix</i>
+ * @retval Positive-Integer otherwise
+ */
 static long
 deleted_suffix_length(VALUE str, VALUE suffix)
 {
@@ -9526,6 +9625,8 @@ str_compat_and_valid(VALUE str, rb_encoding *enc)
     return str;
 }
 
+static VALUE enc_str_scrub(rb_encoding *enc, VALUE str, VALUE repl, int cr);
+
 /**
  * @param str the string to be scrubbed
  * @param repl the replacement character
@@ -9534,13 +9635,25 @@ str_compat_and_valid(VALUE str, rb_encoding *enc)
 VALUE
 rb_str_scrub(VALUE str, VALUE repl)
 {
-    return rb_enc_str_scrub(STR_ENC_GET(str), str, repl);
+    rb_encoding *enc = STR_ENC_GET(str);
+    return enc_str_scrub(enc, str, repl, ENC_CODERANGE(str));
 }
 
 VALUE
 rb_enc_str_scrub(rb_encoding *enc, VALUE str, VALUE repl)
 {
-    int cr = ENC_CODERANGE(str);
+    int cr = ENC_CODERANGE_UNKNOWN;
+    if (enc == STR_ENC_GET(str)) {
+	/* cached coderange makes sense only when enc equals the
+	 * actual encoding of str */
+	cr = ENC_CODERANGE(str);
+    }
+    return enc_str_scrub(enc, str, repl, cr);
+}
+
+static VALUE
+enc_str_scrub(rb_encoding *enc, VALUE str, VALUE repl, int cr)
+{
     int encidx;
     VALUE buf = Qnil;
     const char *rep;
@@ -10492,6 +10605,7 @@ Init_String(void)
     rb_define_method(rb_cString, "bytes", rb_str_bytes, 0);
     rb_define_method(rb_cString, "chars", rb_str_chars, 0);
     rb_define_method(rb_cString, "codepoints", rb_str_codepoints, 0);
+    rb_define_method(rb_cString, "grapheme_clusters", rb_str_grapheme_clusters, 0);
     rb_define_method(rb_cString, "reverse", rb_str_reverse, 0);
     rb_define_method(rb_cString, "reverse!", rb_str_reverse_bang, 0);
     rb_define_method(rb_cString, "concat", rb_str_concat_multi, -1);
@@ -10547,6 +10661,7 @@ Init_String(void)
     rb_define_method(rb_cString, "each_byte", rb_str_each_byte, 0);
     rb_define_method(rb_cString, "each_char", rb_str_each_char, 0);
     rb_define_method(rb_cString, "each_codepoint", rb_str_each_codepoint, 0);
+    rb_define_method(rb_cString, "each_grapheme_cluster", rb_str_each_grapheme_cluster, 0);
 
     rb_define_method(rb_cString, "sum", rb_str_sum, -1);
 

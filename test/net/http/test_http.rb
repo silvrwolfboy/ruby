@@ -59,6 +59,33 @@ class TestNetHTTP < Test::Unit::TestCase
     end
   end
 
+  def test_addr_port
+    http = Net::HTTP.new 'hostname.example', nil, nil
+    addr_port = http.__send__ :addr_port
+    assert_equal 'hostname.example', addr_port
+
+    http.use_ssl = true
+    addr_port = http.__send__ :addr_port
+    assert_equal 'hostname.example:80', addr_port
+
+    http = Net::HTTP.new '203.0.113.1', nil, nil
+    addr_port = http.__send__ :addr_port
+    assert_equal '203.0.113.1', addr_port
+
+    http.use_ssl = true
+    addr_port = http.__send__ :addr_port
+    assert_equal '203.0.113.1:80', addr_port
+
+    http = Net::HTTP.new '2001:db8::1', nil, nil
+    addr_port = http.__send__ :addr_port
+    assert_equal '[2001:db8::1]', addr_port
+
+    http.use_ssl = true
+    addr_port = http.__send__ :addr_port
+    assert_equal '[2001:db8::1]:80', addr_port
+
+  end
+
   def test_edit_path
     http = Net::HTTP.new 'hostname.example', nil, nil
 
@@ -94,6 +121,16 @@ class TestNetHTTP < Test::Unit::TestCase
 
       http = Net::HTTP.new 'hostname.example', nil
       assert_equal nil, http.proxy_address
+    end
+  end
+
+  def test_proxy_address_no_proxy
+    clean_http_proxy_env do
+      http = Net::HTTP.new 'hostname.example', nil, 'proxy.example', nil, nil, nil, 'example'
+      assert_nil http.proxy_address
+
+      http = Net::HTTP.new '10.224.1.1', nil, 'proxy.example', nil, nil, nil, 'example,10.224.0.0/22'
+      assert_nil http.proxy_address
     end
   end
 
@@ -431,12 +468,13 @@ module TestNetHTTP_version_1_1_methods
   end
 
   def test_s_post
-    url = "http://#{config('host')}:#{config('port')}/"
+    url = "http://#{config('host')}:#{config('port')}/?q=a"
     res = Net::HTTP.post(
               URI.parse(url),
               "a=x")
     assert_equal "application/x-www-form-urlencoded", res["Content-Type"]
     assert_equal "a=x", res.body
+    assert_equal url, res["X-request-uri"]
 
     res = Net::HTTP.post(
               URI.parse(url),
@@ -1041,6 +1079,58 @@ class TestNetHTTPKeepAlive < Test::Unit::TestCase
       res = http.get('/')
       assert_kind_of Net::HTTPResponse, res
       assert_kind_of String, res.body
+    }
+  end
+
+  class MockSocket
+    attr_reader :count
+    def initialize(success_after: nil)
+      @success_after = success_after
+      @count = 0
+    end
+    def close
+    end
+    def closed?
+    end
+    def write(_)
+    end
+    def readline
+      @count += 1
+      if @success_after && @success_after <= @count
+        "HTTP/1.1 200 OK"
+      else
+        raise Errno::ECONNRESET
+      end
+    end
+    def readuntil(*_)
+      ""
+    end
+    def read_all(_)
+    end
+  end
+
+  def test_http_retry_success
+    start {|http|
+      socket = MockSocket.new(success_after: 10)
+      http.instance_variable_get(:@socket).close
+      http.instance_variable_set(:@socket, socket)
+      assert_equal 0, socket.count
+      http.max_retries = 10
+      res = http.get('/')
+      assert_equal 10, socket.count
+      assert_kind_of Net::HTTPResponse, res
+      assert_kind_of String, res.body
+    }
+  end
+
+  def test_http_retry_failed
+    start {|http|
+      socket = MockSocket.new
+      http.instance_variable_get(:@socket).close
+      http.instance_variable_set(:@socket, socket)
+      http.max_retries = 10
+      assert_raise(Errno::ECONNRESET){ http.get('/') }
+      assert_equal 11, socket.count
     }
   end
 

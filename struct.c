@@ -279,7 +279,7 @@ new_struct(VALUE name, VALUE super)
 static void
 define_aref_method(VALUE nstr, VALUE name, VALUE off)
 {
-    rb_control_frame_t *FUNC_FASTCALL(rb_vm_opt_struct_aref)(rb_thread_t *, rb_control_frame_t *);
+    rb_control_frame_t *FUNC_FASTCALL(rb_vm_opt_struct_aref)(rb_execution_context_t *, rb_control_frame_t *);
     const rb_iseq_t *iseq = rb_method_for_self_aref(name, off, rb_vm_opt_struct_aref);
 
     rb_add_method_iseq(nstr, SYM2ID(name), iseq, NULL, METHOD_VISI_PUBLIC);
@@ -288,7 +288,7 @@ define_aref_method(VALUE nstr, VALUE name, VALUE off)
 static void
 define_aset_method(VALUE nstr, VALUE name, VALUE off)
 {
-    rb_control_frame_t *FUNC_FASTCALL(rb_vm_opt_struct_aset)(rb_thread_t *, rb_control_frame_t *);
+    rb_control_frame_t *FUNC_FASTCALL(rb_vm_opt_struct_aset)(rb_execution_context_t *, rb_control_frame_t *);
     const rb_iseq_t *iseq = rb_method_for_self_aset(name, off, rb_vm_opt_struct_aset);
 
     rb_add_method_iseq(nstr, SYM2ID(name), iseq, NULL, METHOD_VISI_PUBLIC);
@@ -794,7 +794,7 @@ rb_struct_to_a(VALUE s)
 static VALUE
 rb_struct_to_h(VALUE s)
 {
-    VALUE h = rb_hash_new();
+    VALUE h = rb_hash_new_with_size(RSTRUCT_LEN(s));
     VALUE members = rb_struct_members(s);
     long i;
 

@@ -27,7 +27,7 @@ typedef rb_iseq_t *ISEQ;
 #if VMDEBUG > 0
 #define debugs printf
 #define DEBUG_ENTER_INSN(insn) \
-    rb_vmdebug_debug_print_pre(th, GET_CFP(),GET_PC());
+    rb_vmdebug_debug_print_pre(ec, GET_CFP(), GET_PC());
 
 #if OPT_STACK_CACHING
 #define SC_REGS() , reg_a, reg_b
@@ -60,7 +60,7 @@ error !
 
 #define INSN_ENTRY(insn) \
   static rb_control_frame_t * \
-    FUNC_FASTCALL(LABEL(insn))(rb_thread_t *th, rb_control_frame_t *reg_cfp) {
+    FUNC_FASTCALL(LABEL(insn))(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp) {
 
 #define END_INSN(insn) return reg_cfp;}
 
@@ -74,8 +74,12 @@ error !
 #define ELABEL(x) INSN_ELABEL_##x
 #define LABEL_PTR(x) &&LABEL(x)
 
-#define INSN_ENTRY_SIG(insn)
-
+#define INSN_ENTRY_SIG(insn) \
+  if (0) fprintf(stderr, "exec: %s@(%d, %d)@%s:%d\n", #insn, \
+		 (int)(reg_pc - reg_cfp->iseq->body->iseq_encoded), \
+		 (int)(reg_cfp->pc - reg_cfp->iseq->body->iseq_encoded), \
+		 RSTRING_PTR(rb_iseq_path(reg_cfp->iseq)), \
+		 (int)(rb_iseq_line_no(reg_cfp->iseq, reg_pc - reg_cfp->iseq->body->iseq_encoded)));
 
 #define INSN_DISPATCH_SIG(insn)
 
@@ -157,11 +161,11 @@ default:                        \
 
 #endif
 
-#define VM_SP_CNT(th, sp) ((sp) - (th)->ec.vm_stack)
+#define VM_SP_CNT(ec, sp) ((sp) - (ec)->vm_stack)
 
 #if OPT_CALL_THREADED_CODE
 #define THROW_EXCEPTION(exc) do { \
-    th->ec.errinfo = (VALUE)(exc); \
+    ec->errinfo = (VALUE)(exc); \
     return 0; \
 } while (0)
 #else

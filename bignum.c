@@ -903,8 +903,6 @@ bary_pack(int sign, BDIGIT *ds, size_t num_bdigits, void *words, size_t numwords
     }
 
     if ((flags & INTEGER_PACK_2COMP) && (sign < 0 && numwords != 0)) {
-        unsigned char *buf;
-
         int word_num_partialbits;
         size_t word_num_fullbytes;
 
@@ -6176,7 +6174,7 @@ rb_big_fdiv_double(VALUE x, VALUE y)
 	    return big_fdiv_float(x, y);
     }
     else {
-	return RFLOAT_VALUE(rb_num_coerce_bin(x, y, rb_intern("fdiv")));
+	return NUM2DBL(rb_num_coerce_bin(x, y, rb_intern("fdiv")));
     }
     return dx / dy;
 }
@@ -6832,6 +6830,7 @@ estimate_initial_sqrt(VALUE *xp, const size_t xn, const BDIGIT *nds, size_t len)
     if (rshift >= 0) {
 	d <<= rshift;
     }
+    BDIGITS_ZERO(xds, xn-2);
     bdigitdbl2bary(&xds[xn-2], 2, d);
 
     if (!lowbits) return NULL; /* special case, exact result */

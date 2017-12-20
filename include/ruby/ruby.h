@@ -478,7 +478,7 @@ enum ruby_value_type {
     RUBY_T_FIXNUM = 0x15,
     RUBY_T_UNDEF  = 0x16,
 
-    RUBY_T_IMEMO  = 0x1a,
+    RUBY_T_IMEMO  = 0x1a, /*!< @see imemo_type */
     RUBY_T_NODE   = 0x1b,
     RUBY_T_ICLASS = 0x1c,
     RUBY_T_ZOMBIE = 0x1d,
@@ -1582,6 +1582,9 @@ rb_num2char_inline(VALUE x)
 #define ULONG2NUM(x) RB_ULONG2NUM(x)
 #define NUM2CHR(x) RB_NUM2CHR(x)
 #define CHR2FIX(x) RB_CHR2FIX(x)
+
+#define RB_ST2FIX(h) RB_LONG2FIX((long)(h))
+#define ST2FIX(h) RB_ST2FIX(h)
 
 #define RB_ALLOC_N(type,n) ((type*)ruby_xmalloc2((size_t)(n),sizeof(type)))
 #define RB_ALLOC(type) ((type*)ruby_xmalloc(sizeof(type)))

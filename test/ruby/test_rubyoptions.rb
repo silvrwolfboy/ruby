@@ -187,6 +187,8 @@ class TestRubyOptions < Test::Unit::TestCase
     assert_in_out_err(%w(-0e) + ["print gets"], "foo\nbar\0baz", %W(foo bar\0), [])
 
     assert_in_out_err(%w(-00 -e) + ["p gets, gets"], "foo\nbar\n\nbaz\nzot\n\n\n", %w("foo\nbar\n\n" "baz\nzot\n\n"), [])
+
+    assert_in_out_err(%w(-00 -e) + ["p gets, gets"], "foo\nbar\n\n\n\nbaz\n", %w("foo\nbar\n\n" "baz\n"), [])
   end
 
   def test_autosplit
@@ -298,13 +300,15 @@ class TestRubyOptions < Test::Unit::TestCase
       @verbose = $VERBOSE
       $VERBOSE = nil
 
-      ENV['PATH'] = File.dirname(t.path)
+      path, name = File.split(t.path)
 
-      assert_in_out_err(%w(-S) + [File.basename(t.path)], "", %w(1), [])
+      ENV['PATH'] = (path_orig && RbConfig::CONFIG['LIBPATHENV'] == 'PATH') ?
+          [path, path_orig].join(File::PATH_SEPARATOR) : path
+      assert_in_out_err(%w(-S) + [name], "", %w(1), [])
+      ENV['PATH'] = path_orig
 
-      ENV['RUBYPATH'] = File.dirname(t.path)
-
-      assert_in_out_err(%w(-S) + [File.basename(t.path)], "", %w(1), [])
+      ENV['RUBYPATH'] = path
+      assert_in_out_err(%w(-S) + [name], "", %w(1), [])
     }
 
   ensure
@@ -340,6 +344,21 @@ class TestRubyOptions < Test::Unit::TestCase
                       %w[4], [], bug4118)
 
     assert_ruby_status(%w[], "#! ruby -- /", '[ruby-core:82267] [Bug #13786]')
+  end
+
+  def test_flag_in_shebang
+    Tempfile.create(%w"pflag .rb") do |script|
+      code = "#!ruby -p"
+      script.puts(code)
+      script.close
+      assert_in_out_err([script.path, script.path], '', [code])
+    end
+    Tempfile.create(%w"sflag .rb") do |script|
+      script.puts("#!ruby -s")
+      script.puts("p $abc")
+      script.close
+      assert_in_out_err([script.path, "-abc=foo"], '', ['"foo"'])
+    end
   end
 
   def test_sflag
@@ -446,6 +465,17 @@ class TestRubyOptions < Test::Unit::TestCase
             t.flush
             assert_in_out_err(["-w", t.path], "", [], [], '[ruby-core:25442]')
           end
+
+          a.for("BOM with #{b}") do
+            err = ["#{t.path}:2: warning: mismatched indentations at '#{e}' with '#{k}' at 1"]
+            t.rewind
+            t.truncate(0)
+            t.print "\u{feff}"
+            t.puts src
+            t.flush
+            assert_in_out_err(["-w", t.path], "", [], err)
+            assert_in_out_err(["-wr", t.path, "-e", ""], "", [], err)
+          end
         end
       end
     end
@@ -533,6 +563,13 @@ class TestRubyOptions < Test::Unit::TestCase
 
   def test_setproctitle
     skip "platform dependent feature" unless defined?(PSCMD) and PSCMD
+
+    assert_separately([], "#{<<-"{#"}\n#{<<-'};'}")
+    {#
+      assert_raise(ArgumentError) do
+        Process.setproctitle("hello\0")
+      end
+    };
 
     with_tmpchdir do
       write_file("test-script", "$_0 = $0.dup; Process.setproctitle('hello world'); $0 == $_0 or Process.setproctitle('$0 changed!'); sleep 60")
@@ -910,6 +947,34 @@ class TestRubyOptions < Test::Unit::TestCase
       assert_in_out_err(opt, '"foo" << "bar"', [], err)
       if freeze
         assert_in_out_err(opt, '"foo#{123}bar" << "bar"', [], err)
+      end
+    end
+  end
+
+  def test___dir__encoding
+    with_tmpchdir do
+      testdir = "\u30c6\u30b9\u30c8"
+      Dir.mkdir(testdir)
+      Dir.chdir(testdir) do
+        open("test.rb", "w") do |f|
+          f.puts <<-END
+            p __FILE__.encoding == __dir__.encoding
+          END
+        end
+        r, = EnvUtil.invoke_ruby("test.rb", "", true)
+        assert_equal "true", r.chomp, "the encoding of __FILE__ and __dir__ should be same"
+      end
+    end
+  end
+
+  def test_cwd_encoding
+    with_tmpchdir do
+      testdir = "\u30c6\u30b9\u30c8"
+      Dir.mkdir(testdir)
+      Dir.chdir(testdir) do
+        File.write("a.rb", "require './b'")
+        File.write("b.rb", "puts 'ok'")
+        assert_ruby_status([{"RUBYLIB"=>"."}, *%w[-E cp932:utf-8 a.rb]])
       end
     end
   end
