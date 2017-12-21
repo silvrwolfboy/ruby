@@ -320,6 +320,7 @@ VALUE ruby_vm_const_missing_count = 0;
 rb_vm_t *ruby_current_vm_ptr = NULL;
 rb_execution_context_t *ruby_current_execution_context_ptr = NULL;
 rb_event_flag_t ruby_vm_event_flags;
+rb_event_flag_t ruby_vm_event_enabled_flags;
 rb_serial_t ruby_vm_global_method_state = 1;
 rb_serial_t ruby_vm_global_constant_state = 1;
 rb_serial_t ruby_vm_class_serial = 1;
@@ -1143,7 +1144,7 @@ vm_invoke_proc(rb_execution_context_t *ec, rb_proc_t *proc, VALUE self,
     volatile int stored_safe = ec->safe_level;
 
     EC_PUSH_TAG(ec);
-    if ((state = EXEC_TAG()) == TAG_NONE) {
+    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
 	ec->safe_level = proc->safe_level;
 	val = invoke_block_from_c_proc(ec, proc, self, argc, argv, passed_block_handler, proc->is_lambda);
     }
@@ -1436,7 +1437,7 @@ rb_vm_jump_tag_but_local_jump(int state)
 {
     VALUE exc = rb_vm_make_jump_tag_but_local_jump(state, Qundef);
     if (!NIL_P(exc)) rb_exc_raise(exc);
-    JUMP_TAG(state);
+    EC_JUMP_TAG(GET_EC(), state);
 }
 #endif
 
@@ -1772,7 +1773,7 @@ vm_exec(rb_execution_context_t *ec)
     EC_PUSH_TAG(ec);
 
     _tag.retval = Qnil;
-    if ((state = EXEC_TAG()) == TAG_NONE) {
+    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
       vm_loop_start:
 	result = vm_exec_core(ec, initial);
 	VM_ASSERT(ec->tag == &_tag);
@@ -2048,6 +2049,12 @@ rb_ec_frame_method_id_and_class(const rb_execution_context_t *ec, ID *idp, ID *c
     return rb_vm_control_frame_id_and_class(ec->cfp, idp, called_idp, klassp);
 }
 
+RUBY_FUNC_EXPORTED int
+rb_frame_method_id_and_class(ID *idp, VALUE *klassp)
+{
+    return rb_ec_frame_method_id_and_class(GET_EC(), idp, 0, klassp);
+}
+
 VALUE
 rb_vm_call_cfunc(VALUE recv, VALUE (*func)(VALUE), VALUE arg,
 		 VALUE block_handler, VALUE filename)
@@ -2294,6 +2301,7 @@ vm_init2(rb_vm_t *vm)
 {
     MEMZERO(vm, rb_vm_t, 1);
     rb_vm_living_threads_init(vm);
+    vm->thread_report_on_exception = 1;
     vm->src_encoding_index = -1;
 
     vm_default_params_setup(vm);
@@ -2531,6 +2539,7 @@ th_init(rb_thread_t *th, VALUE self)
     th->retval = Qundef;
 #endif
     th->name = Qnil;
+    th->report_on_exception = th->vm->thread_report_on_exception;
 }
 
 static VALUE

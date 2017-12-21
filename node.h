@@ -281,15 +281,17 @@ typedef struct RNode {
 #define nd_set_line(n,l) \
     (n)->flags=(((n)->flags&~((VALUE)(-1)<<NODE_LSHIFT))|((VALUE)((l)&NODE_LMASK)<<NODE_LSHIFT))
 
-#define nd_column(n) ((int)((n)->nd_loc.first_loc.column))
-#define nd_set_column(n, v) ((n)->nd_loc.first_loc.column = (v))
-#define nd_lineno(n) ((int)((n)->nd_loc.first_loc.lineno))
-#define nd_set_lineno(n, v) ((n)->nd_loc.first_loc.lineno = (v))
+#define nd_first_column(n) ((int)((n)->nd_loc.first_loc.column))
+#define nd_set_first_column(n, v) ((n)->nd_loc.first_loc.column = (v))
+#define nd_first_lineno(n) ((int)((n)->nd_loc.first_loc.lineno))
+#define nd_set_first_lineno(n, v) ((n)->nd_loc.first_loc.lineno = (v))
 
 #define nd_last_column(n) ((int)((n)->nd_loc.last_loc.column))
 #define nd_set_last_column(n, v) ((n)->nd_loc.last_loc.column = (v))
 #define nd_last_lineno(n) ((int)((n)->nd_loc.last_loc.lineno))
 #define nd_set_last_lineno(n, v) ((n)->nd_loc.last_loc.lineno = (v))
+#define nd_last_loc(n) ((n)->nd_loc.last_loc)
+#define nd_set_last_loc(n, v) (nd_last_loc(n) = (v))
 
 #define nd_head  u1.node
 #define nd_alen  u2.argc
@@ -344,9 +346,6 @@ typedef struct RNode {
 #define nd_cpath u1.node
 #define nd_super u3.node
 
-#define nd_modl  u1.id
-#define nd_clss_  u1.value
-
 #define nd_beg   u1.node
 #define nd_end   u2.node
 #define nd_state u3.state
@@ -355,9 +354,6 @@ typedef struct RNode {
 #define nd_nth   u2.argc
 
 #define nd_tag   u1.id
-#define nd_tval  u2.value
-
-#define nd_visi_  u2.argc
 
 #define nd_alias  u1.id
 #define nd_orig   u2.id

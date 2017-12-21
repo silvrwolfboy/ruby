@@ -65,14 +65,15 @@ static void
 update_global_event_hook(rb_event_flag_t vm_events)
 {
     rb_event_flag_t new_iseq_events = vm_events & ISEQ_TRACE_EVENTS;
-    rb_event_flag_t cur_iseq_events = ruby_vm_event_flags & ISEQ_TRACE_EVENTS;
+    rb_event_flag_t enabled_iseq_events = ruby_vm_event_enabled_flags & ISEQ_TRACE_EVENTS;
 
-    if (new_iseq_events > cur_iseq_events) {
+    if (new_iseq_events & ~enabled_iseq_events) {
 	/* write all ISeqs iff new events are added */
-	rb_iseq_trace_set_all(new_iseq_events);
+	rb_iseq_trace_set_all(new_iseq_events | enabled_iseq_events);
     }
 
     ruby_vm_event_flags = vm_events;
+    ruby_vm_event_enabled_flags |= vm_events;
     rb_objspace_set_event_hook(vm_events);
 }
 
@@ -378,23 +379,25 @@ rb_suppress_tracing(VALUE (*func)(VALUE), VALUE arg)
 {
     volatile int raised;
     VALUE result = Qnil;
-    rb_execution_context_t *ec = GET_EC();
-    rb_vm_t *vm = rb_ec_vm_ptr(ec);
+    rb_execution_context_t *const ec = GET_EC();
+    rb_vm_t *const vm = rb_ec_vm_ptr(ec);
     enum ruby_tag_type state;
-    const int volatile tracing = ec->trace_arg ? 1 : 0;
     rb_trace_arg_t dummy_trace_arg;
     dummy_trace_arg.event = 0;
 
-    if (!tracing) {
+    if (!ec->trace_arg) {
 	vm->trace_running++;
+	ec->trace_arg = &dummy_trace_arg;
     }
-    if (!ec->trace_arg) ec->trace_arg = &dummy_trace_arg;
 
     raised = rb_ec_reset_raised(ec);
 
     EC_PUSH_TAG(ec);
-    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
+    if (LIKELY((state = EC_EXEC_TAG()) == TAG_NONE)) {
 	result = (*func)(arg);
+    }
+    else {
+	(void)*&vm; /* suppress "clobbered" warning */
     }
     EC_POP_TAG();
 
@@ -402,8 +405,8 @@ rb_suppress_tracing(VALUE (*func)(VALUE), VALUE arg)
 	rb_ec_reset_raised(ec);
     }
 
-    if (ec->trace_arg == &dummy_trace_arg) ec->trace_arg = NULL;
-    if (!tracing) {
+    if (ec->trace_arg == &dummy_trace_arg) {
+	ec->trace_arg = NULL;
 	vm->trace_running--;
     }
 
@@ -588,8 +591,6 @@ get_event_id(rb_event_flag_t event)
 	C(thread_begin, THREAD_BEGIN);
 	C(thread_end, THREAD_END);
 	C(fiber_switch, FIBER_SWITCH);
-	C(specified_line, SPECIFIED_LINE);
-      case RUBY_EVENT_LINE | RUBY_EVENT_SPECIFIED_LINE: CONST_ID(id, "line"); return id;
 #undef C
       default:
 	return 0;
@@ -719,7 +720,6 @@ symbol2event_flag(VALUE v)
     C(thread_begin, THREAD_BEGIN);
     C(thread_end, THREAD_END);
     C(fiber_switch, FIBER_SWITCH);
-    C(specified_line, SPECIFIED_LINE);
     C(a_call, A_CALL);
     C(a_return, A_RETURN);
 #undef C
@@ -1337,7 +1337,6 @@ tracepoint_inspect(VALUE self)
     if (trace_arg) {
 	switch (trace_arg->event) {
 	  case RUBY_EVENT_LINE:
-	  case RUBY_EVENT_SPECIFIED_LINE:
 	    {
 		VALUE sym = rb_tracearg_method_id(trace_arg);
 		if (NIL_P(sym))
@@ -1621,7 +1620,7 @@ rb_postponed_job_flush(rb_vm_t *vm)
     ec->interrupt_mask |= block_mask;
     {
 	EC_PUSH_TAG(ec);
-	if (EXEC_TAG() == TAG_NONE) {
+	if (EC_EXEC_TAG() == TAG_NONE) {
 	    int index;
 	    while ((index = vm->postponed_job_index) > 0) {
 		if (ATOMIC_CAS(vm->postponed_job_index, index, index-1) == index) {

@@ -39,6 +39,12 @@ extern "C" {
 # endif
 #endif
 
+/* The most significant bit of the lower part of half-long integer.
+ * If sizeof(long) == 4, this is 0x8000.
+ * If sizeof(long) == 8, this is 0x80000000.
+ */
+#define HALF_LONG_MSB ((SIGNED_VALUE)1<<((SIZEOF_LONG*CHAR_BIT-1)/2))
+
 #define LIKELY(x) RB_LIKELY(x)
 #define UNLIKELY(x) RB_UNLIKELY(x)
 
@@ -1074,6 +1080,7 @@ VALUE rb_big_gt(VALUE x, VALUE y);
 VALUE rb_big_ge(VALUE x, VALUE y);
 VALUE rb_big_lt(VALUE x, VALUE y);
 VALUE rb_big_le(VALUE x, VALUE y);
+VALUE rb_int_powm(int const argc, VALUE * const argv, VALUE const num);
 
 /* class.c */
 VALUE rb_class_boot(VALUE);
@@ -1103,7 +1110,7 @@ VALUE rb_invcmp(VALUE, VALUE);
 struct rb_block;
 int rb_dvar_defined(ID, const struct rb_block *);
 int rb_local_defined(ID, const struct rb_block *);
-CONSTFUNC(const char * rb_insns_name(int i));
+const char * rb_insns_name(int i);
 VALUE rb_insns_name_array(void);
 
 /* complex.c */
@@ -1129,7 +1136,7 @@ void Init_ext(void);
 
 /* encoding.c */
 ID rb_id_encoding(void);
-CONSTFUNC(void rb_gc_mark_encodings(void));
+void rb_gc_mark_encodings(void);
 rb_encoding *rb_enc_get_from_index(int index);
 rb_encoding *rb_enc_check_str(VALUE str1, VALUE str2);
 int rb_encdb_replicate(const char *alias, const char *orig);
@@ -1265,6 +1272,9 @@ void ruby_sized_xfree(void *x, size_t size);
 /* hash.c */
 struct st_table *rb_hash_tbl_raw(VALUE hash);
 VALUE rb_hash_new_with_size(st_index_t size);
+RUBY_SYMBOL_EXPORT_BEGIN
+VALUE rb_hash_new_compare_by_id(void);
+RUBY_SYMBOL_EXPORT_END
 VALUE rb_hash_has_key(VALUE hash, VALUE key);
 VALUE rb_hash_default_value(VALUE hash, VALUE key);
 VALUE rb_hash_set_default_proc(VALUE hash, VALUE proc);
@@ -1380,6 +1390,53 @@ VALUE rb_int_and(VALUE x, VALUE y);
 VALUE rb_int_lshift(VALUE x, VALUE y);
 VALUE rb_int_div(VALUE x, VALUE y);
 VALUE rb_int_abs(VALUE num);
+VALUE rb_int_odd_p(VALUE num);
+
+static inline VALUE
+rb_num_compare_with_zero(VALUE num, ID mid)
+{
+    VALUE zero = INT2FIX(0);
+    VALUE r = rb_check_funcall(num, mid, 1, &zero);
+    if (r == Qundef) {
+	rb_cmperr(num, zero);
+    }
+    return r;
+}
+
+static inline int
+rb_num_positive_int_p(VALUE num)
+{
+    const ID mid = '>';
+
+    if (FIXNUM_P(num)) {
+	if (rb_method_basic_definition_p(rb_cInteger, mid))
+	    return FIXNUM_POSITIVE_P(num);
+    }
+    else if (RB_TYPE_P(num, T_BIGNUM)) {
+	if (rb_method_basic_definition_p(rb_cInteger, mid))
+	    return BIGNUM_POSITIVE_P(num);
+    }
+    return RTEST(rb_num_compare_with_zero(num, mid));
+}
+
+
+static inline int
+rb_num_negative_int_p(VALUE num)
+{
+    const ID mid = '<';
+
+    if (FIXNUM_P(num)) {
+	if (rb_method_basic_definition_p(rb_cInteger, mid))
+	    return FIXNUM_NEGATIVE_P(num);
+    }
+    else if (RB_TYPE_P(num, T_BIGNUM)) {
+	if (rb_method_basic_definition_p(rb_cInteger, mid))
+	    return BIGNUM_NEGATIVE_P(num);
+    }
+    return RTEST(rb_num_compare_with_zero(num, mid));
+}
+
+
 VALUE rb_float_abs(VALUE flt);
 VALUE rb_float_equal(VALUE x, VALUE y);
 VALUE rb_float_eql(VALUE x, VALUE y);
@@ -1704,7 +1761,6 @@ struct timeval rb_time_timeval(VALUE);
 /* thread.c */
 #define COVERAGE_INDEX_LINES    0
 #define COVERAGE_INDEX_BRANCHES 1
-#define COVERAGE_INDEX_METHODS  2
 #define COVERAGE_TARGET_LINES    1
 #define COVERAGE_TARGET_BRANCHES 2
 #define COVERAGE_TARGET_METHODS  4
@@ -1786,6 +1842,7 @@ VALUE rb_check_block_call(VALUE, ID, int, const VALUE *, rb_block_call_func_t, V
 typedef void rb_check_funcall_hook(int, VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 				 rb_check_funcall_hook *hook, VALUE arg);
+const char *rb_type_str(enum ruby_value_type type);
 VALUE rb_check_funcall_default(VALUE, ID, int, const VALUE *, VALUE);
 VALUE rb_yield_1(VALUE val);
 VALUE rb_yield_force_blockarg(VALUE values);

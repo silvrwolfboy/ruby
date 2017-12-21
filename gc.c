@@ -732,6 +732,10 @@ struct heap_page {
 #define GET_HEAP_MARKING_BITS(x)        (&GET_HEAP_PAGE(x)->marking_bits[0])
 #endif
 
+#ifndef ENABLE_VM_OBJSPACE
+# define ENABLE_VM_OBJSPACE 1
+#endif
+
 /* Aliases */
 #if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 #define rb_objspace (*rb_objspace_of(GET_VM()))

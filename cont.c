@@ -1413,7 +1413,7 @@ rb_fiber_start(void)
     VM_ASSERT(FIBER_RESUMED_P(fib));
 
     EC_PUSH_TAG(th->ec);
-    if ((state = EXEC_TAG()) == TAG_NONE) {
+    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
 	rb_context_t *cont = &VAR_FROM_MEMORY(fib)->cont;
 	int argc;
 	const VALUE *argv, args = cont->value;
@@ -1655,7 +1655,7 @@ fiber_switch(rb_fiber_t *fib, int argc, const VALUE *argv, int is_resume)
 	    VM_UNREACHABLE(fiber_switch);
 	}
 	else {
-	    /* th->ec.fiber is also dead => switch to root fiber */
+	    /* th->ec->fiber_ptr is also dead => switch to root fiber */
 	    /* (this means we're being called from rb_fiber_terminate, */
 	    /* and the terminated fiber's return_fiber() is already dead) */
 	    VM_ASSERT(FIBER_SUSPENDED_P(th->root_fiber));

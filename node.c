@@ -23,8 +23,8 @@
 #define A_LONG(val) rb_str_catf(buf, "%ld", (val))
 #define A_LIT(lit) AR(rb_inspect(lit))
 #define A_NODE_HEADER(node, term) \
-    rb_str_catf(buf, "@ %s (line: %d, first_lineno: %d, first_column: %d, last_lineno: %d, last_column: %d)"term, \
-	ruby_node_name(nd_type(node)), nd_line(node), nd_lineno(node), nd_column(node), nd_last_lineno(node), nd_last_column(node))
+    rb_str_catf(buf, "@ %s (line: %d, code_range: (%d,%d)-(%d,%d))"term, \
+	ruby_node_name(nd_type(node)), nd_line(node), nd_first_lineno(node), nd_first_column(node), nd_last_lineno(node), nd_last_column(node))
 #define A_FIELD_HEADER(len, name, term) \
     rb_str_catf(buf, "+- %.*s:"term, (len), (name))
 #define D_FIELD_HEADER(len, name, term) (A_INDENT, A_FIELD_HEADER(len, name, term))
@@ -32,18 +32,12 @@
 #define D_NULL_NODE (A_INDENT, A("(null node)\n"))
 #define D_NODE_HEADER(node) (A_INDENT, A_NODE_HEADER(node, "\n"))
 
-#define COMPOUND_FIELD(len, name, block) \
-    do { \
-	D_FIELD_HEADER((len), (name), "\n");	\
-	D_INDENT; \
-	block; \
-	D_DEDENT; \
-    } while (0)
+#define COMPOUND_FIELD(len, name) \
+    FIELD_BLOCK((D_FIELD_HEADER((len), (name), "\n"), D_INDENT), D_DEDENT)
 
-#define COMPOUND_FIELD1(name, ann, block) \
+#define COMPOUND_FIELD1(name, ann) \
     COMPOUND_FIELD(FIELD_NAME_LEN(name, ann), \
-		   FIELD_NAME_DESC(name, ann), \
-		   block)
+		   FIELD_NAME_DESC(name, ann))
 
 #define FIELD_NAME_DESC(name, ann) name " (" ann ")"
 #define FIELD_NAME_LEN(name, ann) (int)( \
@@ -51,9 +45,12 @@
 	rb_strlen_lit(FIELD_NAME_DESC(name, ann)) : \
 	rb_strlen_lit(name))
 #define SIMPLE_FIELD(len, name) \
-    for (D_FIELD_HEADER((len), (name), " "), field_flag = 1; \
+    FIELD_BLOCK(D_FIELD_HEADER((len), (name), " "), A("\n"))
+
+#define FIELD_BLOCK(init, reset) \
+    for (init, field_flag = 1; \
 	 field_flag; /* should be optimized away */ \
-	 A("\n"), field_flag = 0)
+	 reset, field_flag = 0)
 
 #define SIMPLE_FIELD1(name, ann)    SIMPLE_FIELD(FIELD_NAME_LEN(name, ann), FIELD_NAME_DESC(name, ann))
 #define F_CUSTOM1(name, ann)	    SIMPLE_FIELD1(#name, ann)
@@ -65,9 +62,9 @@
 #define F_MSG(name, ann, desc)	    SIMPLE_FIELD1(#name, ann) A(desc)
 
 #define F_NODE(name, ann) \
-    COMPOUND_FIELD1(#name, ann, dump_node(buf, indent, comment, node->name))
+    COMPOUND_FIELD1(#name, ann) {dump_node(buf, indent, comment, node->name);}
 #define F_OPTION(name, ann) \
-    COMPOUND_FIELD1(#name, ann, dump_option(buf, indent, node->name))
+    COMPOUND_FIELD1(#name, ann) {dump_option(buf, indent, node->name);}
 
 #define ANN(ann) \
     if (comment) { \
@@ -221,7 +218,7 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	F_NODE(nd_body, "when clauses");
 	return;
       case NODE_CASE2:
-	ANN("case statement");
+	ANN("case statement with no head");
 	ANN("format: case; [nd_body]; end");
 	ANN("example: case; when 1; foo; when 2; bar; else baz; end");
 	F_NODE(nd_head, "case expr");
@@ -230,11 +227,11 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	return;
 
       case NODE_WHEN:
-	ANN("if statement");
+	ANN("when clause");
 	ANN("format: when [nd_head]; [nd_body]; (when or else) [nd_next]");
 	ANN("example: case x; when 1; foo; when 2; bar; else baz; end");
 	F_NODE(nd_head, "when value");
-	F_NODE(nd_body, "when clause");
+	F_NODE(nd_body, "when body");
 	LAST_NODE;
 	F_NODE(nd_next, "next when clause");
 	return;
@@ -274,7 +271,7 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	return;
 
       case NODE_BREAK:
-	ANN("for statement");
+	ANN("break statement");
 	ANN("format: break [nd_stts]");
 	ANN("example: break 1");
 	goto jump;
@@ -380,37 +377,47 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	ANN("local variable assignment");
 	ANN("format: [nd_vid](lvar) = [nd_value]");
 	ANN("example: x = foo");
-	goto asgn;
-      case NODE_DASGN:
-	ANN("dynamic variable assignment (out of current scope)");
-	ANN("format: [nd_vid](dvar) = [nd_value]");
-	ANN("example: x = nil; 1.times { x = foo }");
-	goto asgn;
-      case NODE_DASGN_CURR:
-	ANN("dynamic variable assignment (in current scope)");
-	ANN("format: [nd_vid](current dvar) = [nd_value]");
-	ANN("example: 1.times { x = foo }");
-	goto asgn;
-      case NODE_IASGN:
-	ANN("instance variable assignment");
-	ANN("format: [nd_vid](ivar) = [nd_value]");
-	ANN("example: @x = foo");
-	goto asgn;
-      case NODE_CVASGN:
-	ANN("class variable assignment");
-	ANN("format: [nd_vid](cvar) = [nd_value]");
-	ANN("example: @@x = foo");
-      asgn:
-	F_ID(nd_vid, "variable");
-	LAST_NODE;
+	F_ID(nd_vid, "local variable");
 	if (node->nd_value == NODE_SPECIAL_REQUIRED_KEYWORD) {
 	    F_MSG(nd_value, "rvalue", "NODE_SPECIAL_REQUIRED_KEYWORD (required keyword argument)");
 	}
 	else {
+	    LAST_NODE;
 	    F_NODE(nd_value, "rvalue");
 	}
 	return;
-
+      case NODE_DASGN:
+	ANN("dynamic variable assignment (out of current scope)");
+	ANN("format: [nd_vid](dvar) = [nd_value]");
+	ANN("example: x = nil; 1.times { x = foo }");
+	F_ID(nd_vid, "local variable");
+	LAST_NODE;
+	F_NODE(nd_value, "rvalue");
+	return;
+      case NODE_DASGN_CURR:
+	ANN("dynamic variable assignment (in current scope)");
+	ANN("format: [nd_vid](current dvar) = [nd_value]");
+	ANN("example: 1.times { x = foo }");
+	F_ID(nd_vid, "local variable");
+	LAST_NODE;
+	F_NODE(nd_value, "rvalue");
+	return;
+      case NODE_IASGN:
+	ANN("instance variable assignment");
+	ANN("format: [nd_vid](ivar) = [nd_value]");
+	ANN("example: @x = foo");
+	F_ID(nd_vid, "instance variable");
+	LAST_NODE;
+	F_NODE(nd_value, "rvalue");
+	return;
+      case NODE_CVASGN:
+	ANN("class variable assignment");
+	ANN("format: [nd_vid](cvar) = [nd_value]");
+	ANN("example: @@x = foo");
+	F_ID(nd_vid, "class variable");
+	LAST_NODE;
+	F_NODE(nd_value, "rvalue");
+	return;
       case NODE_GASGN:
 	ANN("global variable assignment");
 	ANN("format: [nd_entry](gvar) = [nd_value]");
@@ -586,11 +593,10 @@ dump_node(VALUE buf, VALUE indent, int comment, NODE *node)
 	    ANN("format: { [nd_head] }");
 	    ANN("example: { 1 => 2, 3 => 4 }");
 	}
-	F_CUSTOM1(nd_alen, "keyword-arguments-or-hash-literal") {
+	F_CUSTOM1(nd_alen, "keyword arguments or hash literal") {
 	    switch (node->nd_alen) {
 	      case 0: A("0 (keyword argument)"); break;
 	      case 1: A("1 (hash literal)"); break;
-	      default: A_ID(node->nd_alen);
 	    }
 	}
 	LAST_NODE;

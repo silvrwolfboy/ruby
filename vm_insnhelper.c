@@ -2314,7 +2314,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
 	    cc->me = refined_method_callable_without_refinement(cc->me);
 	}
 	else {
-	    VALUE klass = RCLASS_SUPER(cc->me->owner);
+	    VALUE klass = RCLASS_SUPER(cc->me->defined_class);
 	    cc->me = klass ? rb_callable_method_entry(klass, ci->mid) : NULL;
 	}
 	return vm_call_method(ec, cfp, calling, ci, cc);
@@ -3345,95 +3345,107 @@ vm_stack_consistency_error(const rb_execution_context_t *ec,
 #endif
 }
 
-enum binop_operands_type {
-    bot_others = 0,
-    bot_fixnum,
-    bot_flonum,
-    bot_float
-};
-
-static enum binop_operands_type
-vm_opt_binop_dispatch(VALUE recv, VALUE obj, enum ruby_basic_operators BOP)
-{
-    if (FIXNUM_2_P(recv, obj) &&
-	BASIC_OP_UNREDEFINED_P(BOP, INTEGER_REDEFINED_OP_FLAG)) {
-	return bot_fixnum;
-    }
-    else if (FLONUM_2_P(recv, obj) &&
-	     BASIC_OP_UNREDEFINED_P(BOP, FLOAT_REDEFINED_OP_FLAG)) {
-	return bot_flonum;
-    }
-    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
-	return bot_others;
-    }
-    else if (RBASIC_CLASS(recv) == rb_cFloat &&
-	     RBASIC_CLASS(obj)  == rb_cFloat &&
-	     BASIC_OP_UNREDEFINED_P(BOP, FLOAT_REDEFINED_OP_FLAG)) {
-	return bot_float;
-    }
-    else {
-	return bot_others;
-    }
-}
-
 static VALUE
 vm_opt_plus(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_PLUS)) {
-      case bot_float:
-      case bot_flonum: return DBL2NUM(RFLOAT_VALUE(recv) + RFLOAT_VALUE(obj));
-      case bot_fixnum: return rb_fix_plus_fix(recv, obj);
-      default:
-	if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
-	    return Qundef;
-	}
-	else if (RBASIC_CLASS(recv) == rb_cString &&
-		 RBASIC_CLASS(obj) == rb_cString &&
-		 BASIC_OP_UNREDEFINED_P(BOP_PLUS, STRING_REDEFINED_OP_FLAG)) {
-	    return rb_str_plus(recv, obj);
-	}
-	else if (RBASIC_CLASS(recv) == rb_cArray &&
-		 BASIC_OP_UNREDEFINED_P(BOP_PLUS, ARRAY_REDEFINED_OP_FLAG)) {
-	    return rb_ary_plus(recv, obj);
-	}
-	else {
-	    return Qundef;
-	}
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_PLUS, INTEGER_REDEFINED_OP_FLAG)) {
+	return rb_fix_plus_fix(recv, obj);
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_PLUS, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) + RFLOAT_VALUE(obj));
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_PLUS, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) + RFLOAT_VALUE(obj));
+    }
+    else if (RBASIC_CLASS(recv) == rb_cString &&
+	     RBASIC_CLASS(obj) == rb_cString &&
+	     BASIC_OP_UNREDEFINED_P(BOP_PLUS, STRING_REDEFINED_OP_FLAG)) {
+	return rb_str_plus(recv, obj);
+    }
+    else if (RBASIC_CLASS(recv) == rb_cArray &&
+	     BASIC_OP_UNREDEFINED_P(BOP_PLUS, ARRAY_REDEFINED_OP_FLAG)) {
+	return rb_ary_plus(recv, obj);
+    }
+    else {
+	return Qundef;
     }
 }
 
 static VALUE
 vm_opt_minus(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_MINUS)) {
-      case bot_float:
-      case bot_flonum: return DBL2NUM(RFLOAT_VALUE(recv) - RFLOAT_VALUE(obj));
-      case bot_fixnum: return rb_fix_minus_fix(recv, obj);
-      default:         return Qundef;
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_MINUS, INTEGER_REDEFINED_OP_FLAG)) {
+	return rb_fix_minus_fix(recv, obj);
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MINUS, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) - RFLOAT_VALUE(obj));
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MINUS, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) - RFLOAT_VALUE(obj));
+    }
+    else {
+	return Qundef;
     }
 }
 
 static VALUE
 vm_opt_mult(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_MULT)) {
-      case bot_float:
-      case bot_flonum: return DBL2NUM(RFLOAT_VALUE(recv) * RFLOAT_VALUE(obj));
-      case bot_fixnum: return rb_fix_mul_fix(recv, obj);
-      default:         return Qundef;
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_MULT, INTEGER_REDEFINED_OP_FLAG)) {
+	return rb_fix_mul_fix(recv, obj);
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MULT, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) * RFLOAT_VALUE(obj));
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MULT, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) * RFLOAT_VALUE(obj));
+    }
+    else {
+	return Qundef;
     }
 }
 
 static VALUE
 vm_opt_div(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_DIV)) {
-      case bot_float:
-      case bot_flonum:
-	return DBL2NUM(RFLOAT_VALUE(recv) / RFLOAT_VALUE(obj));
-      case bot_fixnum:
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_DIV, INTEGER_REDEFINED_OP_FLAG)) {
 	return (FIX2LONG(obj) == 0) ? Qundef : rb_fix_div_fix(recv, obj);
-      default:
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_DIV, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) / RFLOAT_VALUE(obj));
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_DIV, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(RFLOAT_VALUE(recv) / RFLOAT_VALUE(obj));
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3441,13 +3453,23 @@ vm_opt_div(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_mod(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_MOD)) {
-      case bot_float:
-      case bot_flonum:
-	return DBL2NUM(ruby_float_mod(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj)));
-      case bot_fixnum:
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_MOD, INTEGER_REDEFINED_OP_FLAG)) {
 	return (FIX2LONG(obj) == 0) ? Qundef : rb_fix_mod_fix(recv, obj);
-      default:
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MOD, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(ruby_float_mod(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj)));
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_MOD, FLOAT_REDEFINED_OP_FLAG)) {
+	return DBL2NUM(ruby_float_mod(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj)));
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3471,16 +3493,24 @@ vm_opt_neq(CALL_INFO ci, CALL_CACHE cc,
 static VALUE
 vm_opt_lt(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_LT)) {
-      case bot_float:
-	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
-	/* FALLTHROUGH */
-      case bot_flonum:
-	/* flonum is not NaN */
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_LT, INTEGER_REDEFINED_OP_FLAG)) {
+	return (SIGNED_VALUE)recv < (SIGNED_VALUE)obj ? Qtrue : Qfalse;
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_LT, FLOAT_REDEFINED_OP_FLAG)) {
 	return RFLOAT_VALUE(recv) < RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
-      case bot_fixnum:
-        return (SIGNED_VALUE)recv < (SIGNED_VALUE)obj ? Qtrue : Qfalse;
-      default:
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_LT, FLOAT_REDEFINED_OP_FLAG)) {
+	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
+	return RFLOAT_VALUE(recv) < RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3488,16 +3518,24 @@ vm_opt_lt(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_le(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_LT)) {
-      case bot_float:
-	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
-	/* FALLTHROUGH */
-      case bot_flonum:
-	/* flonum is not NaN */
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_LE, INTEGER_REDEFINED_OP_FLAG)) {
+	return (SIGNED_VALUE)recv <= (SIGNED_VALUE)obj ? Qtrue : Qfalse;
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_LE, FLOAT_REDEFINED_OP_FLAG)) {
 	return RFLOAT_VALUE(recv) <= RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
-      case bot_fixnum:
-        return (SIGNED_VALUE)recv <= (SIGNED_VALUE)obj ? Qtrue : Qfalse;
-      default:
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_LE, FLOAT_REDEFINED_OP_FLAG)) {
+	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
+	return RFLOAT_VALUE(recv) <= RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3505,16 +3543,24 @@ vm_opt_le(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_gt(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_LT)) {
-      case bot_float:
-	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
-	/* FALLTHROUGH */
-      case bot_flonum:
-	/* flonum is not NaN */
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_GT, INTEGER_REDEFINED_OP_FLAG)) {
+	return (SIGNED_VALUE)recv > (SIGNED_VALUE)obj ? Qtrue : Qfalse;
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_GT, FLOAT_REDEFINED_OP_FLAG)) {
 	return RFLOAT_VALUE(recv) > RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
-      case bot_fixnum:
-        return (SIGNED_VALUE)recv > (SIGNED_VALUE)obj ? Qtrue : Qfalse;
-      default:
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_GT, FLOAT_REDEFINED_OP_FLAG)) {
+	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
+	return RFLOAT_VALUE(recv) > RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3522,16 +3568,24 @@ vm_opt_gt(VALUE recv, VALUE obj)
 static VALUE
 vm_opt_ge(VALUE recv, VALUE obj)
 {
-    switch (vm_opt_binop_dispatch(recv, obj, BOP_LT)) {
-      case bot_float:
-	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
-	/* FALLTHROUGH */
-      case bot_flonum:
-	/* flonum is not NaN */
+    if (FIXNUM_2_P(recv, obj) &&
+	BASIC_OP_UNREDEFINED_P(BOP_GE, INTEGER_REDEFINED_OP_FLAG)) {
+	return (SIGNED_VALUE)recv >= (SIGNED_VALUE)obj ? Qtrue : Qfalse;
+    }
+    else if (FLONUM_2_P(recv, obj) &&
+	     BASIC_OP_UNREDEFINED_P(BOP_GE, FLOAT_REDEFINED_OP_FLAG)) {
 	return RFLOAT_VALUE(recv) >= RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
-      case bot_fixnum:
-        return (SIGNED_VALUE)recv >= (SIGNED_VALUE)obj ? Qtrue : Qfalse;
-      default:
+    }
+    else if (SPECIAL_CONST_P(recv) || SPECIAL_CONST_P(obj)) {
+	return Qundef;
+    }
+    else if (RBASIC_CLASS(recv) == rb_cFloat &&
+	     RBASIC_CLASS(obj)  == rb_cFloat &&
+	     BASIC_OP_UNREDEFINED_P(BOP_GE, FLOAT_REDEFINED_OP_FLAG)) {
+	CHECK_CMP_NAN(RFLOAT_VALUE(recv), RFLOAT_VALUE(obj));
+	return RFLOAT_VALUE(recv) >= RFLOAT_VALUE(obj) ? Qtrue : Qfalse;
+    }
+    else {
 	return Qundef;
     }
 }
@@ -3727,56 +3781,68 @@ NOINLINE(static void vm_trace(rb_execution_context_t *ec, rb_control_frame_t *re
 static void
 vm_trace(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, const VALUE *pc)
 {
-    const rb_iseq_t *iseq = reg_cfp->iseq;
-    size_t pos = pc - iseq->body->iseq_encoded;
     rb_event_flag_t vm_event_flags = ruby_vm_event_flags;
-    rb_event_flag_t events = rb_iseq_event_flags(iseq, pos);
-    rb_event_flag_t event;
 
-    if ((events & vm_event_flags) == 0) {
-	/* disable trace */
-	rb_iseq_trace_set(iseq, vm_event_flags & ISEQ_TRACE_EVENTS);
+    if (vm_event_flags == 0) {
 	return;
     }
+    else {
+	const rb_iseq_t *iseq = reg_cfp->iseq;
+	size_t pos = pc - iseq->body->iseq_encoded;
+	rb_event_flag_t events = rb_iseq_event_flags(iseq, pos);
+	rb_event_flag_t event;
 
-    if (ec->trace_arg != NULL) return;
+	if ((events & vm_event_flags) == 0) {
+#if 0
+	    /* disable trace */
+	    rb_iseq_trace_set(iseq, vm_event_flags & ISEQ_TRACE_EVENTS);
+#else
+	    /* do not disable trace because of performance problem
+	     * (re-enable overhead)
+	     */
+#endif
+	    return;
+	}
 
-    if (0) {
-	fprintf(stderr, "vm_trace>>%4d (%4x) - %s:%d %s\n",
-		(int)pos,
-		(int)events,
-		RSTRING_PTR(rb_iseq_path(iseq)),
-		(int)rb_iseq_line_no(iseq, pos),
-		RSTRING_PTR(rb_iseq_label(iseq)));
-    }
+	if (ec->trace_arg != NULL) return;
 
-    VM_ASSERT(reg_cfp->pc == pc);
-    VM_ASSERT(events != 0);
-    VM_ASSERT(vm_event_flags & events);
+	if (0) {
+	    fprintf(stderr, "vm_trace>>%4d (%4x) - %s:%d %s\n",
+		    (int)pos,
+		    (int)events,
+		    RSTRING_PTR(rb_iseq_path(iseq)),
+		    (int)rb_iseq_line_no(iseq, pos),
+		    RSTRING_PTR(rb_iseq_label(iseq)));
+	}
 
-    /* increment PC because source line is calculated with PC-1 */
-    if (event = (events & (RUBY_EVENT_CLASS | RUBY_EVENT_CALL | RUBY_EVENT_B_CALL))) {
-	VM_ASSERT(event == RUBY_EVENT_CLASS ||
-		  event == RUBY_EVENT_CALL  ||
-		  event == RUBY_EVENT_B_CALL);
-	reg_cfp->pc++;
-	vm_dtrace(event, ec);
-	EXEC_EVENT_HOOK_VM_TRACE(ec, event, vm_event_flags, GET_SELF(), 0, 0, 0, Qundef);
-	reg_cfp->pc--;
-    }
-    if (events & RUBY_EVENT_LINE) {
-	reg_cfp->pc++;
-	vm_dtrace(RUBY_EVENT_LINE, ec);
-	EXEC_EVENT_HOOK_VM_TRACE(ec, RUBY_EVENT_LINE, vm_event_flags, GET_SELF(), 0, 0, 0, Qundef);
-	reg_cfp->pc--;
-    }
-    if (event = (events & (RUBY_EVENT_END | RUBY_EVENT_RETURN | RUBY_EVENT_B_RETURN))) {
-	VM_ASSERT(event == RUBY_EVENT_END ||
-		  event == RUBY_EVENT_RETURN  ||
-		  event == RUBY_EVENT_B_RETURN);
-	reg_cfp->pc++;
-	vm_dtrace(RUBY_EVENT_LINE, ec);
-	EXEC_EVENT_HOOK_VM_TRACE(ec, event, vm_event_flags, GET_SELF(), 0, 0, 0, TOPN(0));
-	reg_cfp->pc--;
+	VM_ASSERT(reg_cfp->pc == pc);
+	VM_ASSERT(events != 0);
+	VM_ASSERT(vm_event_flags & events);
+
+	/* increment PC because source line is calculated with PC-1 */
+	if (event = (events & (RUBY_EVENT_CLASS | RUBY_EVENT_CALL | RUBY_EVENT_B_CALL))) {
+	    VM_ASSERT(event == RUBY_EVENT_CLASS ||
+		      event == RUBY_EVENT_CALL  ||
+		      event == RUBY_EVENT_B_CALL);
+	    reg_cfp->pc++;
+	    vm_dtrace(event, ec);
+	    EXEC_EVENT_HOOK(ec, event, GET_SELF(), 0, 0, 0, Qundef);
+	    reg_cfp->pc--;
+	}
+	if (events & RUBY_EVENT_LINE) {
+	    reg_cfp->pc++;
+	    vm_dtrace(RUBY_EVENT_LINE, ec);
+	    EXEC_EVENT_HOOK(ec, RUBY_EVENT_LINE, GET_SELF(), 0, 0, 0, Qundef);
+	    reg_cfp->pc--;
+	}
+	if (event = (events & (RUBY_EVENT_END | RUBY_EVENT_RETURN | RUBY_EVENT_B_RETURN))) {
+	    VM_ASSERT(event == RUBY_EVENT_END ||
+		      event == RUBY_EVENT_RETURN  ||
+		      event == RUBY_EVENT_B_RETURN);
+	    reg_cfp->pc++;
+	    vm_dtrace(event, ec);
+	    EXEC_EVENT_HOOK(ec, event, GET_SELF(), 0, 0, 0, TOPN(0));
+	    reg_cfp->pc--;
+	}
     }
 }

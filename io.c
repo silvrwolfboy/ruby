@@ -5186,12 +5186,11 @@ rb_io_pwrite(VALUE io, VALUE str, VALUE offset)
     rb_io_t *fptr;
     ssize_t n;
     struct prdwr_internal_arg arg;
+    VALUE tmp;
 
     if (!RB_TYPE_P(str, T_STRING))
 	str = rb_obj_as_string(str);
 
-    arg.buf = RSTRING_PTR(str);
-    arg.count = (size_t)RSTRING_LEN(str);
     arg.offset = NUM2OFFT(offset);
 
     io = GetWriteIO(io);
@@ -5199,10 +5198,13 @@ rb_io_pwrite(VALUE io, VALUE str, VALUE offset)
     rb_io_check_writable(fptr);
     arg.fd = fptr->fd;
 
-    n = (ssize_t)rb_thread_io_blocking_region(internal_pwrite_func, &arg, fptr->fd);
-    RB_GC_GUARD(str);
+    tmp = rb_str_tmp_frozen_acquire(str);
+    arg.buf = RSTRING_PTR(tmp);
+    arg.count = (size_t)RSTRING_LEN(tmp);
 
+    n = (ssize_t)rb_thread_io_blocking_region(internal_pwrite_func, &arg, fptr->fd);
     if (n == -1) rb_sys_fail_path(fptr->pathv);
+    rb_str_tmp_frozen_release(str, tmp);
 
     return SSIZET2NUM(n);
 }
@@ -5970,7 +5972,10 @@ static int
 io_strip_bom(VALUE io)
 {
     VALUE b1, b2, b3, b4;
+    rb_io_t *fptr;
 
+    GetOpenFile(io, fptr);
+    if (!(fptr->mode & FMODE_READABLE)) return 0;
     if (NIL_P(b1 = rb_io_getbyte(io))) return 0;
     switch (b1) {
       case INT2FIX(0xEF):
@@ -7066,10 +7071,10 @@ rb_f_open(int argc, VALUE *argv)
     return rb_io_s_open(argc, argv, rb_cFile);
 }
 
-static VALUE rb_io_open_generic(VALUE, int, int, const convconfig_t *, mode_t);
+static VALUE rb_io_open_generic(VALUE, VALUE, int, int, const convconfig_t *, mode_t);
 
 static VALUE
-rb_io_open(VALUE filename, VALUE vmode, VALUE vperm, VALUE opt)
+rb_io_open(VALUE io, VALUE filename, VALUE vmode, VALUE vperm, VALUE opt)
 {
     int oflags, fmode;
     convconfig_t convconfig;
@@ -7077,31 +7082,26 @@ rb_io_open(VALUE filename, VALUE vmode, VALUE vperm, VALUE opt)
 
     rb_io_extract_modeenc(&vmode, &vperm, opt, &oflags, &fmode, &convconfig);
     perm = NIL_P(vperm) ? 0666 :  NUM2MODET(vperm);
-    return rb_io_open_generic(filename, oflags, fmode, &convconfig, perm);
+    return rb_io_open_generic(io, filename, oflags, fmode, &convconfig, perm);
 }
 
 static VALUE
-rb_io_open_generic(VALUE filename, int oflags, int fmode,
+rb_io_open_generic(VALUE klass, VALUE filename, int oflags, int fmode,
 		   const convconfig_t *convconfig, mode_t perm)
 {
     VALUE cmd;
-    if (!NIL_P(cmd = check_pipe_command(filename))) {
+    const int warn = klass == rb_cFile;
+    if ((warn || klass == rb_cIO) && !NIL_P(cmd = check_pipe_command(filename))) {
+	if (warn) {
+	    rb_warn("IO.%"PRIsVALUE" called on File to invoke external command",
+		    rb_id2str(rb_frame_this_func()));
+	}
 	return pipe_open_s(cmd, rb_io_oflags_modestr(oflags), fmode, convconfig);
     }
     else {
-        return rb_file_open_generic(io_alloc(rb_cFile), filename,
+	return rb_file_open_generic(io_alloc(klass), filename,
 				    oflags, fmode, convconfig, perm);
     }
-}
-
-static VALUE
-rb_io_open_with_args(int argc, const VALUE *argv)
-{
-    VALUE io;
-
-    io = io_alloc(rb_cFile);
-    rb_open_file(argc, argv, io);
-    return io;
 }
 
 static VALUE
@@ -7485,10 +7485,10 @@ rb_f_print(int argc, const VALUE *argv)
  *     ios.putc(obj)    -> obj
  *
  *  If <i>obj</i> is <code>Numeric</code>, write the character whose code is
- *  the least-significant byte of <i>obj</i>, otherwise write the first byte
- *  of the string representation of <i>obj</i> to <em>ios</em>. Note: This
- *  method is not safe for use with multi-byte characters as it will truncate
- *  them.
+ *  the least-significant byte of <i>obj</i>.
+ *  If <i>obj</i> is <code>String</code>, write the first character
+ *  of <i>obj</i> to <em>ios</em>.
+ *  Otherwise, raise <code>TypeError</code>.
  *
  *     $stdout.putc "A"
  *     $stdout.putc 65
@@ -7764,6 +7764,11 @@ void
 rb_write_error2(const char *mesg, long len)
 {
     if (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0) {
+#ifdef _WIN32
+	if (isatty(fileno(stderr))) {
+	    if (rb_w32_write_console(rb_str_new(mesg, len), fileno(stderr)) > 0) return;
+	}
+#endif
 	if (fwrite(mesg, sizeof(char), (size_t)len, stderr) < (size_t)len) {
 	    /* failed to write to stderr, what can we do? */
 	    return;
@@ -8036,8 +8041,7 @@ rb_io_make_open_file(VALUE obj)
  *    If +mode+ parameter is given, this parameter will be bitwise-ORed.
  *
  *  :\external_encoding ::
- *    External encoding for the IO.  "-" is a synonym for the default external
- *    encoding.
+ *    External encoding for the IO.
  *
  *  :\internal_encoding ::
  *    Internal encoding for the IO.  "-" is a synonym for the default internal
@@ -10158,9 +10162,10 @@ struct foreach_arg {
 };
 
 static void
-open_key_args(int argc, VALUE *argv, VALUE opt, struct foreach_arg *arg)
+open_key_args(VALUE klass, int argc, VALUE *argv, VALUE opt, struct foreach_arg *arg)
 {
     VALUE path, v;
+    VALUE vmode = Qnil, vperm = Qnil;
 
     path = *argv++;
     argc--;
@@ -10169,29 +10174,18 @@ open_key_args(int argc, VALUE *argv, VALUE opt, struct foreach_arg *arg)
     arg->argc = argc;
     arg->argv = argv;
     if (NIL_P(opt)) {
-	arg->io = rb_io_open(path, INT2NUM(O_RDONLY), INT2FIX(0666), Qnil);
-	return;
+	vmode = INT2NUM(O_RDONLY);
+	vperm = INT2FIX(0666);
     }
-    v = rb_hash_aref(opt, sym_open_args);
-    if (!NIL_P(v)) {
-	VALUE args;
-	long n;
+    else if (!NIL_P(v = rb_hash_aref(opt, sym_open_args))) {
+	int n;
 
 	v = rb_to_array_type(v);
-	n = RARRAY_LEN(v) + 1;
-#if SIZEOF_LONG > SIZEOF_INT
-	if (n > INT_MAX) {
-	    rb_raise(rb_eArgError, "too many arguments");
-	}
-#endif
-	args = rb_ary_tmp_new(n);
-	rb_ary_push(args, path);
-	rb_ary_concat(args, v);
-	arg->io = rb_io_open_with_args((int)n, RARRAY_CONST_PTR(args));
-	rb_ary_clear(args);	/* prevent from GC */
-	return;
+	n = RARRAY_LENINT(v);
+	rb_check_arity(n, 0, 3); /* rb_io_open */
+	rb_scan_args(n, RARRAY_CONST_PTR(v), "02:", &vmode, &vperm, &opt);
     }
-    arg->io = rb_io_open(path, Qnil, Qnil, opt);
+    arg->io = rb_io_open(klass, path, vmode, vperm, opt);
 }
 
 static VALUE
@@ -10245,7 +10239,7 @@ rb_io_s_foreach(int argc, VALUE *argv, VALUE self)
     argc = rb_scan_args(argc, argv, "13:", NULL, NULL, NULL, NULL, &opt);
     RETURN_ENUMERATOR(self, orig_argc, argv);
     extract_getline_args(argc-1, argv+1, &garg);
-    open_key_args(argc, argv, opt, &arg);
+    open_key_args(self, argc, argv, opt, &arg);
     if (NIL_P(arg.io)) return Qnil;
     extract_getline_opts(opt, &garg);
     check_getline_args(&garg.rs, &garg.limit, garg.io = arg.io);
@@ -10297,7 +10291,7 @@ rb_io_s_readlines(int argc, VALUE *argv, VALUE io)
 
     argc = rb_scan_args(argc, argv, "13:", NULL, NULL, NULL, NULL, &opt);
     extract_getline_args(argc-1, argv+1, &garg);
-    open_key_args(argc, argv, opt, &arg);
+    open_key_args(io, argc, argv, opt, &arg);
     if (NIL_P(arg.io)) return Qnil;
     extract_getline_opts(opt, &garg);
     check_getline_args(&garg.rs, &garg.limit, garg.io = arg.io);
@@ -10373,7 +10367,7 @@ rb_io_s_read(int argc, VALUE *argv, VALUE io)
     struct foreach_arg arg;
 
     argc = rb_scan_args(argc, argv, "13:", NULL, NULL, &offset, NULL, &opt);
-    open_key_args(argc, argv, opt, &arg);
+    open_key_args(io, argc, argv, opt, &arg);
     if (NIL_P(arg.io)) return Qnil;
     if (!NIL_P(offset)) {
 	struct seek_arg sarg;
@@ -10422,7 +10416,7 @@ rb_io_s_binread(int argc, VALUE *argv, VALUE io)
     rb_scan_args(argc, argv, "12", NULL, NULL, &offset);
     FilePathValue(argv[0]);
     convconfig.enc = rb_ascii8bit_encoding();
-    arg.io = rb_io_open_generic(argv[0], oflags, fmode, &convconfig, 0);
+    arg.io = rb_io_open_generic(io, argv[0], oflags, fmode, &convconfig, 0);
     if (NIL_P(arg.io)) return Qnil;
     arg.argv = argv+1;
     arg.argc = (argc > 1) ? 1 : 0;
@@ -10448,7 +10442,7 @@ io_s_write0(struct write_arg *arg)
 }
 
 static VALUE
-io_s_write(int argc, VALUE *argv, int binary)
+io_s_write(int argc, VALUE *argv, VALUE klass, int binary)
 {
     VALUE string, offset, opt;
     struct foreach_arg arg;
@@ -10468,7 +10462,7 @@ io_s_write(int argc, VALUE *argv, int binary)
        if (NIL_P(offset)) mode |= O_TRUNC;
        rb_hash_aset(opt,sym_mode,INT2NUM(mode));
     }
-    open_key_args(argc,argv,opt,&arg);
+    open_key_args(klass, argc, argv, opt, &arg);
 
 #ifndef O_BINARY
     if (binary) rb_io_binmode_m(arg.io);
@@ -10542,7 +10536,7 @@ io_s_write(int argc, VALUE *argv, int binary)
 static VALUE
 rb_io_s_write(int argc, VALUE *argv, VALUE io)
 {
-    return io_s_write(argc, argv, 0);
+    return io_s_write(argc, argv, io, 0);
 }
 
 /*
@@ -10557,7 +10551,7 @@ rb_io_s_write(int argc, VALUE *argv, VALUE io)
 static VALUE
 rb_io_s_binwrite(int argc, VALUE *argv, VALUE io)
 {
-    return io_s_write(argc, argv, 1);
+    return io_s_write(argc, argv, io, 1);
 }
 
 struct copy_stream_struct {

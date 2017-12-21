@@ -2184,6 +2184,22 @@ class TestIO < Test::Unit::TestCase
     end
   end
 
+  def test_read_command
+    assert_equal("foo\n", IO.read("|echo foo"))
+    assert_warn(/invoke external command/) do
+      File.read("|#{EnvUtil.rubybin} -e puts")
+    end
+    assert_warn(/invoke external command/) do
+      File.binread("|#{EnvUtil.rubybin} -e puts")
+    end
+    assert_raise(Errno::ENOENT, Errno::EINVAL) do
+      Class.new(IO).read("|#{EnvUtil.rubybin} -e puts")
+    end
+    assert_raise(Errno::ENOENT, Errno::EINVAL) do
+      Class.new(IO).binread("|#{EnvUtil.rubybin} -e puts")
+    end
+  end
+
   def test_reopen
     make_tempfile {|t|
       open(__FILE__) do |f|
@@ -2356,6 +2372,10 @@ End
     a = []
     IO.foreach("|" + EnvUtil.rubybin + " -e 'puts :foo; puts :bar; puts :baz'") {|x| a << x }
     assert_equal(["foo\n", "bar\n", "baz\n"], a)
+
+    a = []
+    IO.foreach("|" + EnvUtil.rubybin + " -e 'puts :zot'", :open_args => ["r"]) {|x| a << x }
+    assert_equal(["zot\n"], a)
 
     make_tempfile {|t|
       a = []
@@ -2911,11 +2931,15 @@ __END__
         $stdin.reopen(r)
         r.close
         read_thread = Thread.new do
-          $stdin.read(1)
+          begin
+            $stdin.read(1)
+          rescue IOError => e
+            e
+          end
         end
         sleep(0.1) until read_thread.stop?
         $stdin.close
-        assert_raise(IOError) {read_thread.join}
+        assert_kind_of(IOError, read_thread.value)
       end
     end;
   end
@@ -3388,12 +3412,16 @@ __END__
 
     str = ""
     IO.pipe {|r,|
-      t = Thread.new { r.read(nil, str) }
+      t = Thread.new {
+        assert_raise(RuntimeError) {
+          r.read(nil, str)
+        }
+      }
       sleep 0.1 until t.stop?
       t.raise
       sleep 0.1 while t.alive?
       assert_nothing_raised(RuntimeError, bug8669) { str.clear }
-      assert_raise(RuntimeError) { t.join }
+      t.join
     }
   end if /cygwin/ !~ RUBY_PLATFORM
 
@@ -3402,12 +3430,16 @@ __END__
 
     str = ""
     IO.pipe {|r, w|
-      t = Thread.new { r.readpartial(4096, str) }
+      t = Thread.new {
+        assert_raise(RuntimeError) {
+          r.readpartial(4096, str)
+        }
+      }
       sleep 0.1 until t.stop?
       t.raise
       sleep 0.1 while t.alive?
       assert_nothing_raised(RuntimeError, bug8669) { str.clear }
-      assert_raise(RuntimeError) { t.join }
+      t.join
     }
   end if /cygwin/ !~ RUBY_PLATFORM
 
@@ -3427,12 +3459,16 @@ __END__
 
     str = ""
     IO.pipe {|r, w|
-      t = Thread.new { r.sysread(4096, str) }
+      t = Thread.new {
+        assert_raise(RuntimeError) {
+          r.sysread(4096, str)
+        }
+      }
       sleep 0.1 until t.stop?
       t.raise
       sleep 0.1 while t.alive?
       assert_nothing_raised(RuntimeError, bug8669) { str.clear }
-      assert_raise(RuntimeError) { t.join }
+      t.join
     }
   end if /cygwin/ !~ RUBY_PLATFORM
 
@@ -3539,7 +3575,9 @@ __END__
         thread = Thread.new do
           begin
             q << true
-            while r.gets
+            assert_raise_with_message(IOError, /stream closed/) do
+              while r.gets
+              end
             end
           ensure
             closed = r.closed?
@@ -3548,9 +3586,7 @@ __END__
         q.pop
         sleep 0.01 until thread.stop?
         r.close
-        assert_raise_with_message(IOError, /stream closed/) do
-          thread.join
-        end
+        thread.join
         assert_equal(true, closed, bug13158 + ': stream should be closed')
       end
     end;

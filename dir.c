@@ -504,7 +504,7 @@ static DIR *
 opendir_without_gvl(const char *path)
 {
     if (vm_initialized) {
-	union { const char *in; void *out; } u;
+	union { const void *in; void *out; } u;
 
 	u.in = path;
 
@@ -1002,11 +1002,7 @@ nogvl_chdir(void *ptr)
 static void
 dir_chdir(VALUE path)
 {
-    int r;
-    char *p = RSTRING_PTR(path);
-
-    r = (int)(VALUE)rb_thread_call_without_gvl(nogvl_chdir, p, RUBY_UBF_IO, 0);
-    if (r < 0)
+    if (chdir(RSTRING_PTR(path)) < 0)
 	rb_sys_fail_path(path);
 }
 
@@ -1111,7 +1107,13 @@ dir_s_chdir(int argc, VALUE *argv, VALUE obj)
 	args.done = FALSE;
 	return rb_ensure(chdir_yield, (VALUE)&args, chdir_restore, (VALUE)&args);
     }
-    dir_chdir(path);
+    else {
+	char *p = RSTRING_PTR(path);
+	int r = (int)(VALUE)rb_thread_call_without_gvl(nogvl_chdir, p,
+							RUBY_UBF_IO, 0);
+	if (r < 0)
+	    rb_sys_fail_path(path);
+    }
 
     return INT2FIX(0);
 }
@@ -1127,7 +1129,7 @@ rb_dir_getwd_ospath(void)
 #undef RUBY_UNTYPED_DATA_WARNING
 #define RUBY_UNTYPED_DATA_WARNING 0
     path_guard = Data_Wrap_Struct((VALUE)0, NULL, RUBY_DEFAULT_FREE, NULL);
-    path = my_getcwd();
+    path = ruby_getcwd();
     DATA_PTR(path_guard) = path;
 #ifdef __APPLE__
     cwd = rb_str_normalize_ospath(path, strlen(path));
@@ -1364,9 +1366,9 @@ to_be_ignored(int e)
 }
 
 #ifdef _WIN32
-#define STAT(p, s)	rb_w32_ustati64((p), (s))
+#define STAT(p, s)	rb_w32_ustati128((p), (s))
 #undef lstat
-#define lstat(p, s)	rb_w32_ulstati64((p), (s))
+#define lstat(p, s)	rb_w32_ulstati128((p), (s))
 #else
 #define STAT(p, s)	stat((p), (s))
 #endif

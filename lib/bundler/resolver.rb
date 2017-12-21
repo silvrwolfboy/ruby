@@ -245,7 +245,8 @@ module Bundler
           if all <= 1
             all - 1_000_000
           else
-            search = search_for(dependency).size
+            search = search_for(dependency)
+            search = @prerelease_specified[dependency.name] ? search.count : search.count {|s| !s.version.prerelease? }
             search - all
           end
         end
@@ -305,6 +306,8 @@ module Bundler
         :solver_name => "Bundler",
         :possibility_type => "gem",
         :reduce_trees => lambda do |trees|
+          # bail out if tree size is too big for Array#combination to make any sense
+          return trees if trees.size > 15
           maximal = 1.upto(trees.size).map do |size|
             trees.map(&:last).flatten(1).combination(size).to_a
           end.flatten(1).select do |deps|

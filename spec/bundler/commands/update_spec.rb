@@ -195,6 +195,23 @@ RSpec.describe "bundle update" do
         expect(the_bundle).not_to include_gems "foo 2.0"
       end
     end
+
+    context "when bundler itself is a transitive dependency" do
+      it "executes without error" do
+        install_gemfile <<-G
+          source "file://#{gem_repo1}"
+          gem "activesupport", :group => :development
+          gem "rack"
+        G
+        update_repo2 do
+          build_gem "activesupport", "3.0"
+        end
+        bundle "update --group development"
+        expect(the_bundle).to include_gems "activesupport 2.3.5"
+        expect(the_bundle).to include_gems "bundler #{Bundler::VERSION}"
+        expect(the_bundle).not_to include_gems "rack 1.2"
+      end
+    end
   end
 
   describe "in a frozen bundle" do
@@ -640,7 +657,7 @@ RSpec.describe "bundle update --bundler" do
       source "file:#{gem_repo4}"
       gem "rack"
     G
-    lockfile lockfile.sub(Bundler::VERSION, "1.0.0")
+    lockfile lockfile.sub(/(^\s*)#{Bundler::VERSION}($)/, '\11.0.0\2')
 
     FileUtils.rm_r gem_repo4
 

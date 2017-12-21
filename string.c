@@ -19,6 +19,7 @@
 #include "ruby_assert.h"
 #include "id.h"
 #include "debug_counter.h"
+#include "ruby/util.h"
 
 #define BEG(no) (regs->beg[(no)])
 #define END(no) (regs->end[(no)])
@@ -1010,6 +1011,10 @@ rb_external_str_new_with_enc(const char *ptr, long len, rb_encoding *eenc)
     rb_encoding *ienc;
     VALUE str;
     const int eidx = rb_enc_to_index(eenc);
+
+    if (!ptr) {
+	return rb_tainted_str_new_with_enc(ptr, len, eenc);
+    }
 
     /* ASCII-8BIT case, no conversion */
     if ((eidx == rb_ascii8bit_encindex()) ||
@@ -3418,13 +3423,34 @@ str_casecmp_p(VALUE str1, VALUE str2)
     return rb_str_eql(folded_str1, folded_str2);
 }
 
+static long
+strseq_core(const char *str_ptr, const char *str_ptr_end, long str_len,
+	    const char *sub_ptr, long sub_len, long offset, rb_encoding *enc)
+{
+    const char *search_start = str_ptr;
+    long pos, search_len = str_len - offset;
+
+    for (;;) {
+	const char *t;
+	pos = rb_memsearch(sub_ptr, sub_len, search_start, search_len, enc);
+	if (pos < 0) return pos;
+	t = rb_enc_right_char_head(search_start, search_start+pos, str_ptr_end, enc);
+	if (t == search_start + pos) break;
+	search_len -= t - search_start;
+	if (search_len <= 0) return -1;
+	offset += t - search_start;
+	search_start = t;
+    }
+    return pos + offset;
+}
+
 #define rb_str_index(str, sub, offset) rb_strseq_index(str, sub, offset, 0)
 
 static long
 rb_strseq_index(VALUE str, VALUE sub, long offset, int in_byte)
 {
-    const char *str_ptr, *str_ptr_end, *sub_ptr, *search_start;
-    long pos, str_len, sub_len, search_len;
+    const char *str_ptr, *str_ptr_end, *sub_ptr;
+    long str_len, sub_len;
     int single_byte = single_byte_optimizable(str);
     rb_encoding *enc;
 
@@ -3454,21 +3480,7 @@ rb_strseq_index(VALUE str, VALUE sub, long offset, int in_byte)
     if (sub_len == 0) return offset;
 
     /* need proceed one character at a time */
-
-    search_start = str_ptr;
-    search_len = RSTRING_LEN(str) - offset;
-    for (;;) {
-	const char *t;
-	pos = rb_memsearch(sub_ptr, sub_len, search_start, search_len, enc);
-	if (pos < 0) return pos;
-	t = rb_enc_right_char_head(search_start, search_start+pos, str_ptr_end, enc);
-	if (t == search_start + pos) break;
-	search_len -= t - search_start;
-	if (search_len <= 0) return -1;
-	offset += t - search_start;
-	search_start = t;
-    }
-    return pos + offset;
+    return strseq_core(str_ptr, str_ptr_end, str_len, sub_ptr, sub_len, offset, enc);
 }
 
 
@@ -6069,6 +6081,242 @@ rb_str_dump(VALUE str)
     return result;
 }
 
+static int
+unescape_ascii(unsigned int c)
+{
+    switch (c) {
+      case 'n':
+	return '\n';
+      case 'r':
+	return '\r';
+      case 't':
+	return '\t';
+      case 'f':
+	return '\f';
+      case 'v':
+	return '\13';
+      case 'b':
+	return '\010';
+      case 'a':
+	return '\007';
+      case 'e':
+	return 033;
+      default:
+	UNREACHABLE;
+    }
+}
+
+static void
+undump_after_backslash(VALUE undumped, const char **ss, const char *s_end, rb_encoding **penc, bool *utf8, bool *binary)
+{
+    const char *s = *ss;
+    unsigned int c;
+    int codelen;
+    size_t hexlen;
+    char buf[6];
+    static rb_encoding *enc_utf8 = NULL;
+
+    switch (*s) {
+      case '\\':
+      case '"':
+      case '#':
+	rb_str_cat(undumped, s, 1); /* cat itself */
+	s++;
+	break;
+      case 'n':
+      case 'r':
+      case 't':
+      case 'f':
+      case 'v':
+      case 'b':
+      case 'a':
+      case 'e':
+	*buf = (char)unescape_ascii(*s);
+	rb_str_cat(undumped, buf, 1);
+	s++;
+	break;
+      case 'u':
+	if (*binary) {
+	    rb_raise(rb_eRuntimeError, "hex escape and Unicode escape are mixed");
+	}
+	*utf8 = true;
+	if (++s >= s_end) {
+	    rb_raise(rb_eRuntimeError, "invalid Unicode escape");
+	}
+	if (enc_utf8 == NULL) enc_utf8 = rb_utf8_encoding();
+	if (*penc != enc_utf8) {
+	    *penc = enc_utf8;
+	    rb_enc_associate(undumped, enc_utf8);
+	}
+	if (*s == '{') { /* handle \u{...} form */
+	    s++;
+	    for (;;) {
+		if (s >= s_end) {
+		    rb_raise(rb_eRuntimeError, "unterminated Unicode escape");
+		}
+		if (*s == '}') {
+		    s++;
+		    break;
+		}
+		if (ISSPACE(*s)) {
+		    s++;
+		    continue;
+		}
+		c = scan_hex(s, s_end-s, &hexlen);
+		if (hexlen == 0 || hexlen > 6) {
+		    rb_raise(rb_eRuntimeError, "invalid Unicode escape");
+		}
+		if (c > 0x10ffff) {
+		    rb_raise(rb_eRuntimeError, "invalid Unicode codepoint (too large)");
+		}
+		if (0xd800 <= c && c <= 0xdfff) {
+		    rb_raise(rb_eRuntimeError, "invalid Unicode codepoint");
+		}
+		codelen = rb_enc_mbcput(c, buf, *penc);
+		rb_str_cat(undumped, buf, codelen);
+		s += hexlen;
+	    }
+	}
+	else { /* handle \uXXXX form */
+	    c = scan_hex(s, 4, &hexlen);
+	    if (hexlen != 4) {
+		rb_raise(rb_eRuntimeError, "invalid Unicode escape");
+	    }
+	    if (0xd800 <= c && c <= 0xdfff) {
+		rb_raise(rb_eRuntimeError, "invalid Unicode codepoint");
+	    }
+	    codelen = rb_enc_mbcput(c, buf, *penc);
+	    rb_str_cat(undumped, buf, codelen);
+	    s += hexlen;
+	}
+	break;
+      case 'x':
+	if (*utf8) {
+	    rb_raise(rb_eRuntimeError, "hex escape and Unicode escape are mixed");
+	}
+	*binary = true;
+	if (++s >= s_end) {
+	    rb_raise(rb_eRuntimeError, "invalid hex escape");
+	}
+	*buf = scan_hex(s, 2, &hexlen);
+	if (hexlen != 2) {
+	    rb_raise(rb_eRuntimeError, "invalid hex escape");
+	}
+	rb_str_cat(undumped, buf, 1);
+	s += hexlen;
+	break;
+      default:
+	rb_str_cat(undumped, s-1, 2);
+	s++;
+    }
+
+    *ss = s;
+}
+
+static VALUE rb_str_is_ascii_only_p(VALUE str);
+
+/*
+ *  call-seq:
+ *     str.undump   -> new_str
+ *
+ *  Produces unescaped version of +str+.
+ *  See also String#dump because String#undump does inverse of String#dump.
+ *
+ *    "\"hello \\n ''\"".undump #=> "hello \n ''"
+ */
+
+static VALUE
+str_undump(VALUE str)
+{
+    const char *s = RSTRING_PTR(str);
+    const char *s_end = RSTRING_END(str);
+    rb_encoding *enc = rb_enc_get(str);
+    VALUE undumped = rb_enc_str_new(s, 0L, enc);
+    bool utf8 = false;
+    bool binary = false;
+    int w;
+
+    rb_must_asciicompat(str);
+    if (rb_str_is_ascii_only_p(str) == Qfalse) {
+	rb_raise(rb_eRuntimeError, "non-ASCII character detected");
+    }
+    if (!str_null_check(str, &w)) {
+       rb_raise(rb_eRuntimeError, "string contains null byte");
+    }
+    if (RSTRING_LEN(str) < 2) goto invalid_format;
+    if (*s != '"') goto invalid_format;
+
+    /* strip '"' at the start */
+    s++;
+
+    for (;;) {
+	if (s >= s_end) {
+	    rb_raise(rb_eRuntimeError, "unterminated dumped string");
+	}
+
+	if (*s == '"') {
+	    /* epilogue */
+	    s++;
+	    if (s == s_end) {
+		/* ascii compatible dumped string */
+		break;
+	    }
+	    else {
+		const char *encname;
+		char *buf;
+		int encidx;
+		ptrdiff_t size;
+
+		if (utf8) {
+		    rb_raise(rb_eRuntimeError, "dumped string contained Unicode escape but used force_encoding");
+		}
+
+		size = rb_strlen_lit(".force_encoding(\"");
+		if (s_end - s <= size) goto invalid_format;
+		if (memcmp(s, ".force_encoding(\"", size) != 0) goto invalid_format;
+		s += size;
+
+		encname = s;
+		s = memchr(s, '"', s_end-s);
+		size = s - encname;
+		if (!s) goto invalid_format;
+		if (size > 100) {
+		    rb_raise(rb_eRuntimeError, "dumped string has unknown encoding name");
+		}
+		buf = ALLOC_N(char, size+1);
+		memcpy(buf, encname, size);
+		buf[size] = '\0';
+		encidx = rb_enc_find_index(buf);
+		xfree(buf);
+		if (encidx < 0) {
+		    rb_raise(rb_eRuntimeError, "dumped string has unknown encoding name");
+		}
+		rb_enc_associate_index(undumped, encidx);
+
+		if (s_end - s != 2 ||
+			s[0] != '"' ||
+			s[1] != ')') goto invalid_format;
+	    }
+	    break;
+	}
+
+	if (*s == '\\') {
+	    s++;
+	    if (s >= s_end) {
+		rb_raise(rb_eRuntimeError, "invalid escape");
+	    }
+	    undump_after_backslash(undumped, &s, s_end, &enc, &utf8, &binary);
+	}
+	else {
+	    rb_str_cat(undumped, s++, 1);
+	}
+    }
+
+    OBJ_INFECT(undumped, str);
+    return undumped;
+invalid_format:
+    rb_raise(rb_eRuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form");
+}
 
 static void
 rb_str_check_dummy_enc(rb_encoding *enc)
@@ -10582,6 +10830,7 @@ Init_String(void)
     rb_define_method(rb_cString, "to_str", rb_str_to_s, 0);
     rb_define_method(rb_cString, "inspect", rb_str_inspect, 0);
     rb_define_method(rb_cString, "dump", rb_str_dump, 0);
+    rb_define_method(rb_cString, "undump", str_undump, 0);
 
     sym_ascii      = ID2SYM(rb_intern("ascii"));
     sym_turkic     = ID2SYM(rb_intern("turkic"));

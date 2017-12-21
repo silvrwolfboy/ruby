@@ -358,7 +358,7 @@ static rb_method_definition_t *
 method_definition_addref_complement(rb_method_definition_t *def)
 {
     def->complemented_count++;
-    if (METHOD_DEBUG) fprintf(stderr, "+%p-%s:%d\n", def, rb_id2name(def->original_id), def->alias_count);
+    if (METHOD_DEBUG) fprintf(stderr, "+%p-%s:%d\n", def, rb_id2name(def->original_id), def->complemented_count);
     return def;
 }
 
@@ -806,16 +806,17 @@ prepare_callable_method_entry(VALUE defined_class, ID id, const rb_method_entry_
 	VM_ASSERT(RB_TYPE_P(defined_class, T_ICLASS) || RB_TYPE_P(defined_class, T_MODULE));
 	VM_ASSERT(me->defined_class == 0);
 
-	if ((mtbl = RCLASS_CALLABLE_M_TBL(defined_class)) == NULL) {
-	    mtbl = RCLASS_EXT(defined_class)->callable_m_tbl = rb_id_table_create(0);
-	}
+	mtbl = RCLASS_CALLABLE_M_TBL(defined_class);
 
-	if (rb_id_table_lookup(mtbl, id, (VALUE *)&me)) {
+	if (mtbl && rb_id_table_lookup(mtbl, id, (VALUE *)&me)) {
 	    RB_DEBUG_COUNTER_INC(mc_cme_complement_hit);
 	    cme = (rb_callable_method_entry_t *)me;
 	    VM_ASSERT(callable_method_entry_p(cme));
 	}
 	else {
+	    if (!mtbl) {
+		mtbl = RCLASS_EXT(defined_class)->callable_m_tbl = rb_id_table_create(0);
+	    }
 	    cme = rb_method_entry_complement_defined_class(me, me->called_id, defined_class);
 	    rb_id_table_insert(mtbl, id, (VALUE)cme);
 	    VM_ASSERT(callable_method_entry_p(cme));
@@ -2085,9 +2086,9 @@ Init_eval_method(void)
     rb_define_method(rb_mKernel, "respond_to?", obj_respond_to, -1);
     rb_define_method(rb_mKernel, "respond_to_missing?", obj_respond_to_missing, 2);
 
-    rb_define_private_method(rb_cModule, "remove_method", rb_mod_remove_method, -1);
-    rb_define_private_method(rb_cModule, "undef_method", rb_mod_undef_method, -1);
-    rb_define_private_method(rb_cModule, "alias_method", rb_mod_alias_method, 2);
+    rb_define_method(rb_cModule, "remove_method", rb_mod_remove_method, -1);
+    rb_define_method(rb_cModule, "undef_method", rb_mod_undef_method, -1);
+    rb_define_method(rb_cModule, "alias_method", rb_mod_alias_method, 2);
     rb_define_private_method(rb_cModule, "public", rb_mod_public, -1);
     rb_define_private_method(rb_cModule, "protected", rb_mod_protected, -1);
     rb_define_private_method(rb_cModule, "private", rb_mod_private, -1);

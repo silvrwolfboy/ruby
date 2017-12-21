@@ -74,19 +74,6 @@
 #include "thread_pthread.h"
 #endif
 
-#ifndef ENABLE_VM_OBJSPACE
-#ifdef _WIN32
-/*
- * TODO: object space independent st_table.
- * socklist and conlist will be freed exit_handler(), after object
- * space destruction.
- */
-#define ENABLE_VM_OBJSPACE 0
-#else
-#define ENABLE_VM_OBJSPACE 1
-#endif
-#endif
-
 #include <setjmp.h>
 #include <signal.h>
 
@@ -265,6 +252,7 @@ typedef struct rb_iseq_location_struct {
     VALUE base_label;   /* String */
     VALUE label;        /* String */
     VALUE first_lineno; /* TODO: may be unsigned short */
+    rb_code_range_t code_range;
 } rb_iseq_location_t;
 
 #define PATHOBJ_PATH     0
@@ -599,7 +587,11 @@ typedef struct rb_vm_struct {
 #define RUBY_VM_FIBER_VM_STACK_SIZE           (  16 * 1024 * sizeof(VALUE)) /*   64 KB or  128 KB */
 #define RUBY_VM_FIBER_VM_STACK_SIZE_MIN       (   2 * 1024 * sizeof(VALUE)) /*    8 KB or   16 KB */
 #define RUBY_VM_FIBER_MACHINE_STACK_SIZE      (  64 * 1024 * sizeof(VALUE)) /*  256 KB or  512 KB */
+#if defined(__powerpc64__)
+#define RUBY_VM_FIBER_MACHINE_STACK_SIZE_MIN  (  32 * 1024 * sizeof(VALUE)) /*   128 KB or  256 KB */
+#else
 #define RUBY_VM_FIBER_MACHINE_STACK_SIZE_MIN  (  16 * 1024 * sizeof(VALUE)) /*   64 KB or  128 KB */
+#endif
 
 /* optimize insn */
 #define INTEGER_REDEFINED_OP_FLAG (1 << 0)
@@ -1599,6 +1591,7 @@ RUBY_SYMBOL_EXPORT_BEGIN
 extern rb_vm_t *ruby_current_vm_ptr;
 extern rb_execution_context_t *ruby_current_execution_context_ptr;
 extern rb_event_flag_t ruby_vm_event_flags;
+extern rb_event_flag_t ruby_vm_event_enabled_flags;
 
 RUBY_SYMBOL_EXPORT_END
 
@@ -1754,9 +1747,6 @@ rb_exec_event_hook_orig(rb_execution_context_t *ec, const rb_event_flag_t flag,
 #define EXEC_EVENT_HOOK(ec_, flag_, self_, id_, called_id_, klass_, data_) \
   EXEC_EVENT_HOOK_ORIG(ec_, flag_, ruby_vm_event_flags, self_, id_, called_id_, klass_, data_, 0)
 
-#define EXEC_EVENT_HOOK_VM_TRACE(ec_, flag_, vm_flag_, self_, id_, called_id_, klass_, data_) \
-  EXEC_EVENT_HOOK_ORIG(ec_, flag_, vm_flag_, self_, id_, called_id_, klass_, data_, 0)
-
 #define EXEC_EVENT_HOOK_AND_POP_FRAME(ec_, flag_, self_, id_, called_id_, klass_, data_) \
   EXEC_EVENT_HOOK_ORIG(ec_, flag_, ruby_vm_event_flags, self_, id_, called_id_, klass_, data_, 1)
 
@@ -1764,8 +1754,12 @@ RUBY_SYMBOL_EXPORT_BEGIN
 
 int rb_thread_check_trap_pending(void);
 
+/* #define RUBY_EVENT_RESERVED_FOR_INTERNAL_USE 0x030000 */ /* from vm_core.h */
+#define RUBY_EVENT_COVERAGE_LINE                0x010000
+#define RUBY_EVENT_COVERAGE_BRANCH              0x020000
+
 extern VALUE rb_get_coverages(void);
-extern void rb_set_coverages(VALUE, int);
+extern void rb_set_coverages(VALUE, int, VALUE);
 extern void rb_reset_coverages(void);
 
 void rb_postponed_job_flush(rb_vm_t *vm);

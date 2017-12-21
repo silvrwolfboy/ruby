@@ -184,14 +184,54 @@ class TestCoverage < Test::Unit::TestCase
         File.write("test.rb", code)
 
         assert_in_out_err(%w[-W0 -rcoverage], <<-"end;", stdout, [])
-          ENV["COVERAGE_EXPERIMENTAL_MODE"] = "true"
           Coverage.start(#{ opt })
           tmp = Dir.pwd
           require tmp + '/test.rb'
-          p Coverage.result[tmp + "/test.rb"]
+          r = Coverage.result[tmp + "/test.rb"]
+          if r[:methods]
+            h = {}
+            r[:methods].keys.sort_by {|key| key.drop(1) }.each do |key|
+              h[key] = r[:methods][key]
+            end
+            r[:methods].replace h
+          end
+          p r
         end;
       }
     }
+  end
+
+  def test_line_coverage_for_multiple_lines
+    result = {
+      :lines => [1, nil, nil, nil, nil, nil, 1, nil, 1, nil, nil, nil, nil, nil, 1, nil, 1, 1, 1, nil, nil, nil, nil, nil, 1]
+    }
+    assert_coverage(<<~"end;", { lines: true }, result) # Bug #14191
+      FOO = [
+        { foo: 'bar' },
+        { bar: 'baz' }
+      ]
+
+      'some string'.split
+                   .map(&:length)
+
+      some =
+        'value'
+
+      Struct.new(
+        :foo,
+        :bar
+      ).new
+
+      class Test
+        def foo(bar)
+          {
+            foo: bar
+          }
+        end
+      end
+
+      Test.new.foo(Object.new)
+    end;
   end
 
   def test_branch_coverage_for_if_statement
@@ -332,20 +372,124 @@ class TestCoverage < Test::Unit::TestCase
   def test_method_coverage
     result = {
       :methods => {
-        [:foo, 0, 1] => 2,
-        [:bar, 1, 2] => 1,
-        [:baz, 2, 4] => 0,
+        [Object, :bar, 2, 0, 3, 3] => 1,
+        [Object, :baz, 4, 1, 4, 13] => 0,
+        [Object, :foo, 1, 0, 1, 12] => 2,
       }
     }
-    assert_coverage(<<-"end;", { methods: true }, result)
+    assert_coverage(<<~"end;", { methods: true }, result)
       def foo; end
       def bar
       end
-      def baz; end
+       def baz; end
 
       foo
       foo
       bar
     end;
+  end
+
+  def test_method_coverage_for_define_method
+    result = {
+      :methods => {
+        [Object, :a, 6, 18, 6, 25] => 2,
+        [Object, :b, 7, 18, 8, 3] => 0,
+        [Object, :bar, 2, 20, 3, 1] => 1,
+        [Object, :baz, 4, 9, 4, 11] => 0,
+        [Object, :foo, 1, 20, 1, 22] => 2,
+      }
+    }
+    assert_coverage(<<~"end;", { methods: true }, result)
+      define_method(:foo) {}
+      define_method(:bar) {
+      }
+      f = proc {}
+      define_method(:baz, &f)
+      define_method(:a) do; end
+      define_method(:b) do
+      end
+
+      foo
+      foo
+      bar
+      a
+      a
+    end;
+  end
+
+  class DummyConstant < String
+    def inspect
+      self
+    end
+  end
+
+  def test_method_coverage_for_alias
+    _C = DummyConstant.new("C")
+    _M = DummyConstant.new("M")
+    code = <<~"end;"
+      module M
+        def foo
+        end
+        alias bar foo
+      end
+      class C
+        include M
+        def baz
+        end
+        alias qux baz
+      end
+    end;
+
+    result = {
+      :methods => {
+        [_C, :baz, 8, 2, 9, 5] => 0,
+        [_M, :foo, 2, 2, 3, 5] => 0,
+      }
+    }
+    assert_coverage(code, { methods: true }, result)
+
+    result = {
+      :methods => {
+        [_C, :baz, 8, 2, 9, 5] => 12,
+        [_M, :foo, 2, 2, 3, 5] =>  3,
+      }
+    }
+    assert_coverage(code + <<~"end;", { methods: true }, result)
+      obj = C.new
+      1.times { obj.foo }
+      2.times { obj.bar }
+      4.times { obj.baz }
+      8.times { obj.qux }
+    end;
+  end
+
+  def test_method_coverage_for_singleton_class
+    _singleton_Foo = DummyConstant.new("#<Class:Foo>")
+    _Foo = DummyConstant.new("Foo")
+    code = <<~"end;"
+      class Foo
+        def foo
+        end
+        alias bar foo
+        def self.baz
+        end
+        class << self
+          alias qux baz
+        end
+      end
+
+      1.times { Foo.new.foo }
+      2.times { Foo.new.bar }
+      4.times { Foo.baz }
+      8.times { Foo.qux }
+    end;
+
+    result = {
+      :methods => {
+        [_singleton_Foo, :baz, 5, 2, 6, 5] => 12,
+        [_Foo, :foo, 2, 2, 3, 5] => 3,
+      }
+    }
+    assert_coverage(code, { methods: true }, result)
   end
 end

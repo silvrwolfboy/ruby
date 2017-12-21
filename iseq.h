@@ -51,7 +51,6 @@ iseq_mark_ary_create(int flip_cnt)
 #define ISEQ_COVERAGE_SET(iseq, cov)  RARRAY_ASET(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_COVERAGE, cov)
 #define ISEQ_LINE_COVERAGE(iseq)      RARRAY_AREF(ISEQ_COVERAGE(iseq), COVERAGE_INDEX_LINES)
 #define ISEQ_BRANCH_COVERAGE(iseq)    RARRAY_AREF(ISEQ_COVERAGE(iseq), COVERAGE_INDEX_BRANCHES)
-#define ISEQ_METHOD_COVERAGE(iseq)    RARRAY_AREF(ISEQ_COVERAGE(iseq), COVERAGE_INDEX_METHODS)
 
 #define ISEQ_FLIP_CNT(iseq) FIX2INT(RARRAY_AREF(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_FLIP_CNT))
 
@@ -115,7 +114,6 @@ struct iseq_compile_data {
     struct iseq_compile_data_storage *storage_head;
     struct iseq_compile_data_storage *storage_current;
     int last_line;
-    int last_coverable_line;
     int label_no;
     int node_level;
     unsigned int ci_index;
@@ -191,6 +189,7 @@ VALUE rb_iseq_label(const rb_iseq_t *iseq);
 VALUE rb_iseq_base_label(const rb_iseq_t *iseq);
 VALUE rb_iseq_first_lineno(const rb_iseq_t *iseq);
 VALUE rb_iseq_method_name(const rb_iseq_t *iseq);
+void rb_iseq_code_range(const rb_iseq_t *iseq, int *first_lineno, int *first_column, int *last_lineno, int *last_column);
 
 /* proc.c */
 const rb_iseq_t *rb_method_iseq(VALUE body);
