@@ -844,6 +844,7 @@ VALUE rb_mGC;
 int ruby_disable_gc = 0;
 
 void rb_iseq_mark(const rb_iseq_t *iseq);
+void rb_iseq_update_references(const rb_iseq_t *iseq);
 void rb_iseq_free(const rb_iseq_t *iseq);
 
 void rb_gcdebug_print_obj_condition(VALUE obj);
@@ -4605,6 +4606,12 @@ gc_mark(rb_objspace_t *objspace, VALUE obj)
 }
 
 void
+rb_gc_mark_no_pin(VALUE ptr)
+{
+    gc_mark(&rb_objspace, ptr);
+}
+
+void
 rb_gc_mark(VALUE ptr)
 {
     gc_mark_and_pin(&rb_objspace, ptr);
@@ -7261,9 +7268,14 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
 	    gc_ref_update_method_entry(objspace, &RANY(obj)->as.imemo.ment);
 	    break;
 	case imemo_iseq:
+	    rb_iseq_update_references((rb_iseq_t *)obj);
+	    break;
+	case imemo_alloc:
+	case imemo_ast:
+	case imemo_parser_strterm:
 	    break;
 	default:
-	    rb_bug("not reachable");
+	    rb_bug("not reachable %d", imemo_type(obj));
 	    break;
     }
 }
@@ -7276,6 +7288,16 @@ check_id_table_move(ID id, VALUE value, void *data)
     }
 
     return ID_TABLE_CONTINUE;
+}
+
+VALUE
+rb_gc_new_location(VALUE value)
+{
+    if(BUILTIN_TYPE(value) == T_MOVED) {
+	return (VALUE)RMOVED(value)->destination;
+    } else {
+	return value;
+    }
 }
 
 static enum rb_id_table_iterator_result

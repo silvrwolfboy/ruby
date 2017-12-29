@@ -103,6 +103,17 @@ rb_iseq_free(const rb_iseq_t *iseq)
 }
 
 void
+rb_iseq_update_references(const rb_iseq_t *iseq)
+{
+    if (iseq->body) {
+	struct rb_iseq_constant_body *body = iseq->body;
+	body->location.label = rb_gc_new_location(body->location.label);
+	body->location.base_label = rb_gc_new_location(body->location.base_label);
+	body->location.pathobj = rb_gc_new_location(body->location.pathobj);
+    }
+}
+
+void
 rb_iseq_mark(const rb_iseq_t *iseq)
 {
     RUBY_MARK_ENTER("iseq");
@@ -114,9 +125,9 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	    rb_gc_mark(body->mark_ary);
 	    rb_gc_mark_values(RARRAY_LEN(body->mark_ary), RARRAY_CONST_PTR(body->mark_ary));
 	}
-	rb_gc_mark(body->location.label);
-	rb_gc_mark(body->location.base_label);
-	rb_gc_mark(body->location.pathobj);
+	rb_gc_mark_no_pin(body->location.label);
+	rb_gc_mark_no_pin(body->location.base_label);
+	rb_gc_mark_no_pin(body->location.pathobj);
 	RUBY_MARK_UNLESS_NULL(body->local_iseq);
 	RUBY_MARK_UNLESS_NULL((VALUE)body->parent_iseq);
     }
