@@ -110,6 +110,12 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 	body->location.label = rb_gc_new_location(body->location.label);
 	body->location.base_label = rb_gc_new_location(body->location.base_label);
 	body->location.pathobj = rb_gc_new_location(body->location.pathobj);
+	if (body->local_iseq) {
+	    body->local_iseq = rb_gc_new_location(body->local_iseq);
+	}
+	if (body->parent_iseq) {
+	    body->parent_iseq = rb_gc_new_location((VALUE)body->parent_iseq);
+	}
     }
 }
 
@@ -128,8 +134,8 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	rb_gc_mark_no_pin(body->location.label);
 	rb_gc_mark_no_pin(body->location.base_label);
 	rb_gc_mark_no_pin(body->location.pathobj);
-	RUBY_MARK_UNLESS_NULL(body->local_iseq);
-	RUBY_MARK_UNLESS_NULL((VALUE)body->parent_iseq);
+	RUBY_MARK_NO_PIN_UNLESS_NULL(body->local_iseq);
+	RUBY_MARK_NO_PIN_UNLESS_NULL((VALUE)body->parent_iseq);
     }
 
     if (FL_TEST(iseq, ISEQ_NOT_LOADED_YET)) {
