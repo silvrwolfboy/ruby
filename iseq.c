@@ -107,6 +107,11 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 {
     if (iseq->body) {
 	struct rb_iseq_constant_body *body = iseq->body;
+
+	if (RTEST(body->mark_ary)) {
+	    body->mark_ary = rb_gc_new_location(body->mark_ary);
+	}
+
 	body->location.label = rb_gc_new_location(body->location.label);
 	body->location.base_label = rb_gc_new_location(body->location.base_label);
 	body->location.pathobj = rb_gc_new_location(body->location.pathobj);
@@ -128,7 +133,7 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	const struct rb_iseq_constant_body *body = iseq->body;
 
 	if (RTEST(body->mark_ary)) {
-	    rb_gc_mark(body->mark_ary);
+	    rb_gc_mark_no_pin(body->mark_ary);
 	    rb_gc_mark_values(RARRAY_LEN(body->mark_ary), RARRAY_CONST_PTR(body->mark_ary));
 	}
 	rb_gc_mark_no_pin(body->location.label);
