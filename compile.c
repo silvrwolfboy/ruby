@@ -1183,6 +1183,19 @@ iseq_setup(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
     return COMPILE_OK;
 }
 
+static void
+init_type_instr(rb_iseq_t *iseq)
+{
+    size_t i, sz = iseq->body->local_table_size;
+
+    iseq->body->return_class = Qundef;
+    iseq->body->local_class_table = (VALUE *)ALLOC_N(VALUE, sz);
+    
+    for (i = 0; i < sz; i++) {
+	iseq->body->local_class_table[i] = Qundef;
+    }
+}
+
 static int
 iseq_set_exception_local_table(rb_iseq_t *iseq)
 {
@@ -1196,6 +1209,7 @@ iseq_set_exception_local_table(rb_iseq_t *iseq)
     iseq->body->local_table_size = 1;
     ids[0] = id_dollar_bang;
     iseq->body->local_table = ids;
+    init_type_instr(iseq);
     return COMPILE_OK;
 }
 
@@ -1501,6 +1515,7 @@ iseq_set_local_table(rb_iseq_t *iseq, const ID *tbl)
 	iseq->body->local_table = ids;
     }
     iseq->body->local_table_size = size;
+    init_type_instr(iseq);
 
     debugs("iseq_set_local_table: %u\n", iseq->body->local_table_size);
     return COMPILE_OK;
@@ -6935,6 +6950,7 @@ rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc, VALUE locals, VALUE params,
     len = RARRAY_LENINT(locals);
     iseq->body->local_table_size = len;
     iseq->body->local_table = tbl = len > 0 ? (ID *)ALLOC_N(ID, iseq->body->local_table_size) : NULL;
+    init_type_instr(iseq);
 
     for (i = 0; i < len; i++) {
 	VALUE lv = RARRAY_AREF(locals, i);

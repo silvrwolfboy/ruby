@@ -76,6 +76,7 @@ rb_iseq_free(const rb_iseq_t *iseq)
 	    ruby_xfree((void *)iseq->body->iseq_encoded);
 	    ruby_xfree((void *)iseq->body->line_info_table);
 	    ruby_xfree((void *)iseq->body->local_table);
+	    ruby_xfree((void *)iseq->body->local_class_table);
 	    ruby_xfree((void *)iseq->body->is_entries);
 
 	    if (iseq->body->ci_entries) {
@@ -110,6 +111,7 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     RUBY_GC_INFO("%s @ %s\n", RSTRING_PTR(iseq->body->location.label), RSTRING_PTR(iseq->body->location.path));
 
     if (iseq->body) {
+	size_t i;
 	const struct rb_iseq_constant_body *body = iseq->body;
 
 	RUBY_MARK_UNLESS_NULL(body->mark_ary);
@@ -118,6 +120,10 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	rb_gc_mark(body->location.path);
 	RUBY_MARK_UNLESS_NULL(body->location.absolute_path);
 	RUBY_MARK_UNLESS_NULL((VALUE)body->parent_iseq);
+	
+	for (i = 0; i < iseq->body->local_table_size; i++) {
+	    RUBY_MARK_UNLESS_NULL(iseq->body->local_class_table[i]);
+	}
     }
 
     if (FL_TEST(iseq, ISEQ_NOT_LOADED_YET)) {
@@ -162,6 +168,7 @@ iseq_memsize(const rb_iseq_t *iseq)
 	size += body->iseq_size * sizeof(VALUE);
 	size += body->line_info_size * sizeof(struct iseq_line_info_entry);
 	size += body->local_table_size * sizeof(ID);
+	size += body->local_table_size * sizeof(VALUE);
 	if (body->catch_table) {
 	    size += iseq_catch_table_bytes(body->catch_table->size);
 	}
