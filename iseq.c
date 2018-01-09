@@ -2415,6 +2415,39 @@ iseqw_s_load_from_binary_extra_data(VALUE self, VALUE str)
     return  iseq_ibf_load_extra_data(str);
 }
 
+static VALUE
+iseqw_param_classes(VALUE self)
+{
+    const rb_iseq_t *iseq = iseqw_check(self);
+    VALUE ary = rb_ary_new();
+    size_t i;
+
+    for (i = 0; i < iseq->body->param.size; i++) {
+	VALUE clss = iseq->body->local_class_table[i];
+
+	if (clss == Qundef) {
+	    clss = Qnil;
+	}
+
+	rb_ary_push(ary, clss);
+    }
+
+    return ary;
+}
+
+static VALUE
+iseqw_return_class(VALUE self)
+{
+    const rb_iseq_t *iseq = iseqw_check(self);
+    VALUE clss = iseq->body->return_class;
+
+    if (clss == Qundef) {
+	clss = Qnil;
+    }
+
+    return clss;
+}
+
 /*
  *  Document-class: RubyVM::InstructionSequence
  *
@@ -2458,6 +2491,9 @@ Init_ISeq(void)
     rb_define_method(rb_cISeq, "label", iseqw_label, 0);
     rb_define_method(rb_cISeq, "base_label", iseqw_base_label, 0);
     rb_define_method(rb_cISeq, "first_lineno", iseqw_first_lineno, 0);
+
+    rb_define_method(rb_cISeq, "param_classes", iseqw_param_classes, 0);
+    rb_define_method(rb_cISeq, "return_class", iseqw_return_class, 0);
 
 #if 0
     /* Now, it is experimental. No discussions, no tests. */

@@ -361,6 +361,8 @@ struct rb_iseq_constant_body {
     const struct iseq_line_info_entry *line_info_table;
 
     const ID *local_table;		/* must free */
+
+    /* type instrumentation: */
     VALUE *local_class_table;		/* must free */
     VALUE return_class;
 

@@ -2847,3 +2847,55 @@ vm_defined(rb_thread_t *th, rb_control_frame_t *reg_cfp, rb_num_t op_type, VALUE
 	return Qnil;
     }
 }
+
+static VALUE
+class_lca(VALUE a, VALUE b)
+{
+    VALUE k;
+
+    for (k = b; k; k = RCLASS_SUPER(k)) {
+	if (k == a) {
+	    return k;
+	}
+    }
+
+    return class_lca(RCLASS_SUPER(a), b);
+}
+
+static void
+instr_iseq_entry(rb_iseq_t *iseq, const VALUE *ep)
+{
+    size_t local_size = iseq->body->local_table_size + VM_ENV_DATA_SIZE;
+    size_t arg_size = iseq->body->param.size;
+    size_t local_idx;
+
+    for (local_idx = 0; local_idx < arg_size; local_idx++) {
+	VALUE value = ep[1 + local_idx - local_size];
+	VALUE *slot = &iseq->body->local_class_table[local_idx];
+	VALUE klass;
+
+	if (*slot == Qundef) {
+	    klass = CLASS_OF(value);
+	} else {
+	    klass = class_lca(*slot, CLASS_OF(value));
+	}
+
+	*slot = klass;
+    }
+ //RB_OBJ_WRITE(iseq->body->self, slot, klass);
+}
+
+static void
+instr_iseq_exit(rb_iseq_t *iseq, VALUE retn)
+{
+    VALUE klass;
+    VALUE *slot = &iseq->body->return_class;
+
+    if (*slot == Qundef) {
+	klass = CLASS_OF(retn);
+    } else {
+	klass = class_lca(*slot, CLASS_OF(retn));
+    }
+
+    *slot = klass;
+}

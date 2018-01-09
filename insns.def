@@ -810,6 +810,10 @@ trace
 {
     rb_event_flag_t flag = (rb_event_flag_t)nf;
 
+    if (flag == RUBY_EVENT_CALL || flag == RUBY_EVENT_B_CALL) {
+	instr_iseq_entry((rb_iseq_t *)GET_CFP()->iseq, GET_EP());
+    }
+
     if (RUBY_DTRACE_METHOD_ENTRY_ENABLED() ||
 	RUBY_DTRACE_METHOD_RETURN_ENABLED() ||
 	RUBY_DTRACE_CMETHOD_ENTRY_ENABLED() ||
@@ -1120,6 +1124,8 @@ leave
 (VALUE val)
 (VALUE val)
 {
+    instr_iseq_exit((rb_iseq_t *)GET_CFP()->iseq, val);
+
     if (OPT_CHECKED_RUN) {
 	const VALUE *const bp = vm_base_ptr(reg_cfp);
 	if (reg_cfp->sp != bp) {
