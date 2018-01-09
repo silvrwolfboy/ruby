@@ -118,10 +118,10 @@ rb_vm_insn_addr2insn2(const void *addr) /* cold path */
 }
 #endif
 
-typedef void iseq_value_itr_t(void *ctx, VALUE obj);
+typedef VALUE iseq_value_itr_t(void *ctx, VALUE obj);
 
 static int
-iseq_extract_values(const VALUE *code, size_t pos, const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
+iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data)
 {
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
     VALUE insn = rb_vm_insn_addr2insn2((void *)code[pos]);
@@ -137,9 +137,12 @@ iseq_extract_values(const VALUE *code, size_t pos, const rb_iseq_t *iseq, iseq_v
 	VALUE op = code[pos + op_no + 1];
 	switch (type) {
 	    case TS_VALUE:
+		if (SPECIAL_CONST_P(op)) {
+		} else {
+		    code[pos + op_no + 1] = func(data, op);
+		}
+		break;
 	    case TS_CDHASH:
-	    case TS_ISEQ:
-		func(data, op);
 		break;
 	    default:
 		break;
@@ -160,14 +163,14 @@ rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
     code = iseq->body->iseq_encoded;
 
     for (n = 0; n < size;) {
-	n += iseq_extract_values(code, n, iseq, func, data);
+	n += iseq_extract_values(code, n, func, data);
     }
 }
 
-static void
+static VALUE
 each_insn_value(void *ctx, VALUE obj)
 {
-    rb_gc_mark(obj);
+    return rb_gc_new_location(obj);
 }
 
 void
@@ -178,6 +181,7 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 
 	if (RTEST(body->mark_ary)) {
 	    body->mark_ary = rb_gc_new_location(body->mark_ary);
+	    rb_iseq_each_value(iseq, each_insn_value, NULL);
 	}
 
 	body->location.label = rb_gc_new_location(body->location.label);
@@ -199,9 +203,6 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 
     if (iseq->body) {
 	const struct rb_iseq_constant_body *body = iseq->body;
-	if (RTEST(body->mark_ary)) {
-	    rb_iseq_each_value(iseq, each_insn_value, iseq);
-	}
 
 	if (RTEST(body->mark_ary)) {
 	    rb_gc_mark_no_pin(body->mark_ary);
