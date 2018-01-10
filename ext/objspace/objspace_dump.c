@@ -495,6 +495,41 @@ objspace_dump_all(int argc, VALUE *argv, VALUE os)
     return dump_result(&dc, output);
 }
 
+struct ary_info {
+    long ary_len;
+    size_t ary_capa;
+};
+
+static int
+imemo_i(void *vstart, void *vend, size_t stride, void *data)
+{
+    struct ary_info *ai = (struct ary_info *)data;
+    VALUE v = (VALUE)vstart;
+    for (; v != (VALUE)vend; v += stride) {
+	if (RBASIC(v)->flags && BUILTIN_TYPE(v) == T_IMEMO) {
+	    if (imemo_type(v) == imemo_iseq) {
+		rb_iseq_t *iseq = (rb_iseq_t *)v;
+		if (iseq->body) {
+		    const struct rb_iseq_constant_body *body = iseq->body;
+		    if (RTEST(body->mark_ary)) {
+			ai->ary_len += RARRAY_LEN(body->mark_ary);
+			ai->ary_capa += rb_ary_memsize(body->mark_ary);
+		    }
+		}
+	    }
+	}
+    }
+    return 0;
+}
+
+static VALUE
+objspace_read_markary(VALUE module)
+{
+    struct ary_info ai = { 0, };
+    rb_objspace_each_objects(imemo_i, &ai);
+    return rb_ary_new3(2, LONG2NUM(ai.ary_len * sizeof(VALUE)), LONG2NUM(ai.ary_capa));
+}
+
 void
 Init_objspace_dump(VALUE rb_mObjSpace)
 {
@@ -504,6 +539,7 @@ Init_objspace_dump(VALUE rb_mObjSpace)
 
     rb_define_module_function(rb_mObjSpace, "dump", objspace_dump, -1);
     rb_define_module_function(rb_mObjSpace, "dump_all", objspace_dump_all, -1);
+    rb_define_module_function(rb_mObjSpace, "mark_ary_size_v_capa", objspace_read_markary, 0);
 
     sym_output = ID2SYM(rb_intern("output"));
     sym_stdout = ID2SYM(rb_intern("stdout"));
