@@ -124,6 +124,8 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	for (i = 0; i < iseq->body->local_table_size; i++) {
 	    RUBY_MARK_UNLESS_NULL(iseq->body->local_class_table[i]);
 	}
+
+	RUBY_MARK_UNLESS_NULL(iseq->body->return_class);
     }
 
     if (FL_TEST(iseq, ISEQ_NOT_LOADED_YET)) {
