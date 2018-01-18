@@ -166,7 +166,7 @@ iseq_extract_values(const VALUE *code, size_t pos, iseq_value_itr_t * func, void
     return len;
 }
 
-void
+static void
 rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
 {
     unsigned int size;
@@ -184,7 +184,7 @@ rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
 static void
 each_insn_value(void *ctx, VALUE obj)
 {
-    return rb_gc_mark(obj);
+    rb_gc_mark(obj);
 }
 
 void
