@@ -4792,6 +4792,7 @@ compile_case(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const orig_nod
     }
 
     if (only_special_literals) {
+	iseq_add_mark_object_compile_time(iseq, literals);
 
 	ADD_INSN(ret, nd_line(orig_node), dup);
 	ADD_INSN2(ret, nd_line(orig_node), opt_case_dispatch, literals, elselabel);
