@@ -94,6 +94,7 @@ ISEQ_ORIGINAL_ISEQ_ALLOC(const rb_iseq_t *iseq, long size)
 
 #define ISEQ_NOT_LOADED_YET   IMEMO_FL_USER1
 #define ISEQ_USE_COMPILE_DATA IMEMO_FL_USER2
+#define ISEQ_TRANSLATED       IMEMO_FL_USER3
 
 struct iseq_compile_data {
     /* GC is needed */

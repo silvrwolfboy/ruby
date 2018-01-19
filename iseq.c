@@ -131,16 +131,19 @@ rb_vm_insn_addr2insn2(const void *addr)
 }
 #endif
 
+static int
+rb_vm_insn_null_translator(const void *addr)
+{
+    return (int)addr;
+}
+
 typedef void iseq_value_itr_t(void *ctx, VALUE obj);
+typedef int rb_vm_insns_translator_t(const void *addr);
 
 static int
-iseq_extract_values(const VALUE *code, size_t pos, iseq_value_itr_t * func, void *data)
+iseq_extract_values(const VALUE *code, size_t pos, iseq_value_itr_t * func, void *data, rb_vm_insns_translator_t * translator)
 {
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
-    VALUE insn = rb_vm_insn_addr2insn2((void *)code[pos]);
-#else
-    VALUE insn = code[pos];
-#endif
+    VALUE insn = translator((void *)code[pos]);
     int len = insn_len(insn);
     int op_no;
     const char *types = insn_op_types(insn);
@@ -172,12 +175,23 @@ rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
     unsigned int size;
     const VALUE *code;
     size_t n;
+    rb_vm_insns_translator_t * translator;
 
     size = iseq->body->iseq_size;
     code = iseq->body->iseq_encoded;
 
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+    if (FL_TEST(iseq, ISEQ_TRANSLATED)) {
+	translator = rb_vm_insn_addr2insn2;
+    } else {
+	translator = rb_vm_insn_null_translator;
+    }
+#else
+    translator = rb_vm_insn_null_translator;
+#endif
+
     for (n = 0; n < size;) {
-	n += iseq_extract_values(code, n, func, data);
+	n += iseq_extract_values(code, n, func, data, translator);
     }
 }
 

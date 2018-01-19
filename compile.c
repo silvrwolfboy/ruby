@@ -740,6 +740,7 @@ rb_iseq_translate_threaded_code(rb_iseq_t *iseq)
 	encoded[i] = (VALUE)table[insn];
 	i += len;
     }
+    FL_SET(iseq, ISEQ_TRANSLATED);
 #endif
     return COMPILE_OK;
 }
