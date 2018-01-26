@@ -677,7 +677,7 @@ class TestRubyOptimization < Test::Unit::TestCase
         $SAFE = 1
         b.call
       end
-      assert_equal 0, foo{$SAFE}
+      assert_equal 1, foo{$SAFE}
     END
   end
 
@@ -689,7 +689,7 @@ class TestRubyOptimization < Test::Unit::TestCase
   end
 
   def test_clear_unreachable_keyword_args
-    assert_separately [], <<-END
+    assert_separately [], <<-END, timeout: 15
       script =  <<-EOS
         if true
         else

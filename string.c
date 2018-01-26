@@ -11,8 +11,9 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/re.h"
+#include "internal.h"
 #include "encindex.h"
 #include "probes.h"
 #include "gc.h"
@@ -24,6 +25,7 @@
 #define BEG(no) (regs->beg[(no)])
 #define END(no) (regs->end[(no)])
 
+#include <errno.h>
 #include <math.h>
 #include <ctype.h>
 
@@ -440,10 +442,23 @@ static inline const char *
 search_nonascii(const char *p, const char *e)
 {
     const uintptr_t *s, *t;
-#if SIZEOF_VOIDP == 8
-# define NONASCII_MASK 0x8080808080808080ULL
-#elif SIZEOF_VOIDP == 4
-# define NONASCII_MASK 0x80808080UL
+
+#if defined(__STDC_VERSION) && (__STDC_VERSION__ >= 199901L)
+# if SIZEOF_UINTPTR_T == 8
+#  define NONASCII_MASK UINT64_C(0x8080808080808080)
+# elif SIZEOF_UINTPTR_T == 4
+#  define NONASCII_MASK UINT32_C(0x80808080)
+# else
+#  error "don't know what to do."
+# endif
+#else
+# if SIZEOF_UINTPTR_T == 8
+#  define NONASCII_MASK ((uintptr_t)0x80808080UL << 32 | (uintptr_t)0x80808080UL)
+# elif SIZEOF_UINTPTR_T == 4
+#  define NONASCII_MASK 0x80808080UL /* or...? */
+# else
+#  error "don't know what to do."
+# endif
 #endif
 
     if (UNALIGNED_WORD_ACCESS || e - p >= SIZEOF_VOIDP) {
@@ -466,8 +481,15 @@ search_nonascii(const char *p, const char *e)
 	    }
 	}
 #endif
-	s = (const uintptr_t *)p;
-	t = (const uintptr_t *)(e - (SIZEOF_VOIDP-1));
+#ifdef HAVE_BUILTIN___BUILTIN_ASSUME_ALIGNED
+#define aligned_ptr(value) \
+        __builtin_assume_aligned((value), sizeof(uintptr_t))
+#else
+#define aligned_ptr(value) (uintptr_t *)(value)
+#endif
+	s = aligned_ptr(p);
+	t = aligned_ptr(e - (SIZEOF_VOIDP-1));
+#undef aligned_ptr
 	for (;s < t; s++) {
 	    if (*s & NONASCII_MASK) {
 #ifdef WORDS_BIGENDIAN
@@ -2538,6 +2560,7 @@ str_substr(VALUE str, long beg, long len, int empty)
 	str2 = str_new_shared(rb_obj_class(str2), str2);
 	RSTRING(str2)->as.heap.ptr += ofs;
 	RSTRING(str2)->as.heap.len = len;
+	ENC_CODERANGE_CLEAR(str2);
     }
     else {
 	if (!len && !empty) return Qnil;
@@ -6263,7 +6286,6 @@ str_undump(VALUE str)
 	    }
 	    else {
 		const char *encname;
-		char *buf;
 		int encidx;
 		ptrdiff_t size;
 
@@ -6280,22 +6302,14 @@ str_undump(VALUE str)
 		s = memchr(s, '"', s_end-s);
 		size = s - encname;
 		if (!s) goto invalid_format;
-		if (size > 100) {
-		    rb_raise(rb_eRuntimeError, "dumped string has unknown encoding name");
-		}
-		buf = ALLOC_N(char, size+1);
-		memcpy(buf, encname, size);
-		buf[size] = '\0';
-		encidx = rb_enc_find_index(buf);
-		xfree(buf);
+		if (s_end - s != 2) goto invalid_format;
+		if (s[0] != '"' || s[1] != ')') goto invalid_format;
+
+		encidx = rb_enc_find_index2(encname, (long)size);
 		if (encidx < 0) {
 		    rb_raise(rb_eRuntimeError, "dumped string has unknown encoding name");
 		}
 		rb_enc_associate_index(undumped, encidx);
-
-		if (s_end - s != 2 ||
-			s[0] != '"' ||
-			s[1] != ')') goto invalid_format;
 	    }
 	    break;
 	}
@@ -6378,7 +6392,7 @@ typedef struct mapping_buffer {
     size_t capa;
     size_t used;
     struct mapping_buffer *next;
-    OnigUChar space[1];
+    OnigUChar space[FLEX_ARY_LEN];
 } mapping_buffer;
 
 static VALUE
@@ -6617,7 +6631,7 @@ rb_str_downcase_bang(int argc, VALUE *argv, VALUE str)
  *    This option cannot be combined with any other option.
  *  :turkic ::
  *    Full Unicode case mapping, adapted for Turkic languages
- *    (Turkish, Aserbaijani,...). This means that upper case I is mapped to
+ *    (Turkish, Azerbaijani,...). This means that upper case I is mapped to
  *    lower case dotless i, and so on.
  *  :lithuanian ::
  *    Currently, just full Unicode case mapping. In the future, full Unicode
@@ -6627,7 +6641,7 @@ rb_str_downcase_bang(int argc, VALUE *argv, VALUE str)
  *    Only available on +downcase+ and +downcase!+. Unicode case <b>folding</b>,
  *    which is more far-reaching than Unicode case mapping.
  *    This option currently cannot be combined with any other option
- *    (i.e. there is currenty no variant for turkic languages).
+ *    (i.e. there is currently no variant for turkic languages).
  *
  *  Please note that several assumptions that are valid for ASCII-only case
  *  conversions do not hold for more general case conversions. For example,
@@ -8021,7 +8035,13 @@ rb_str_enumerate_lines(int argc, VALUE *argv, VALUE str, VALUE ary)
 
     if (subptr != pend) {
 	if (chomp) {
-	    pend = chomp_newline(subptr, pend, enc);
+	    if (rsnewline) {
+		pend = chomp_newline(subptr, pend, enc);
+	    }
+	    else if (pend - subptr >= rslen &&
+		     memcmp(pend - rslen, rsptr, rslen) == 0) {
+		pend -= rslen;
+	    }
 	}
 	line = rb_str_subseq(str, subptr - ptr, pend - subptr);
 	ENUM_ELEM(ary, line);
@@ -10465,7 +10485,7 @@ rb_sym_proc_call(ID mid, int argc, const VALUE *argv, VALUE passed_proc)
  * call-seq:
  *   sym.to_proc
  *
- * Returns a _Proc_ object which respond to the given method by _sym_.
+ * Returns a _Proc_ object which responds to the given method by _sym_.
  *
  *   (1..3).collect(&:to_s)  #=> ["1", "2", "3"]
  */

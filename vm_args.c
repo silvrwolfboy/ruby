@@ -392,6 +392,8 @@ args_setup_kw_parameters_lookup(const ID key, VALUE *ptr, const VALUE *const pas
     return FALSE;
 }
 
+#define KW_SPECIFIED_BITS_MAX (32-1) /* TODO: 32 -> Fixnum's max bits */
+
 static void
 args_setup_kw_parameters(rb_execution_context_t *const ec, const rb_iseq_t *const iseq,
 			 VALUE *const passed_values, const int passed_keyword_len, const VALUE *const passed_keywords,
@@ -427,7 +429,7 @@ args_setup_kw_parameters(rb_execution_context_t *const ec, const rb_iseq_t *cons
 	    if (default_values[di] == Qundef) {
 		locals[i] = Qnil;
 
-		if (LIKELY(i < 32)) { /* TODO: 32 -> Fixnum's max bits */
+		if (LIKELY(i < KW_SPECIFIED_BITS_MAX)) {
 		    unspecified_bits |= 0x01 << di;
 		}
 		else {
@@ -436,7 +438,7 @@ args_setup_kw_parameters(rb_execution_context_t *const ec, const rb_iseq_t *cons
 			int j;
 			unspecified_bits_value = rb_hash_new();
 
-			for (j=0; j<32; j++) {
+			for (j=0; j<KW_SPECIFIED_BITS_MAX; j++) {
 			    if (unspecified_bits & (0x01 << j)) {
 				rb_hash_aset(unspecified_bits_value, INT2FIX(j), Qtrue);
 			    }
@@ -790,7 +792,16 @@ vm_to_proc(VALUE proc)
 {
     if (UNLIKELY(!rb_obj_is_proc(proc))) {
 	VALUE b;
-	b = rb_check_convert_type_with_id(proc, T_DATA, "Proc", idTo_proc);
+	const rb_callable_method_entry_t *me =
+	    rb_callable_method_entry_with_refinements(CLASS_OF(proc), idTo_proc, NULL);
+
+	if (me) {
+	    b = vm_call0(GET_EC(), proc, idTo_proc, 0, NULL, me);
+	}
+	else {
+	    /* NOTE: calling method_missing */
+	    b = rb_check_convert_type_with_id(proc, T_DATA, "Proc", idTo_proc);
+	}
 
 	if (NIL_P(b) || !rb_obj_is_proc(b)) {
 	    rb_raise(rb_eTypeError,
@@ -835,12 +846,11 @@ vm_caller_setup_arg_block(const rb_execution_context_t *ec, rb_control_frame_t *
     if (ci->flag & VM_CALL_ARGS_BLOCKARG) {
 	VALUE block_code = *(--reg_cfp->sp);
 
-	if ((ci->flag & VM_CALL_ARGS_BLOCKARG_BLOCKPARAM) &&
-	    !VM_ENV_FLAGS(VM_CF_LEP(reg_cfp), VM_FRAME_FLAG_MODIFIED_BLOCK_PARAM)) {
-	    calling->block_handler = VM_CF_BLOCK_HANDLER(reg_cfp);
-	}
-	else if (NIL_P(block_code)) {
+	if (NIL_P(block_code)) {
 	    calling->block_handler = VM_BLOCK_HANDLER_NONE;
+	}
+	else if (block_code == rb_block_param_proxy) {
+	    calling->block_handler = VM_CF_BLOCK_HANDLER(reg_cfp);
 	}
 	else if (SYMBOL_P(block_code) && rb_method_basic_definition_p(rb_cSymbol, idTo_proc)) {
 	    const rb_cref_t *cref = vm_env_cref(reg_cfp->ep);

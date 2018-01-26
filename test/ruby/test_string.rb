@@ -1119,6 +1119,10 @@ CODE
     res = []
     S("\r\n").each_line(chomp: true) {|x| res << x}
     assert_equal([S("")], res)
+
+    res = []
+    S("a\n b\n").each_line(" ", chomp: true) {|x| res << x}
+    assert_equal([S("a\n"), S("b\n")], res)
   end
 
   def test_lines
@@ -3082,6 +3086,12 @@ CODE
     assert_equal("a", "a".chr)
     assert_equal("\u3042", "\u3042\u3043".chr)
     assert_equal('', ''.chr)
+  end
+
+  def test_substr_code_range
+    data = "\xff" + "a"*200
+    assert_not_predicate(data, :valid_encoding?)
+    assert_predicate(data[100..-1], :valid_encoding?)
   end
 end
 

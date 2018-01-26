@@ -41,9 +41,6 @@
 # define VALGRIND_MAKE_MEM_UNDEFINED(p, n) 0
 #endif
 
-extern ID ruby_static_id_signo;
-#define id_signo ruby_static_id_signo
-
 #ifdef NEED_RUBY_ATOMIC_OPS
 rb_atomic_t
 ruby_atomic_exchange(rb_atomic_t *ptr, rb_atomic_t val)
@@ -888,6 +885,9 @@ NOINLINE(static void check_reserved_signal_(const char *name, size_t name_len));
 #define check_reserved_signal(name) check_reserved_signal_(name, sizeof(name)-1)
 
 #ifdef SIGBUS
+
+NORETURN(static ruby_sigaction_t sigbus);
+
 static RETSIGTYPE
 sigbus(int sig SIGINFO_ARG)
 {
@@ -905,6 +905,8 @@ sigbus(int sig SIGINFO_ARG)
 }
 #endif
 
+NORETURN(static void ruby_abort(void));
+
 static void
 ruby_abort(void)
 {
@@ -920,6 +922,9 @@ ruby_abort(void)
 }
 
 #ifdef SIGSEGV
+
+NORETURN(static ruby_sigaction_t sigsegv);
+
 static RETSIGTYPE
 sigsegv(int sig SIGINFO_ARG)
 {
@@ -930,6 +935,9 @@ sigsegv(int sig SIGINFO_ARG)
 #endif
 
 #ifdef SIGILL
+
+NORETURN(static ruby_sigaction_t sigill);
+
 static RETSIGTYPE
 sigill(int sig SIGINFO_ARG)
 {

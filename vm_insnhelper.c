@@ -46,6 +46,8 @@ ec_stack_overflow(rb_execution_context_t *ec, int setup)
     EC_JUMP_TAG(ec, TAG_RAISE);
 }
 
+NORETURN(static void vm_stackoverflow(void));
+
 static void
 vm_stackoverflow(void)
 {
@@ -938,14 +940,6 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 	    if (LIKELY(index < ROBJECT_NUMIV(obj))) {
 		val = ROBJECT_IVPTR(obj)[index];
 	    }
-	  undef_check:
-	    if (UNLIKELY(val == Qundef)) {
-		if (!is_attr && RTEST(ruby_verbose))
-		    rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
-		val = Qnil;
-	    }
-	    RB_DEBUG_COUNTER_INC(ivar_get_ic_hit);
-	    return val;
 	}
 	else {
 	    st_data_t index;
@@ -965,8 +959,14 @@ vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
 		    }
 		}
 	    }
-	    goto undef_check;
 	}
+	if (UNLIKELY(val == Qundef)) {
+	    if (!is_attr && RTEST(ruby_verbose))
+		rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
+	    val = Qnil;
+	}
+	RB_DEBUG_COUNTER_INC(ivar_get_ic_hit);
+	return val;
     }
     else {
 	RB_DEBUG_COUNTER_INC(ivar_get_ic_miss_noobject);
@@ -1862,7 +1862,7 @@ vm_cfp_consistent_p(rb_execution_context_t *ec, const rb_control_frame_t *reg_cf
 
 #define CHECK_CFP_CONSISTENCY(func) \
     (LIKELY(vm_cfp_consistent_p(ec, reg_cfp)) ? (void)0 : \
-     rb_bug(func ": cfp consistency error (%p, %p)", reg_cfp, ec->cfp+1))
+     rb_bug(func ": cfp consistency error (%p, %p)", (void *)reg_cfp, (void *)(ec->cfp+1)))
 
 static inline
 const rb_method_cfunc_t *
@@ -2047,22 +2047,45 @@ vm_call_opt_send(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
     return vm_call_method(ec, reg_cfp, calling, ci, cc);
 }
 
+static inline VALUE vm_invoke_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, VALUE block_handler);
+
+NOINLINE(static VALUE
+	 vm_invoke_block_opt_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+				  struct rb_calling_info *calling, const struct rb_call_info *ci, VALUE block_handler));
+
 static VALUE
-vm_call_opt_call(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc)
+vm_invoke_block_opt_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+			 struct rb_calling_info *calling, const struct rb_call_info *ci, VALUE block_handler)
 {
-    rb_proc_t *proc;
-    int argc;
-    VALUE *argv;
+    int argc = calling->argc;
 
-    CALLER_SETUP_ARG(cfp, calling, ci);
+    /* remove self */
+    if (argc > 0) MEMMOVE(&TOPN(argc), &TOPN(argc-1), VALUE, argc);
+    DEC_SP(1);
 
-    argc = calling->argc;
-    argv = ALLOCA_N(VALUE, argc);
-    GetProcPtr(calling->recv, proc);
-    MEMCPY(argv, cfp->sp - argc, VALUE, argc);
-    cfp->sp -= argc + 1;
+    return vm_invoke_block(ec, reg_cfp, calling, ci, block_handler);
+}
 
-    return rb_vm_invoke_proc(ec, proc, argc, argv, calling->block_handler);
+static VALUE
+vm_call_opt_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc)
+{
+    VALUE procval = calling->recv;
+    return vm_invoke_block_opt_call(ec, reg_cfp, calling, ci, VM_BH_FROM_PROC(procval));
+}
+
+static VALUE
+vm_call_opt_block_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc)
+{
+    VALUE block_handler = VM_ENV_BLOCK_HANDLER(reg_cfp->ep);
+
+    if (BASIC_OP_UNREDEFINED_P(BOP_CALL, PROC_REDEFINED_OP_FLAG)) {
+	return vm_invoke_block_opt_call(ec, reg_cfp, calling, ci, block_handler);
+    }
+    else {
+	calling->recv = rb_vm_bh_to_procval(ec, block_handler);
+	vm_search_method(ci, cc, calling->recv);
+	return vm_call_general(ec, reg_cfp, calling, ci, cc);
+    }
 }
 
 static VALUE
@@ -2267,6 +2290,9 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
 	  case OPTIMIZED_METHOD_TYPE_CALL:
 	    CI_SET_FASTPATH(cc, vm_call_opt_call, TRUE);
 	    return vm_call_opt_call(ec, cfp, calling, ci, cc);
+	  case OPTIMIZED_METHOD_TYPE_BLOCK_CALL:
+	    CI_SET_FASTPATH(cc, vm_call_opt_block_call, TRUE);
+	    return vm_call_opt_block_call(ec, cfp, calling, ci, cc);
 	  default:
 	    rb_bug("vm_call_method: unsupported optimized method type (%d)",
 		   cc->me->def->body.optimize_type);
@@ -2418,6 +2444,8 @@ vm_search_normal_superclass(VALUE klass)
     klass = RCLASS_ORIGIN(klass);
     return RCLASS_SUPER(klass);
 }
+
+NORETURN(static void vm_super_outside(void));
 
 static void
 vm_super_outside(void)
@@ -2654,7 +2682,7 @@ vm_invoke_symbol_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
     int argc;
     CALLER_SETUP_ARG(ec->cfp, calling, ci);
     argc = calling->argc;
-    val = vm_yield_with_symbol(ec, symbol, argc, STACK_ADDR_FROM_TOP(argc), VM_BLOCK_HANDLER_NONE);
+    val = vm_yield_with_symbol(ec, symbol, argc, STACK_ADDR_FROM_TOP(argc), calling->block_handler);
     POPN(argc);
     return val;
 }
@@ -2668,7 +2696,7 @@ vm_invoke_ifunc_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
     int argc;
     CALLER_SETUP_ARG(ec->cfp, calling, ci);
     argc = calling->argc;
-    val = vm_yield_with_cfunc(ec, captured, captured->self, argc, STACK_ADDR_FROM_TOP(argc), VM_BLOCK_HANDLER_NONE);
+    val = vm_yield_with_cfunc(ec, captured, captured->self, argc, STACK_ADDR_FROM_TOP(argc), calling->block_handler);
     POPN(argc); /* TODO: should put before C/yield? */
     return val;
 }
@@ -2692,17 +2720,11 @@ vm_proc_to_block_handler(VALUE procval)
     return Qundef;
 }
 
-static VALUE
-vm_invoke_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, const struct rb_call_info *ci)
+static inline VALUE
+vm_invoke_block(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
+		struct rb_calling_info *calling, const struct rb_call_info *ci, VALUE block_handler)
 {
-    VALUE block_handler = VM_CF_BLOCK_HANDLER(reg_cfp);
-    VALUE type = GET_ISEQ()->body->local_iseq->body->type;
     int is_lambda = FALSE;
-
-    if ((type != ISEQ_TYPE_METHOD && type != ISEQ_TYPE_CLASS) ||
-	block_handler == VM_BLOCK_HANDLER_NONE) {
-	rb_vm_localjump_error("no block given (yield)", Qnil, 0);
-    }
 
   again:
     switch (vm_block_handler_type(block_handler)) {
@@ -2787,7 +2809,7 @@ check_respond_to_missing(VALUE obj, VALUE v)
 	return DEFINED_METHOD;
     }
     else {
-	return 0;
+	return DEFINED_NOT_DEFINED;
     }
 }
 
@@ -2795,7 +2817,7 @@ static VALUE
 vm_defined(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, rb_num_t op_type, VALUE obj, VALUE needstr, VALUE v)
 {
     VALUE klass;
-    enum defined_type expr_type = 0;
+    enum defined_type expr_type = DEFINED_NOT_DEFINED;
     enum defined_type type = (enum defined_type)op_type;
 
     switch (type) {
@@ -3004,13 +3026,15 @@ vm_check_keyword(lindex_t bits, lindex_t idx, const VALUE *ep)
     const VALUE kw_bits = *(ep - bits);
 
     if (FIXNUM_P(kw_bits)) {
-	int b = FIX2INT(kw_bits);
-	return (b & (0x01 << idx)) ? Qfalse : Qtrue;
+	unsigned int b = (unsigned int)FIX2ULONG(kw_bits);
+	if ((idx < KW_SPECIFIED_BITS_MAX) && (b & (0x01 << idx)))
+	    return Qfalse;
     }
     else {
 	VM_ASSERT(RB_TYPE_P(kw_bits, T_HASH));
-	return rb_hash_has_key(kw_bits, INT2FIX(idx));
+	if (rb_hash_has_key(kw_bits, INT2FIX(idx))) return Qfalse;
     }
+    return Qtrue;
 }
 
 static void
@@ -3186,16 +3210,15 @@ vm_opt_newarray_max(rb_num_t num, const VALUE *ptr)
 	}
 	else {
 	    struct cmp_opt_data cmp_opt = { 0, 0 };
-	    VALUE result = Qundef;
+	    VALUE result = *ptr;
 	    rb_num_t i = num - 1;
-	    result = ptr[i];
 	    while (i-- > 0) {
-		const VALUE v = ptr[i];
-		if (result == Qundef || OPTIMIZED_CMP(v, result, cmp_opt) > 0) {
+		const VALUE v = *++ptr;
+		if (OPTIMIZED_CMP(v, result, cmp_opt) > 0) {
 		    result = v;
 		}
 	    }
-	    return result == Qundef ? Qnil : result;
+	    return result;
 	}
     }
     else {
@@ -3213,16 +3236,15 @@ vm_opt_newarray_min(rb_num_t num, const VALUE *ptr)
 	}
 	else {
 	    struct cmp_opt_data cmp_opt = { 0, 0 };
-	    VALUE result = Qundef;
+	    VALUE result = *ptr;
 	    rb_num_t i = num - 1;
-	    result = ptr[i];
 	    while (i-- > 0) {
-		const VALUE v = ptr[i];
-		if (result == Qundef || OPTIMIZED_CMP(v, result, cmp_opt) < 0) {
+		const VALUE v = *++ptr;
+		if (OPTIMIZED_CMP(v, result, cmp_opt) < 0) {
 		    result = v;
 		}
 	    }
-	    return result == Qundef ? Qnil : result;
+	    return result;
 	}
     }
     else {

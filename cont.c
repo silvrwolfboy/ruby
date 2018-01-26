@@ -222,7 +222,7 @@ rb_ec_verify(const rb_execution_context_t *ec)
 static void
 fiber_status_set(const rb_fiber_t *fib, enum fiber_status s)
 {
-    if (0) fprintf(stderr, "fib: %p, status: %s -> %s\n", fib, fiber_status_name(fib->status), fiber_status_name(s));
+    if (0) fprintf(stderr, "fib: %p, status: %s -> %s\n", (void *)fib, fiber_status_name(fib->status), fiber_status_name(s));
     VM_ASSERT(!FIBER_TERMINATED_P(fib));
     VM_ASSERT(fib->status != s);
     fiber_verify(fib);
@@ -528,7 +528,7 @@ cont_save_thread(rb_context_t *cont, rb_thread_t *th)
     /* save thread context */
     *sec = *th->ec;
 
-    /* saved_thread->machine.stack_end should be NULL */
+    /* saved_ec->machine.stack_end should be NULL */
     /* because it may happen GC afterward */
     sec->machine.stack_end = NULL;
 
@@ -589,6 +589,10 @@ show_vm_pcs(const rb_control_frame_t *cfp,
 	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
     }
 }
+#endif
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wduplicate-decl-specifier"
 #endif
 static VALUE
 cont_capture(volatile int *volatile stat)
@@ -652,6 +656,9 @@ cont_capture(volatile int *volatile stat)
 	return contval;
     }
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 static inline void
 fiber_restore_thread(rb_thread_t *th, rb_fiber_t *fib)
@@ -696,7 +703,6 @@ cont_restore_thread(rb_context_t *cont)
 	/* other members of ec */
 
 	th->ec->cfp = sec->cfp;
-	th->ec->safe_level = sec->safe_level;
 	th->ec->raised_flag = sec->raised_flag;
 	th->ec->tag = sec->tag;
 	th->ec->protect_tag = sec->protect_tag;

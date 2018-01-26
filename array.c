@@ -11,9 +11,10 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/util.h"
 #include "ruby/st.h"
+#include "internal.h"
 #include "probes.h"
 #include "id.h"
 #include "debug_counter.h"
@@ -946,6 +947,7 @@ rb_ary_cat(VALUE ary, const VALUE *argv, long len)
 /*
  *  call-seq:
  *     ary.push(obj, ... )   -> ary
+ *     ary.append(obj, ... ) -> ary
  *
  *  Append --- Pushes the given object(s) on to the end of this array. This
  *  expression returns the array itself, so several appends
@@ -1168,6 +1170,7 @@ ary_ensure_room_for_unshift(VALUE ary, int argc)
 /*
  *  call-seq:
  *     ary.unshift(obj, ...)  -> ary
+ *     ary.prepend(obj, ...)  -> ary
  *
  *  Prepends objects to the front of +self+, moving other elements upwards.
  *  See also Array#shift for the opposite effect.
@@ -4953,7 +4956,7 @@ rb_ary_sample(int argc, VALUE *argv, VALUE ary)
 	long max_idx = 0;
 #undef RUBY_UNTYPED_DATA_WARNING
 #define RUBY_UNTYPED_DATA_WARNING 0
-	VALUE vmemo = Data_Wrap_Struct(0, 0, 0, st_free_table);
+	VALUE vmemo = Data_Wrap_Struct(0, 0, st_free_table, 0);
 	st_table *memo = st_init_numtable_with_size(n);
 	DATA_PTR(vmemo) = memo;
 	result = rb_ary_new_capa(n);
@@ -5009,7 +5012,7 @@ rb_ary_cycle_size(VALUE self, VALUE args, VALUE eobj)
 	n = RARRAY_AREF(args, 0);
     }
     if (RARRAY_LEN(self) == 0) return INT2FIX(0);
-    if (n == Qnil) return DBL2NUM(INFINITY);
+    if (n == Qnil) return DBL2NUM(HUGE_VAL);
     mul = NUM2LONG(n);
     if (mul <= 0) return INT2FIX(0);
     n = LONG2FIX(mul);
@@ -5061,8 +5064,6 @@ rb_ary_cycle(int argc, VALUE *argv, VALUE ary)
     return Qnil;
 }
 
-#define tmpbuf(n, size) rb_str_tmp_new((n)*(size))
-#define tmpbuf_discard(s) (rb_str_resize((s), 0L), RBASIC_SET_CLASS_RAW(s, rb_cString))
 #define tmpary(n) rb_ary_tmp_new(n)
 #define tmpary_discard(a) (ary_discard(a), RBASIC_SET_CLASS_RAW(a, rb_cArray))
 
@@ -5565,15 +5566,14 @@ rb_ary_product(int argc, VALUE *argv, VALUE ary)
 {
     int n = argc+1;    /* How many arrays we're operating on */
     volatile VALUE t0 = tmpary(n);
-    volatile VALUE t1 = tmpbuf(n, sizeof(int));
+    volatile VALUE t1 = Qundef;
     VALUE *arrays = RARRAY_PTR(t0); /* The arrays we're computing the product of */
-    int *counters = (int*)RSTRING_PTR(t1); /* The current position in each one */
+    int *counters = ALLOCV_N(int, t1, n); /* The current position in each one */
     VALUE result = Qnil;      /* The array we'll be returning, when no block given */
     long i,j;
     long resultlen = 1;
 
     RBASIC_CLEAR_CLASS(t0);
-    RBASIC_CLEAR_CLASS(t1);
 
     /* initialize the arrays of arrays */
     ARY_SET_LEN(t0, n);
@@ -5644,7 +5644,7 @@ rb_ary_product(int argc, VALUE *argv, VALUE ary)
     }
 done:
     tmpary_discard(t0);
-    tmpbuf_discard(t1);
+    ALLOCV_END(t1);
 
     return NIL_P(result) ? ary : result;
 }

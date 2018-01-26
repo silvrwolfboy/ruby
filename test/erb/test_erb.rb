@@ -611,12 +611,23 @@ EOS
     erb = @erb.new("<%= foo %>")
     erb.result_with_hash(foo: "1")
     assert_equal(false, TOPLEVEL_BINDING.local_variable_defined?(:foo))
+    TOPLEVEL_BINDING.eval 'template2 = "two"'
+    erb = @erb.new("<%= template2 %>")
+    erb.result_with_hash(template2: "TWO")
+    assert_equal "two", TOPLEVEL_BINDING.local_variable_get("template2")
   end
 
   # This depends on the behavior that #local_variable_set raises TypeError by invalid key.
   def test_result_with_hash_with_invalid_keys_raises_type_error
     erb = @erb.new("<%= 1 %>")
     assert_raise(TypeError) { erb.result_with_hash({ 1 => "1" }) }
+  end
+
+  # Bug#14243
+  def test_half_working_comment_backward_compatibility
+    assert_nothing_raised do
+      @erb.new("<% # comment %>\n").result
+    end
   end
 end
 

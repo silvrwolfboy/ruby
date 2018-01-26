@@ -11,6 +11,7 @@
 
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
+#include "ruby/encoding.h"
 #include "internal.h"
 #include <sys/types.h>
 #include <time.h>
@@ -500,10 +501,10 @@ num_exact(VALUE v)
         goto typeerror;
     }
     else {
-        if ((tmp = rb_check_funcall(v, rb_intern("to_r"), 0, NULL)) != Qundef) {
+        if ((tmp = rb_check_funcall(v, idTo_r, 0, NULL)) != Qundef) {
             /* test to_int method availability to reject non-Numeric
              * objects such as String, Time, etc which have to_r method. */
-            if (!rb_respond_to(v, rb_intern("to_int"))) goto typeerror;
+            if (!rb_respond_to(v, idTo_int)) goto typeerror;
         }
         else if (!NIL_P(tmp = rb_check_to_int(v))) {
             return tmp;
@@ -1210,7 +1211,7 @@ static struct tm *localtime_with_gmtoff_zone(const time_t *t, struct tm *result,
  *  }
  *
  */
-static int compat_common_month_table[12][7] = {
+static const int compat_common_month_table[12][7] = {
   /* Sun   Mon   Tue   Wed   Thu   Fri   Sat */
   { 2034, 2035, 2036, 2031, 2032, 2027, 2033 }, /* January */
   { 2026, 2027, 2033, 2034, 2035, 2030, 2031 }, /* February */
@@ -1251,7 +1252,7 @@ static int compat_common_month_table[12][7] = {
  *    puts
  *  }
  */
-static int compat_leap_month_table[7] = {
+static const int compat_leap_month_table[7] = {
 /* Sun   Mon   Tue   Wed   Thu   Fri   Sat */
   2032, 2016, 2028, 2012, 2024, 2036, 2020, /* February */
 };
@@ -1599,8 +1600,8 @@ localtimew(wideval_t timew, struct vtm *result)
 PACKED_STRUCT_UNALIGNED(struct time_object {
     wideval_t timew; /* time_t value * TIME_SCALE.  possibly Rational. */
     struct vtm vtm;
-    uint8_t gmt:3; /* 0:localtime 1:utc 2:fixoff 3:init */
-    uint8_t tm_got:1;
+    unsigned int gmt:3; /* 0:localtime 1:utc 2:fixoff 3:init */
+    unsigned int tm_got:1;
 });
 
 #define GetTimeval(obj, tobj) ((tobj) = get_timeval(obj))

@@ -11,9 +11,10 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/st.h"
 #include "ruby/util.h"
+#include "internal.h"
 #include "id_table.h"
 #include "constant.h"
 #include "id.h"
@@ -21,7 +22,7 @@
 #include "id_table.h"
 #include "debug_counter.h"
 
-struct rb_id_table *rb_global_tbl;
+static struct rb_id_table *rb_global_tbl;
 static ID autoload, classpath, tmp_classpath, classid;
 
 static void check_before_mod_set(VALUE, ID, VALUE, const char *);
@@ -33,7 +34,7 @@ static st_table *generic_iv_tbl_compat;
 /* per-object */
 struct gen_ivtbl {
     uint32_t numiv;
-    VALUE ivptr[1]; /* flexible array */
+    VALUE ivptr[FLEX_ARY_LEN];
 };
 
 struct ivar_update {
@@ -318,10 +319,11 @@ rb_class_path_no_cache(VALUE klass)
 VALUE
 rb_class_path_cached(VALUE klass)
 {
-    st_table *ivtbl = RCLASS_IV_TBL(klass);
+    st_table *ivtbl;
     st_data_t n;
 
-    if (!ivtbl) return Qnil;
+    if (!RCLASS_EXT(klass)) return Qnil;
+    if (!(ivtbl = RCLASS_IV_TBL(klass))) return Qnil;
     if (st_lookup(ivtbl, (st_data_t)classpath, &n)) return (VALUE)n;
     if (st_lookup(ivtbl, (st_data_t)tmp_classpath, &n)) return (VALUE)n;
     return Qnil;
@@ -999,7 +1001,7 @@ generic_ivar_get(VALUE obj, ID id, VALUE undef)
 static size_t
 gen_ivtbl_bytes(size_t n)
 {
-    return sizeof(struct gen_ivtbl) + n * sizeof(VALUE) - sizeof(VALUE);
+    return offsetof(struct gen_ivtbl, ivptr) + n * sizeof(VALUE);
 }
 
 static struct gen_ivtbl *
@@ -1756,7 +1758,7 @@ uninitialized_constant(VALUE klass, VALUE name)
 VALUE
 rb_const_missing(VALUE klass, VALUE name)
 {
-    VALUE value = rb_funcallv(klass, rb_intern("const_missing"), 1, &name);
+    VALUE value = rb_funcallv(klass, idConst_missing, 1, &name);
     rb_vm_inc_const_missing_count();
     return value;
 }
@@ -1856,10 +1858,7 @@ struct autoload_state {
     VALUE result;
     ID id;
     VALUE thread;
-    union {
-	struct list_node node;
-	struct list_head head;
-    } waitq;
+    struct list_node waitq;
 };
 
 struct autoload_data_i {
@@ -1892,7 +1891,7 @@ static const rb_data_type_t autoload_data_i_type = {
 #define check_autoload_data(av) \
     (struct autoload_data_i *)rb_check_typeddata((av), &autoload_data_i_type)
 
-void
+RUBY_FUNC_EXPORTED void
 rb_autoload(VALUE mod, ID id, const char *file)
 {
     if (!file || !*file) {
@@ -2112,11 +2111,11 @@ autoload_reset(VALUE arg)
     if (need_wakeups) {
 	struct autoload_state *cur = 0, *nxt;
 
-	list_for_each_safe(&state->waitq.head, cur, nxt, waitq.node) {
+	list_for_each_safe((struct list_head *)&state->waitq, cur, nxt, waitq) {
 	    VALUE th = cur->thread;
 
 	    cur->thread = Qfalse;
-	    list_del_init(&cur->waitq.node); /* idempotent */
+	    list_del_init(&cur->waitq); /* idempotent */
 
 	    /*
 	     * cur is stored on the stack of cur->waiting_th,
@@ -2151,7 +2150,7 @@ autoload_sleep_done(VALUE arg)
     struct autoload_state *state = (struct autoload_state *)arg;
 
     if (state->thread != Qfalse && rb_thread_to_be_killed(state->thread)) {
-	list_del(&state->waitq.node); /* idempotent after list_del_init */
+	list_del(&state->waitq); /* idempotent after list_del_init */
     }
 
     return Qfalse;
@@ -2187,13 +2186,13 @@ rb_autoload_load(VALUE mod, ID id)
 	 * autoload_reset will wake up any threads added to this
 	 * iff the GVL is released during autoload_require
 	 */
-	list_head_init(&state.waitq.head);
+	list_head_init((struct list_head *)&state.waitq);
     }
     else if (state.thread == ele->state->thread) {
 	return Qfalse;
     }
     else {
-	list_add_tail(&ele->state->waitq.head, &state.waitq.node);
+	list_add_tail((struct list_head *)&ele->state->waitq, &state.waitq);
 
 	rb_ensure(autoload_sleep, (VALUE)&state,
 		autoload_sleep_done, (VALUE)&state);

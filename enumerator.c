@@ -13,6 +13,7 @@
 ************************************************/
 
 #include "internal.h"
+#include "id.h"
 
 /*
  * Document-class: Enumerator
@@ -101,10 +102,16 @@
  *
  */
 VALUE rb_cEnumerator;
-VALUE rb_cLazy;
-static ID id_rewind, id_each, id_new, id_initialize, id_yield, id_call, id_size, id_to_enum;
-static ID id_eqq, id_next, id_result, id_lazy, id_receiver, id_arguments, id_memo, id_method, id_force;
+static VALUE rb_cLazy;
+static ID id_rewind, id_new, id_yield, id_to_enum;
+static ID id_next, id_result, id_lazy, id_receiver, id_arguments, id_memo, id_method, id_force;
 static VALUE sym_each, sym_cycle;
+
+#define id_call idCall
+#define id_each idEach
+#define id_eqq idEqq
+#define id_initialize idInitialize
+#define id_size idSize
 
 VALUE rb_eStopIteration;
 
@@ -390,7 +397,7 @@ enumerator_initialize(int argc, VALUE *argv, VALUE obj)
 	recv = generator_init(generator_allocate(rb_cGenerator), rb_block_proc());
 	if (argc) {
             if (NIL_P(argv[0]) || rb_respond_to(argv[0], id_call) ||
-                (RB_TYPE_P(argv[0], T_FLOAT) && RFLOAT_VALUE(argv[0]) == INFINITY)) {
+                (RB_TYPE_P(argv[0], T_FLOAT) && RFLOAT_VALUE(argv[0]) == HUGE_VAL)) {
                 size = argv[0];
             }
             else {
@@ -2414,16 +2421,11 @@ void
 Init_Enumerator(void)
 {
     id_rewind = rb_intern("rewind");
-    id_each = rb_intern("each");
-    id_call = rb_intern("call");
-    id_size = rb_intern("size");
     id_yield = rb_intern("yield");
     id_new = rb_intern("new");
-    id_initialize = rb_intern("initialize");
     id_next = rb_intern("next");
     id_result = rb_intern("result");
     id_lazy = rb_intern("lazy");
-    id_eqq = rb_intern("===");
     id_receiver = rb_intern("receiver");
     id_arguments = rb_intern("arguments");
     id_memo = rb_intern("memo");

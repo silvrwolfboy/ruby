@@ -1,4 +1,4 @@
-# frozen_string_literal: false
+# frozen_string_literal: true
 #
 # optparse.rb - command-line option analysis with the OptionParser class.
 #
@@ -577,7 +577,7 @@ class OptionParser
       while s = lopts.shift
         l = left[-1].length + s.length
         l += arg.length if left.size == 1 && arg
-        l < max or sopts.empty? or left << ''
+        l < max or sopts.empty? or left << +''
         left[-1] << (left[-1].empty? ? ' ' * 4 : ', ') << s
       end
 
@@ -1136,7 +1136,7 @@ XXX
   #
   def banner
     unless @banner
-      @banner = "Usage: #{program_name} [options]"
+      @banner = +"Usage: #{program_name} [options]"
       visit(:add_banner, @banner)
     end
     @banner
@@ -1180,7 +1180,7 @@ XXX
   #
   def ver
     if v = version
-      str = "#{program_name} #{[v].join('.')}"
+      str = +"#{program_name} #{[v].join('.')}"
       str << " (#{v})" if v = release
       str
     end
@@ -1237,7 +1237,8 @@ XXX
   # +indent+:: Indentation, defaults to @summary_indent.
   #
   def summarize(to = [], width = @summary_width, max = width - 1, indent = @summary_indent, &blk)
-    blk ||= proc {|l| to << (l.index($/, -1) ? l : l + $/)}
+    nl = "\n"
+    blk ||= proc {|l| to << (l.index(nl, -1) ? l : l + nl)}
     visit(:summarize, {}, {}, width, max, indent, &blk)
     to
   end

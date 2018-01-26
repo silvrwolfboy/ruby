@@ -63,10 +63,11 @@
 
 /* for model 2 */
 
+#include "ruby/config.h"
+#include "ruby/io.h"
 #include "eval_intern.h"
 #include "gc.h"
 #include "timev.h"
-#include "ruby/io.h"
 #include "ruby/thread.h"
 #include "ruby/thread_native.h"
 #include "ruby/debug.h"
@@ -473,7 +474,7 @@ rb_threadptr_unlock_all_locking_mutexes(rb_thread_t *th)
     while (mutexes) {
 	mutex = mutexes;
 	/* rb_warn("mutex #<%p> remains to be locked by terminated thread",
-		mutexes); */
+		(void *)mutexes); */
 	mutexes = mutex->next_mutex;
 	err = rb_mutex_unlock_th(mutex, th);
 	if (err) rb_bug("invalid keeping_mutexes: %s", err);
@@ -553,6 +554,10 @@ thread_cleanup_func(void *th_ptr, int atfork)
      * Unfortunately, we can't release native threading resource at fork
      * because libc may have unstable locking state therefore touching
      * a threading resource may cause a deadlock.
+     *
+     * FIXME: Skipping native_mutex_destroy(pthread_mutex_destroy) is safe
+     * with NPTL, but native_thread_destroy calls pthread_cond_destroy
+     * which calls free(3), so there is a small memory leak atfork, here.
      */
     if (atfork)
 	return;
@@ -1742,7 +1747,7 @@ rb_threadptr_pending_interrupt_deque(rb_thread_t *th, enum handle_interrupt_timi
 #endif
 }
 
-int
+static int
 threadptr_pending_interrupt_active_p(rb_thread_t *th)
 {
     /*
@@ -2033,6 +2038,8 @@ rb_thread_s_pending_interrupt_p(int argc, VALUE *argv, VALUE self)
     return rb_thread_pending_interrupt_p(argc, argv, GET_THREAD()->self);
 }
 
+NORETURN(static void rb_threadptr_to_kill(rb_thread_t *th));
+
 static void
 rb_threadptr_to_kill(rb_thread_t *th)
 {
@@ -2105,7 +2112,7 @@ rb_threadptr_execute_interrupts(rb_thread_t *th, int blocking_timing)
 	    }
 	    else {
 		if (err == th->vm->special_exceptions[ruby_error_stream_closed]) {
-		    /* the only special exception to be queued accross thread */
+		    /* the only special exception to be queued across thread */
 		    err = ruby_vm_special_exception_copy(err);
 		}
 		/* set runnable if th was slept. */
@@ -2952,18 +2959,16 @@ rb_thread_stop_p(VALUE thread)
  *  call-seq:
  *     thr.safe_level   -> integer
  *
- *  Returns the safe level in effect for <i>thr</i>. Setting thread-local safe
- *  levels can help when implementing sandboxes which run insecure code.
+ *  Returns the safe level.
  *
- *     thr = Thread.new { $SAFE = 1; sleep }
- *     Thread.current.safe_level   #=> 0
- *     thr.safe_level              #=> 1
+ *  This method is obsolete because $SAFE is a process global state.
+ *  Simply check $SAFE.
  */
 
 static VALUE
 rb_thread_safe_level(VALUE thread)
 {
-    return INT2NUM(rb_thread_ptr(thread)->ec->safe_level);
+    return UINT2NUM(rb_safe_level());
 }
 
 /*
@@ -3168,7 +3173,7 @@ rb_thread_fetch(int argc, VALUE *argv, VALUE self)
 	return rb_yield(key);
     }
     else if (argc == 1) {
-	rb_raise(rb_eKeyError, "key not found: %"PRIsVALUE, key);
+	rb_key_err_raise(rb_sprintf("key not found: %+"PRIsVALUE, key), self, key);
     }
     else {
 	return argv[1];
@@ -4968,21 +4973,21 @@ debug_deadlock_check(rb_vm_t *vm, VALUE msg)
     VALUE sep = rb_str_new_cstr("\n   ");
 
     rb_str_catf(msg, "\n%d threads, %d sleeps current:%p main thread:%p\n",
-	    vm_living_thread_num(vm), vm->sleeper, GET_THREAD(), vm->main_thread);
+		vm_living_thread_num(vm), vm->sleeper, (void *)GET_THREAD(), (void *)vm->main_thread);
     list_for_each(&vm->living_threads, th, vmlt_node) {
 	rb_str_catf(msg, "* %+"PRIsVALUE"\n   rb_thread_t:%p "
 		    "native:%"PRI_THREAD_ID" int:%u",
-		    th->self, th, thread_id_str(th), th->ec->interrupt_flag);
+		    th->self, (void *)th, thread_id_str(th), th->ec->interrupt_flag);
 	if (th->locking_mutex) {
 	    rb_mutex_t *mutex;
 	    GetMutexPtr(th->locking_mutex, mutex);
 	    rb_str_catf(msg, " mutex:%p cond:%"PRIuSIZE,
-			mutex->th, rb_mutex_num_waiting(mutex));
+			(void *)mutex->th, rb_mutex_num_waiting(mutex));
 	}
 	{
 	    rb_thread_list_t *list = th->join_list;
 	    while (list) {
-		rb_str_catf(msg, "\n    depended by: tb_thread_id:%p", list->th);
+		rb_str_catf(msg, "\n    depended by: tb_thread_id:%p", (void *)list->th);
 		list = list->next;
 	    }
 	}
@@ -5072,7 +5077,7 @@ update_branch_coverage(VALUE data, const rb_trace_arg_t *trace_arg)
 const rb_method_entry_t *
 rb_resolve_me_location(const rb_method_entry_t *me, VALUE resolved_location[5])
 {
-    VALUE path, first_lineno, first_column, last_lineno, last_column;
+    VALUE path, beg_pos_lineno, beg_pos_column, end_pos_lineno, end_pos_column;
 
   retry:
     switch (me->def->type) {
@@ -5080,10 +5085,10 @@ rb_resolve_me_location(const rb_method_entry_t *me, VALUE resolved_location[5])
 	const rb_iseq_t *iseq = me->def->body.iseq.iseqptr;
 	rb_iseq_location_t *loc = &iseq->body->location;
 	path = rb_iseq_path(iseq);
-	first_lineno = INT2FIX(loc->code_range.first_loc.lineno);
-	first_column = INT2FIX(loc->code_range.first_loc.column);
-	last_lineno = INT2FIX(loc->code_range.last_loc.lineno);
-	last_column = INT2FIX(loc->code_range.last_loc.column);
+	beg_pos_lineno = INT2FIX(loc->code_location.beg_pos.lineno);
+	beg_pos_column = INT2FIX(loc->code_location.beg_pos.column);
+	end_pos_lineno = INT2FIX(loc->code_location.end_pos.lineno);
+	end_pos_column = INT2FIX(loc->code_location.end_pos.column);
 	break;
       }
       case VM_METHOD_TYPE_BMETHOD: {
@@ -5093,10 +5098,10 @@ rb_resolve_me_location(const rb_method_entry_t *me, VALUE resolved_location[5])
 	    rb_iseq_check(iseq);
 	    path = rb_iseq_path(iseq);
 	    loc = &iseq->body->location;
-	    first_lineno = INT2FIX(loc->code_range.first_loc.lineno);
-	    first_column = INT2FIX(loc->code_range.first_loc.column);
-	    last_lineno = INT2FIX(loc->code_range.last_loc.lineno);
-	    last_column = INT2FIX(loc->code_range.last_loc.column);
+	    beg_pos_lineno = INT2FIX(loc->code_location.beg_pos.lineno);
+	    beg_pos_column = INT2FIX(loc->code_location.beg_pos.column);
+	    end_pos_lineno = INT2FIX(loc->code_location.end_pos.lineno);
+	    end_pos_column = INT2FIX(loc->code_location.end_pos.column);
 	    break;
 	}
 	return NULL;
@@ -5119,10 +5124,10 @@ rb_resolve_me_location(const rb_method_entry_t *me, VALUE resolved_location[5])
     }
     if (resolved_location) {
 	resolved_location[0] = path;
-	resolved_location[1] = first_lineno;
-	resolved_location[2] = first_column;
-	resolved_location[3] = last_lineno;
-	resolved_location[4] = last_column;
+	resolved_location[1] = beg_pos_lineno;
+	resolved_location[2] = beg_pos_column;
+	resolved_location[3] = end_pos_lineno;
+	resolved_location[4] = end_pos_column;
     }
     return me;
 }

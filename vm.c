@@ -14,6 +14,7 @@
 
 #include "gc.h"
 #include "vm_core.h"
+#include "vm_debug.h"
 #include "iseq.h"
 #include "eval_intern.h"
 #include "probes.h"
@@ -262,7 +263,7 @@ rb_vm_cref_new_toplevel(void)
 static void
 vm_cref_dump(const char *mesg, const rb_cref_t *cref)
 {
-    fprintf(stderr, "vm_cref_dump: %s (%p)\n", mesg, cref);
+    fprintf(stderr, "vm_cref_dump: %s (%p)\n", mesg, (void *)cref);
 
     while (cref) {
 	fprintf(stderr, "= cref| klass: %s\n", RSTRING_PTR(rb_class_path(CREF_CLASS(cref))));
@@ -294,6 +295,8 @@ static void vm_collect_usage_register(int reg, int isset);
 static VALUE vm_make_env_object(const rb_execution_context_t *ec, rb_control_frame_t *cfp);
 static VALUE vm_invoke_bmethod(rb_execution_context_t *ec, rb_proc_t *proc, VALUE self, int argc, const VALUE *argv, VALUE block_handler);
 static VALUE vm_invoke_proc(rb_execution_context_t *ec, rb_proc_t *proc, VALUE self, int argc, const VALUE *argv, VALUE block_handler);
+
+static VALUE rb_block_param_proxy;
 
 #include "vm_insnhelper.h"
 #include "vm_exec.h"
@@ -809,7 +812,7 @@ static VALUE
 vm_proc_create_from_captured(VALUE klass,
 			     const struct rb_captured_block *captured,
 			     enum rb_block_type block_type,
-			     int8_t safe_level, int8_t is_from_method, int8_t is_lambda)
+			     int8_t is_from_method, int8_t is_lambda)
 {
     VALUE procval = rb_proc_alloc(klass);
     rb_proc_t *proc = RTYPEDDATA_DATA(procval);
@@ -822,7 +825,6 @@ vm_proc_create_from_captured(VALUE klass,
     rb_vm_block_ep_update(procval, &proc->block, captured->ep);
 
     vm_block_type_set(&proc->block, block_type);
-    proc->safe_level = safe_level;
     proc->is_from_method = is_from_method;
     proc->is_lambda = is_lambda;
 
@@ -849,9 +851,8 @@ rb_vm_block_copy(VALUE obj, const struct rb_block *dst, const struct rb_block *s
     }
 }
 
-VALUE
-rb_proc_create(VALUE klass, const struct rb_block *block,
-	       int8_t safe_level, int8_t is_from_method, int8_t is_lambda)
+static VALUE
+proc_create(VALUE klass, const struct rb_block *block, int8_t is_from_method, int8_t is_lambda)
 {
     VALUE procval = rb_proc_alloc(klass);
     rb_proc_t *proc = RTYPEDDATA_DATA(procval);
@@ -859,12 +860,24 @@ rb_proc_create(VALUE klass, const struct rb_block *block,
     VM_ASSERT(VM_EP_IN_HEAP_P(GET_EC(), vm_block_ep(block)));
     rb_vm_block_copy(procval, &proc->block, block);
     vm_block_type_set(&proc->block, block->type);
-    proc->safe_level = safe_level;
     proc->is_from_method = is_from_method;
     proc->is_lambda = is_lambda;
 
     return procval;
 }
+
+VALUE
+rb_proc_dup(VALUE self)
+{
+    VALUE procval;
+    rb_proc_t *src;
+
+    GetProcPtr(self, src);
+    procval = proc_create(rb_cProc, &src->block, src->is_from_method, src->is_lambda);
+    RB_GC_GUARD(self); /* for: body = rb_proc_dup(body) */
+    return procval;
+}
+
 
 VALUE
 rb_vm_make_proc_lambda(const rb_execution_context_t *ec, const struct rb_captured_block *captured, VALUE klass, int8_t is_lambda)
@@ -880,8 +893,7 @@ rb_vm_make_proc_lambda(const rb_execution_context_t *ec, const struct rb_capture
 	      imemo_type_p(captured->code.val, imemo_ifunc));
 
     procval = vm_proc_create_from_captured(klass, captured,
-					   imemo_type(captured->code.val) == imemo_iseq ? block_type_iseq : block_type_ifunc,
-					   (int8_t)ec->safe_level, FALSE, is_lambda);
+					   imemo_type(captured->code.val) == imemo_iseq ? block_type_iseq : block_type_ifunc, FALSE, is_lambda);
     return procval;
 }
 
@@ -928,7 +940,8 @@ rb_binding_add_dynavars(VALUE bindval, rb_binding_t *bind, int dyncount, const I
     const rb_env_t *env;
     rb_execution_context_t *ec = GET_EC();
     const rb_iseq_t *base_iseq, *iseq;
-    NODE *node = 0, tmp_node;
+    rb_ast_body_t ast;
+    NODE tmp_node;
     ID minibuf[4], *dyns = minibuf;
     VALUE idtmp = 0;
 
@@ -941,17 +954,18 @@ rb_binding_add_dynavars(VALUE bindval, rb_binding_t *bind, int dyncount, const I
 
     dyns[0] = dyncount;
     MEMCPY(dyns + 1, dynvars, ID, dyncount);
-    node = &tmp_node;
-    rb_node_init(node, NODE_SCOPE, (VALUE)dyns, 0, 0);
+    rb_node_init(&tmp_node, NODE_SCOPE, (VALUE)dyns, 0, 0);
+    ast.root = &tmp_node;
+    ast.compile_option = 0;
 
     if (base_iseq) {
-	iseq = rb_iseq_new(node, base_iseq->body->location.label, path, realpath, base_iseq, ISEQ_TYPE_EVAL);
+	iseq = rb_iseq_new(&ast, base_iseq->body->location.label, path, realpath, base_iseq, ISEQ_TYPE_EVAL);
     }
     else {
 	VALUE tempstr = rb_fstring_cstr("<temp>");
-	iseq = rb_iseq_new_top(node, tempstr, tempstr, tempstr, NULL);
+	iseq = rb_iseq_new_top(&ast, tempstr, tempstr, tempstr, NULL);
     }
-    node->nd_tbl = 0; /* reset table */
+    tmp_node.nd_tbl = 0; /* reset table */
     ALLOCV_END(idtmp);
 
     vm_set_eval_stack(ec, iseq, 0, base_block);
@@ -1139,23 +1153,7 @@ static VALUE
 vm_invoke_proc(rb_execution_context_t *ec, rb_proc_t *proc, VALUE self,
 	       int argc, const VALUE *argv, VALUE passed_block_handler)
 {
-    VALUE val = Qundef;
-    enum ruby_tag_type state;
-    volatile int stored_safe = ec->safe_level;
-
-    EC_PUSH_TAG(ec);
-    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
-	ec->safe_level = proc->safe_level;
-	val = invoke_block_from_c_proc(ec, proc, self, argc, argv, passed_block_handler, proc->is_lambda);
-    }
-    EC_POP_TAG();
-
-    ec->safe_level = stored_safe;
-
-    if (state) {
-	EC_JUMP_TAG(ec, state);
-    }
-    return val;
+    return invoke_block_from_c_proc(ec, proc, self, argc, argv, passed_block_handler, proc->is_lambda);
 }
 
 static VALUE
@@ -1499,7 +1497,20 @@ vm_redefinition_check_flag(VALUE klass)
     if (klass == rb_cNilClass) return NIL_REDEFINED_OP_FLAG;
     if (klass == rb_cTrueClass) return TRUE_REDEFINED_OP_FLAG;
     if (klass == rb_cFalseClass) return FALSE_REDEFINED_OP_FLAG;
+    if (klass == rb_cProc) return PROC_REDEFINED_OP_FLAG;
     return 0;
+}
+
+static int
+vm_redefinition_check_method_type(const rb_method_definition_t *def)
+{
+    switch (def->type) {
+      case VM_METHOD_TYPE_CFUNC:
+      case VM_METHOD_TYPE_OPTIMIZED:
+	return TRUE;
+      default:
+	return FALSE;
+    }
 }
 
 static void
@@ -1509,7 +1520,7 @@ rb_vm_check_redefinition_opt_method(const rb_method_entry_t *me, VALUE klass)
     if (RB_TYPE_P(klass, T_ICLASS) && FL_TEST(klass, RICLASS_IS_ORIGIN)) {
        klass = RBASIC_CLASS(klass);
     }
-    if (me->def->type == VM_METHOD_TYPE_CFUNC) {
+    if (vm_redefinition_check_method_type(me->def)) {
 	if (st_lookup(vm_opt_method_table, (st_data_t)me, &bop)) {
 	    int flag = vm_redefinition_check_flag(klass);
 
@@ -1542,7 +1553,7 @@ add_opt_method(VALUE klass, ID mid, VALUE bop)
 {
     const rb_method_entry_t *me = rb_method_entry_at(klass, mid);
 
-    if (me && me->def->type == VM_METHOD_TYPE_CFUNC) {
+    if (me && vm_redefinition_check_method_type(me->def)) {
 	st_insert(vm_opt_method_table, (st_data_t)me, (st_data_t)bop);
     }
     else {
@@ -1584,6 +1595,7 @@ vm_init_redefined_flag(void)
     OP(UMinus, UMINUS), (C(String));
     OP(Max, MAX), (C(Array));
     OP(Min, MIN), (C(Array));
+    OP(Call, CALL), (C(Proc));
 #undef C
 #undef OP
 }
@@ -2364,13 +2376,18 @@ rb_execution_context_mark(const rb_execution_context_t *ec)
 	rb_gc_mark_stack_values((long)(sp - p), p);
 
 	while (cfp != limit_cfp) {
-#if VM_CHECK_MODE > 0
 	    const VALUE *ep = cfp->ep;
 	    VM_ASSERT(!!VM_ENV_FLAGS(ep, VM_ENV_FLAG_ESCAPED) == vm_ep_in_heap_p_(ec, ep));
-#endif
 	    rb_gc_mark(cfp->self);
 	    rb_gc_mark((VALUE)cfp->iseq);
 	    rb_gc_mark((VALUE)cfp->block_code);
+
+	    if (!VM_ENV_LOCAL_P(ep)) {
+		const VALUE *prev_ep = VM_ENV_PREV_EP(ep);
+		if (VM_ENV_FLAGS(prev_ep, VM_ENV_FLAG_ESCAPED)) {
+		    rb_gc_mark(prev_ep[VM_ENV_DATA_INDEX_ENV]);
+		}
+	    }
 
 	    cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
 	}
@@ -2443,9 +2460,7 @@ thread_free(void *ptr)
     }
     else {
 #ifdef USE_SIGALTSTACK
-	if (th->altstack) {
-	    free(th->altstack);
-	}
+	free(th->altstack);
 #endif
 	ruby_xfree(ptr);
     }
@@ -3080,6 +3095,12 @@ Init_VM(void)
     }
     vm_init_redefined_flag();
 
+    rb_block_param_proxy = rb_obj_alloc(rb_cObject);
+    rb_add_method(rb_singleton_class(rb_block_param_proxy), idCall, VM_METHOD_TYPE_OPTIMIZED,
+		  (void *)OPTIMIZED_METHOD_TYPE_BLOCK_CALL, METHOD_VISI_PUBLIC);
+    rb_obj_freeze(rb_block_param_proxy);
+    rb_gc_register_mark_object(rb_block_param_proxy);
+
     /* vm_backtrace.c */
     Init_vm_backtrace();
     VM_PROFILE_ATEXIT();
@@ -3327,9 +3348,9 @@ vm_analysis_register(int reg, int isset)
 
 #undef HASH_ASET
 
-void (*ruby_vm_collect_usage_func_insn)(int insn) = vm_analysis_insn;
-void (*ruby_vm_collect_usage_func_operand)(int insn, int n, VALUE op) = vm_analysis_operand;
-void (*ruby_vm_collect_usage_func_register)(int reg, int isset) = vm_analysis_register;
+static void (*ruby_vm_collect_usage_func_insn)(int insn) = vm_analysis_insn;
+static void (*ruby_vm_collect_usage_func_operand)(int insn, int n, VALUE op) = vm_analysis_operand;
+static void (*ruby_vm_collect_usage_func_register)(int reg, int isset) = vm_analysis_register;
 
 /* :nodoc: */
 static VALUE
@@ -3357,9 +3378,9 @@ usage_analysis_register_stop(VALUE self)
 
 #else
 
-void (*ruby_vm_collect_usage_func_insn)(int insn) = NULL;
-void (*ruby_vm_collect_usage_func_operand)(int insn, int n, VALUE op) = NULL;
-void (*ruby_vm_collect_usage_func_register)(int reg, int isset) = NULL;
+MAYBE_UNUSED(static void (*ruby_vm_collect_usage_func_insn)(int insn)) = NULL;
+MAYBE_UNUSED(static void (*ruby_vm_collect_usage_func_operand)(int insn, int n, VALUE op)) = NULL;
+MAYBE_UNUSED(static void (*ruby_vm_collect_usage_func_register)(int reg, int isset)) = NULL;
 
 #endif
 

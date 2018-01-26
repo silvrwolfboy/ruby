@@ -457,6 +457,30 @@ class TestParse < Test::Unit::TestCase
     end
   end
 
+  def test_op_asgn1_with_block
+    t = Object.new
+    a = []
+    blk = proc {|x| a << x }
+    def t.[](_)
+      yield(:aref)
+      nil
+    end
+    def t.[]=(_, _)
+      yield(:aset)
+    end
+    def t.dummy(_)
+    end
+    eval <<-END, nil, __FILE__, __LINE__+1
+      t[42, &blk] ||= 42
+    END
+    assert_equal([:aref, :aset], a)
+    a.clear
+    eval <<-END, nil, __FILE__, __LINE__+1
+    t[42, &blk] ||= t.dummy 42 # command_asgn test
+    END
+    assert_equal([:aref, :aset], a)
+  end
+
   def test_backquote
     t = Object.new
 
@@ -745,6 +769,12 @@ x = __ENCODING__
           FOO = 1
         end
       END
+    end
+    assert_raise(SyntaxError) do
+      eval "#{<<~"begin;"}\n#{<<~'end;'}", nil, __FILE__, __LINE__+1
+      begin;
+        x, true
+      end;
     end
   end
 
@@ -1091,6 +1121,12 @@ x = __ENCODING__
     assert_raise(SyntaxError) { eval("def m\n\0""end") }
     assert_raise(SyntaxError) { eval("def m\n\C-d""end") }
     assert_raise(SyntaxError) { eval("def m\n\C-z""end") }
+  end
+
+  def test_location_of_invalid_token
+    assert_raise_with_message(SyntaxError, /^      \^~~\z/) do
+      eval('class xxx end')
+    end
   end
 
 =begin

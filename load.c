@@ -2,8 +2,9 @@
  * load methods from eval.c
  */
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/util.h"
+#include "internal.h"
 #include "dln.h"
 #include "eval_intern.h"
 #include "probes.h"
@@ -604,7 +605,7 @@ rb_load_internal0(rb_execution_context_t *ec, VALUE fname, int wrap)
 	    VALUE parser = rb_parser_new();
 	    rb_parser_set_context(parser, NULL, FALSE);
 	    ast = (rb_ast_t *)rb_parser_load_file(parser, fname);
-	    iseq = rb_iseq_new_top(ast->root, rb_fstring_cstr("<top (required)>"),
+	    iseq = rb_iseq_new_top(&ast->body, rb_fstring_cstr("<top (required)>"),
 			    fname, rb_realpath_internal(Qnil, fname, 1), NULL);
 	    rb_ast_dispose(ast);
 	}
@@ -714,8 +715,6 @@ rb_f_load(int argc, VALUE *argv)
     return Qtrue;
 }
 
-extern VALUE rb_mWarning;
-
 static char *
 load_lock(const char *ftptr)
 {
@@ -740,7 +739,7 @@ load_lock(const char *ftptr)
     if (RTEST(ruby_verbose)) {
 	VALUE warning = rb_warning_string("loading in progress, circular require considered harmful - %s", ftptr);
 	rb_backtrace_each(rb_str_append, warning);
-	rb_warning_warn(rb_mWarning, warning);
+	rb_warning("%"PRIsVALUE, warning);
     }
     switch (rb_thread_shield_wait((VALUE)data)) {
       case Qfalse:

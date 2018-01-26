@@ -9,8 +9,9 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/st.h"
+#include "internal.h"
 #include "ruby_assert.h"
 #include "vm_core.h"
 
@@ -52,8 +53,8 @@ int rb_str_end_with_asciichar(VALUE str, int c);
 VALUE rb_eEAGAIN;
 VALUE rb_eEWOULDBLOCK;
 VALUE rb_eEINPROGRESS;
-VALUE rb_mWarning;
-VALUE rb_cWarningBuffer;
+static VALUE rb_mWarning;
+static VALUE rb_cWarningBuffer;
 
 static ID id_warn;
 
@@ -322,6 +323,25 @@ warning_write(int argc, VALUE *argv, VALUE buf)
  *
  *    warning 1
  *    warning 2
+ *
+ * If the <code>:uplevel</code> keyword is given, the string will
+ * be prepended with information for the given caller frame in
+ * the same format used by the <code>rb_warn</code> C function.
+ *
+ *    # In baz.rb
+ *    def foo
+ *      warn("invalid call to foo", uplevel: 1)
+ *    end
+ *
+ *    def bar
+ *      foo
+ *    end
+ *
+ *    bar
+ *
+ *  <em>produces:</em>
+ *
+ *    baz.rb:6: warning: invalid call to foo
  */
 
 static VALUE
@@ -342,8 +362,14 @@ rb_warn_m(int argc, VALUE *argv, VALUE exc)
 		uplevel = Qnil;
 	    }
 	    else if (!NIL_P(uplevel)) {
-		uplevel = LONG2NUM((long)NUM2ULONG(uplevel) + 1);
-		uplevel = rb_vm_thread_backtrace_locations(1, &uplevel, GET_THREAD()->self);
+		VALUE args[2];
+		long lev = NUM2LONG(uplevel);
+		if (lev < 0) {
+		    rb_raise(rb_eArgError, "negative level (%ld)", lev);
+		}
+		args[0] = LONG2NUM(lev + 1);
+		args[1] = INT2FIX(1);
+		uplevel = rb_vm_thread_backtrace_locations(2, args, GET_THREAD()->self);
 		if (!NIL_P(uplevel)) {
 		    uplevel = rb_ary_entry(uplevel, 0);
 		}
@@ -356,7 +382,7 @@ rb_warn_m(int argc, VALUE *argv, VALUE exc)
 	    else {
 		VALUE path;
 		path = rb_funcall(uplevel, rb_intern("path"), 0);
-		str = rb_sprintf("%s:%li: warning: ",
+		str = rb_sprintf("%s:%ld: warning: ",
 		    rb_string_value_ptr(&path),
 		    NUM2LONG(rb_funcall(uplevel, rb_intern("lineno"), 0)));
 	    }
@@ -860,11 +886,9 @@ static ID id_new, id_cause, id_message, id_backtrace;
 static ID id_name, id_key, id_args, id_Errno, id_errno, id_i_path;
 static ID id_receiver, id_iseq, id_local_variables;
 static ID id_private_call_p;
-extern ID ruby_static_id_status;
 #define id_bt idBt
 #define id_bt_locations idBt_locations
 #define id_mesg idMesg
-#define id_status ruby_static_id_status
 
 #undef rb_exc_new_cstr
 
@@ -1327,6 +1351,8 @@ rb_name_error_str(VALUE str, const char *fmt, ...)
     rb_exc_raise(exc);
 }
 
+static VALUE name_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options);
+
 /*
  * call-seq:
  *   NameError.new([msg, *, name])  -> name_error
@@ -1339,12 +1365,30 @@ rb_name_error_str(VALUE str, const char *fmt, ...)
 static VALUE
 name_err_initialize(int argc, VALUE *argv, VALUE self)
 {
+    VALUE options;
+    argc = rb_scan_args(argc, argv, "*:", NULL, &options);
+    return name_err_initialize_options(argc, argv, self, options);
+}
+
+static VALUE
+name_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options)
+{
+    ID keywords[1];
+    VALUE values[numberof(keywords)];
     VALUE name;
     VALUE iseqw = Qnil;
+    int i;
 
+    keywords[0] = id_receiver;
+    rb_get_kwargs(options, keywords, 0, numberof(values), values);
     name = (argc > 1) ? argv[--argc] : Qnil;
     rb_call_super(argc, argv);
     rb_ivar_set(self, id_name, name);
+    for (i = 0; i < numberof(keywords); ++i) {
+	if (values[i] != Qundef) {
+	    rb_ivar_set(self, keywords[i], values[i]);
+	}
+    }
     {
 	const rb_execution_context_t *ec = GET_EC();
 	rb_control_frame_t *cfp =
@@ -1392,9 +1436,11 @@ name_err_local_variables(VALUE self)
     return vars;
 }
 
+static VALUE nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options);
+
 /*
  * call-seq:
- *   NoMethodError.new([msg, *, name [, args]])  -> no_method_error
+ *   NoMethodError.new([msg, *, name [, args [, priv]]])  -> no_method_error
  *
  * Construct a NoMethodError exception for a method of the given name
  * called with the given arguments. The name may be accessed using
@@ -1405,9 +1451,17 @@ name_err_local_variables(VALUE self)
 static VALUE
 nometh_err_initialize(int argc, VALUE *argv, VALUE self)
 {
+    VALUE options;
+    argc = rb_scan_args(argc, argv, "*:", NULL, &options);
+    return nometh_err_initialize_options(argc, argv, self, options);
+}
+
+static VALUE
+nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options)
+{
     VALUE priv = (argc > 3) && (--argc, RTEST(argv[argc])) ? Qtrue : Qfalse;
     VALUE args = (argc > 2) ? argv[--argc] : Qnil;
-    name_err_initialize(argc, argv, self);
+    name_err_initialize_options(argc, argv, self, options);
     rb_ivar_set(self, id_args, args);
     rb_ivar_set(self, id_private_call_p, RTEST(priv) ? Qtrue : Qfalse);
     return self;
@@ -1653,6 +1707,38 @@ rb_key_err_new(VALUE mesg, VALUE recv, VALUE key)
     rb_ivar_set(exc, id_key, key);
     rb_ivar_set(exc, id_receiver, recv);
     return exc;
+}
+
+/*
+ * call-seq:
+ *   KeyError.new(message=nil, receiver: nil, key: nil) -> key_error
+ *
+ * Construct a new +KeyError+ exception with the given message,
+ * receiver and key.
+ */
+
+static VALUE
+key_err_initialize(int argc, VALUE *argv, VALUE self)
+{
+    VALUE options;
+
+    rb_call_super(rb_scan_args(argc, argv, "01:", NULL, &options), argv);
+
+    if (!NIL_P(options)) {
+	ID keywords[2];
+	VALUE values[numberof(keywords)];
+	int i;
+	keywords[0] = id_receiver;
+	keywords[1] = id_key;
+	rb_get_kwargs(options, keywords, 0, numberof(values), values);
+	for (i = 0; i < numberof(values); ++i) {
+	    if (values[i] != Qundef) {
+		rb_ivar_set(self, keywords[i], values[i]);
+	    }
+	}
+    }
+
+    return self;
 }
 
 /*
@@ -2275,6 +2361,7 @@ Init_Exception(void)
     rb_eArgError      = rb_define_class("ArgumentError", rb_eStandardError);
     rb_eIndexError    = rb_define_class("IndexError", rb_eStandardError);
     rb_eKeyError      = rb_define_class("KeyError", rb_eIndexError);
+    rb_define_method(rb_eKeyError, "initialize", key_err_initialize, -1);
     rb_define_method(rb_eKeyError, "receiver", key_err_receiver, 0);
     rb_define_method(rb_eKeyError, "key", key_err_key, 0);
     rb_eRangeError    = rb_define_class("RangeError", rb_eStandardError);

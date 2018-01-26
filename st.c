@@ -135,7 +135,7 @@ struct st_table_entry {
 };
 
 #define type_numhash st_hashtype_num
-const struct st_hash_type st_hashtype_num = {
+static const struct st_hash_type st_hashtype_num = {
     st_numcmp,
     st_numhash,
 };
@@ -1832,9 +1832,14 @@ st_hash(const void *ptr, size_t len, st_index_t h)
 	}
 	else
 #endif
+#ifdef HAVE_BUILTIN___BUILTIN_ASSUME_ALIGNED
+#define aligned_data __builtin_assume_aligned(data, sizeof(st_index_t))
+#else
+#define aligned_data data
+#endif
 	{
 	    do {
-		h = murmur_step(h, *(st_index_t *)data);
+		h = murmur_step(h, *(st_index_t *)aligned_data);
 		data += sizeof(st_index_t);
 		len -= sizeof(st_index_t);
 	    } while (len >= sizeof(st_index_t));
@@ -1850,7 +1855,7 @@ st_hash(const void *ptr, size_t len, st_index_t h)
       case 6: t |= data_at(5) << 40;
       case 5: t |= data_at(4) << 32;
       case 4:
-	t |= (st_index_t)*(uint32_t*)data;
+	t |= (st_index_t)*(uint32_t*)aligned_data;
 	goto skip_tail;
 # define SKIP_TAIL 1
 #endif
@@ -1875,6 +1880,7 @@ st_hash(const void *ptr, size_t len, st_index_t h)
 	h *= C2;
     }
     h ^= l;
+#undef aligned_data
 
     return murmur_finish(h);
 }
@@ -2130,8 +2136,8 @@ st_rehash(st_table *tab)
 static st_data_t
 st_stringify(VALUE key)
 {
-    return (rb_obj_class(key) == rb_cString) ?
-        rb_str_new_frozen(key) : key;
+    return (rb_obj_class(key) == rb_cString && !RB_OBJ_FROZEN(key)) ?
+        rb_hash_key_str(key) : key;
 }
 
 static void

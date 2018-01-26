@@ -11,9 +11,10 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/io.h"
 #include "ruby/thread.h"
+#include "internal.h"
 #include "dln.h"
 #include "encindex.h"
 #include "id.h"
@@ -4741,7 +4742,7 @@ static VALUE
 ignore_closed_stream(VALUE io, VALUE exc)
 {
     enum {mesg_len = sizeof(closed_stream)-1};
-    VALUE mesg = rb_attr_get(exc, rb_intern("mesg"));
+    VALUE mesg = rb_attr_get(exc, idMesg);
     if (!RB_TYPE_P(mesg, T_STRING) ||
 	RSTRING_LEN(mesg) != mesg_len ||
 	memcmp(RSTRING_PTR(mesg), closed_stream, mesg_len)) {
@@ -5107,10 +5108,12 @@ pread_internal_call(VALUE arg)
  *  at end of file and <code>NotImplementedError</code> if platform does not
  *  implement the system call.
  *
- *     f = File.new("testfile")
- *     f.read           #=> "This is line one\nThis is line two\n"
- *     f.pread(12, 0)   #=> "This is line"
- *     f.pread(9, 8)    #=> "line one\n"
+ *     File.write("testfile", "This is line one\nThis is line two\n")
+ *     File.open("testfile") do |f|
+ *       p f.read           # => "This is line one\nThis is line two\n"
+ *       p f.pread(12, 0)   # => "This is line"
+ *       p f.pread(9, 8)    # => "line one\n"
+ *     end
  */
 static VALUE
 rb_io_pread(int argc, VALUE *argv, VALUE io)
@@ -5175,10 +5178,11 @@ internal_pwrite_func(void *ptr)
  *  Raises <code>SystemCallError</code> on error and <code>NotImplementedError</code>
  *  if platform does not implement the system call.
  *
- *     f = File.new("out", "w")
- *     f.pwrite("ABCDEF", 3)   #=> 6
+ *     File.open("out", "w") do |f|
+ *       f.pwrite("ABCDEF", 3)   #=> 6
+ *     end
  *
- *     File.read("out")        #=> "\u0000\u0000\u0000ABCDEF"
+ *     File.read("out")          #=> "\u0000\u0000\u0000ABCDEF"
  */
 static VALUE
 rb_io_pwrite(VALUE io, VALUE str, VALUE offset)
@@ -6629,7 +6633,7 @@ pipe_open_s(VALUE prog, const char *modestr, int fmode,
     VALUE execarg_obj = Qnil;
 
     if (!is_popen_fork(prog))
-	execarg_obj = rb_execarg_new(argc, argv, TRUE);
+        execarg_obj = rb_execarg_new(argc, argv, TRUE, FALSE);
     return pipe_open(execarg_obj, modestr, fmode, convconfig);
 }
 
@@ -6762,14 +6766,14 @@ rb_io_s_popen(int argc, VALUE *argv, VALUE klass)
 	    rb_raise(rb_eArgError, "too many arguments");
 	}
 #endif
-	execarg_obj = rb_execarg_new((int)len, RARRAY_CONST_PTR(tmp), FALSE);
+        execarg_obj = rb_execarg_new((int)len, RARRAY_CONST_PTR(tmp), FALSE, FALSE);
 	RB_GC_GUARD(tmp);
     }
     else {
 	SafeStringValue(pname);
 	execarg_obj = Qnil;
 	if (!is_popen_fork(pname))
-	    execarg_obj = rb_execarg_new(1, &pname, TRUE);
+            execarg_obj = rb_execarg_new(1, &pname, TRUE, FALSE);
     }
     if (!NIL_P(execarg_obj)) {
 	if (!NIL_P(opt))
@@ -7760,10 +7764,16 @@ rb_obj_display(int argc, VALUE *argv, VALUE self)
     return Qnil;
 }
 
+static int
+rb_stderr_to_original_p(void)
+{
+    return (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0);
+}
+
 void
 rb_write_error2(const char *mesg, long len)
 {
-    if (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0) {
+    if (rb_stderr_to_original_p()) {
 #ifdef _WIN32
 	if (isatty(fileno(stderr))) {
 	    if (rb_w32_write_console(rb_str_new(mesg, len), fileno(stderr)) > 0) return;
@@ -7789,7 +7799,7 @@ void
 rb_write_error_str(VALUE mesg)
 {
     /* a stopgap measure for the time being */
-    if (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0) {
+    if (rb_stderr_to_original_p()) {
 	size_t len = (size_t)RSTRING_LEN(mesg);
 #ifdef _WIN32
 	if (isatty(fileno(stderr))) {
@@ -7810,7 +7820,7 @@ rb_write_error_str(VALUE mesg)
 int
 rb_stderr_tty_p(void)
 {
-    if (rb_stderr == orig_stderr || RFILE(orig_stderr)->fptr->fd < 0)
+    if (rb_stderr_to_original_p())
 	return isatty(fileno(stderr));
     return 0;
 }
@@ -10783,6 +10793,8 @@ nogvl_copy_file_range(struct copy_stream_struct *stp)
 	}
         switch (errno) {
 	  case EINVAL:
+	  case EPERM: /* copy_file_range(2) doesn't exist (may happen in
+			 docker container) */
 #ifdef ENOSYS
 	  case ENOSYS:
 #endif
@@ -11158,8 +11170,10 @@ copy_stream_fallback_body(VALUE arg)
             l = buflen;
         }
         else {
-            if (rest == 0)
-                break;
+	    if (rest == 0) {
+		rb_str_resize(buf, 0);
+		break;
+	    }
             l = buflen < rest ? buflen : (long)rest;
         }
         if (stp->src_fd == -1) {
@@ -11300,6 +11314,7 @@ copy_stream_body(VALUE arg)
         }
         else /* others such as StringIO */
 	    rb_io_write(dst_io, str);
+        rb_str_resize(str, 0);
         stp->total += len;
         if (stp->copy_length != (off_t)-1)
             stp->copy_length -= len;

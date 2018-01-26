@@ -26,8 +26,6 @@ VALUE rb_eSysStackError;
 
 ID ruby_static_id_signo, ruby_static_id_status;
 static ID id_cause;
-#define id_signo ruby_static_id_signo
-#define id_status ruby_static_id_status
 
 #define exception_error GET_VM()->special_exceptions[ruby_error_reenter]
 
@@ -175,7 +173,7 @@ ruby_cleanup(volatile int ex)
 
       step_0: step++;
 	errs[1] = th->ec->errinfo;
-	th->ec->safe_level = 0;
+	rb_set_safe_level_force(0);
 	ruby_init_stack(&errs[STACK_UPPER(errs, 0, 1)]);
 
 	SAVE_ROOT_JMPBUF(th, ruby_finalize_0());

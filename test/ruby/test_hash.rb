@@ -298,6 +298,9 @@ class TestHash < Test::Unit::TestCase
     b = {"ABC" => :t}
     assert_same a.keys[0], b.keys[0]
     assert_same "ABC".freeze, a.keys[0]
+    var = +'ABC'
+    c = { var => :t }
+    assert_same "ABC".freeze, c.keys[0]
   end
 
   def test_tainted_string_key
@@ -305,10 +308,10 @@ class TestHash < Test::Unit::TestCase
     h = {}
     h[str] = nil
     key = h.keys.first
-    assert_equal true, str.tainted?
-    assert_equal false, str.frozen?
-    assert_equal true, key.tainted?
-    assert_equal true, key.frozen?
+    assert_predicate str, :tainted?
+    assert_not_predicate str, :frozen?
+    assert_predicate key, :tainted?
+    assert_predicate key, :frozen?
   end
 
   def test_EQUAL # '=='
@@ -1573,6 +1576,14 @@ class TestHash < Test::Unit::TestCase
 
     x.transform_keys!.with_index {|k, i| "#{k}.#{i}" }
     assert_equal(%w(a!.0 b!.1 c!.2), x.keys)
+
+    x = @cls[1 => :a, -1 => :b]
+    x.transform_keys! {|k| -k }
+    assert_equal([-1, :a, 1, :b], x.flatten)
+
+    x = @cls[true => :a, false => :b]
+    x.transform_keys! {|k| !k }
+    assert_equal([false, :a, true, :b], x.flatten)
   end
 
   def test_transform_values
@@ -1594,6 +1605,13 @@ class TestHash < Test::Unit::TestCase
     x = @cls[a: 1, b: 2, c: 3]
     y = x.transform_values!.with_index {|v, i| "#{v}.#{i}" }
     assert_equal(%w(1.0  2.1  3.2), y.values_at(:a, :b, :c))
+  end
+
+  def test_broken_hash_value
+    bug14218 = '[ruby-core:84395] [Bug #14218]'
+
+    assert_equal(0, 1_000_000.times.count{a=Object.new.hash; b=Object.new.hash; a < 0 && b < 0 && a + b > 0}, bug14218)
+    assert_equal(0, 1_000_000.times.count{a=Object.new.hash; b=Object.new.hash; 0 + a + b != 0 + b + a}, bug14218)
   end
 
   class TestSubHash < TestHash

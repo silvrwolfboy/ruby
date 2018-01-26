@@ -84,7 +84,7 @@ module Net # :nodoc:
       @read_timeout = read_timeout
       @continue_timeout = continue_timeout
       @debug_output = debug_output
-      @rbuf = ''.dup
+      @rbuf = ''.b
     end
 
     attr_reader :io
@@ -114,7 +114,7 @@ module Net # :nodoc:
 
     public
 
-    def read(len, dest = ''.dup, ignore_eof = false)
+    def read(len, dest = ''.b, ignore_eof = false)
       LOG "reading #{len} bytes..."
       read_bytes = 0
       begin
@@ -134,7 +134,7 @@ module Net # :nodoc:
       dest
     end
 
-    def read_all(dest = ''.dup)
+    def read_all(dest = ''.b)
       LOG 'reading all...'
       read_bytes = 0
       begin
@@ -172,8 +172,10 @@ module Net # :nodoc:
     BUFSIZE = 1024 * 16
 
     def rbuf_fill
-      case rv = @io.read_nonblock(BUFSIZE, exception: false)
+      tmp = @rbuf.empty? ? @rbuf : nil
+      case rv = @io.read_nonblock(BUFSIZE, tmp, exception: false)
       when String
+        return if rv.equal?(tmp)
         @rbuf << rv
         rv.clear
         return
@@ -191,7 +193,12 @@ module Net # :nodoc:
     end
 
     def rbuf_consume(len)
-      s = @rbuf.slice!(0, len)
+      if len == @rbuf.size
+        s = @rbuf
+        @rbuf = ''.b
+      else
+        s = @rbuf.slice!(0, len)
+      end
       @debug_output << %Q[-> #{s.dump}\n] if @debug_output
       s
     end
@@ -202,9 +209,9 @@ module Net # :nodoc:
 
     public
 
-    def write(str)
+    def write(*strs)
       writing {
-        write0 str
+        write0(*strs)
       }
     end
 
@@ -228,9 +235,9 @@ module Net # :nodoc:
       bytes
     end
 
-    def write0(str)
-      @debug_output << str.dump if @debug_output
-      len = @io.write(str)
+    def write0(*strs)
+      @debug_output << strs.map(&:dump).join if @debug_output
+      len = @io.write(*strs)
       @written_bytes += len
       len
     end
@@ -335,7 +342,7 @@ module Net # :nodoc:
     end
 
     def using_each_crlf_line
-      @wbuf = ''.dup
+      @wbuf = ''.b
       yield
       if not @wbuf.empty?   # unterminated last line
         write0 dot_stuff(@wbuf.chomp) + "\r\n"

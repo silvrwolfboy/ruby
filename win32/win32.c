@@ -23,6 +23,7 @@
 
 #include "ruby/ruby.h"
 #include "ruby/encoding.h"
+#include "ruby/io.h"
 #include "ruby/util.h"
 #include <fcntl.h>
 #include <process.h>
@@ -7968,7 +7969,7 @@ w32_io_info(VALUE *file, w32_io_info_t *st)
 	    CloseHandle(f);
 	    return INVALID_HANDLE_VALUE;
 	}
-	/* this API may not wrok at files on non Microsoft SMB
+	/* this API may not work at files on non Microsoft SMB
 	 * server, fallback to old API then. */
 	if (GetFileInformationByHandle(f, &st->info.bhfi)) {
 	    st->file_id_p = FALSE;

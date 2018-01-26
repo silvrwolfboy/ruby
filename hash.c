@@ -11,9 +11,10 @@
 
 **********************************************************************/
 
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/st.h"
 #include "ruby/util.h"
+#include "internal.h"
 #include <errno.h>
 #include "probes.h"
 #include "id.h"
@@ -193,8 +194,16 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
 	hnum = other_func(a);
     }
   out:
+#if SIZEOF_LONG < SIZEOF_ST_INDEX_T
+    if (hnum > 0)
+	hnum &= (unsigned long)-1 >> 2;
+    else
+	hnum |= ~((unsigned long)-1 >> 2);
+#else
     hnum <<= 1;
-    return (long)RSHIFT(hnum, 1);
+    hnum = RSHIFT(hnum, 1);
+#endif
+    return (long)hnum;
 }
 
 static st_index_t
@@ -216,14 +225,14 @@ rb_any_hash(VALUE a)
 
 /* Here we two primes with random bit generation.  */
 static const uint64_t prime1 = ((uint64_t)0x2e0bb864 << 32) | 0xe9ea7df5;
-static const uint64_t prime2 = ((uint64_t)0xcdb32970 << 32) | 0x830fcaa1;
+static const uint32_t prime2 = 0x830fcab9;
 
 
 static inline uint64_t
 mult_and_mix(uint64_t m1, uint64_t m2)
 {
-#if defined(__GNUC__) && UINT_MAX != ULONG_MAX
-    __uint128_t r = (__uint128_t) m1 * (__uint128_t) m2;
+#if defined HAVE_UINT128_T
+    uint128_t r = (uint128_t) m1 * (uint128_t) m2;
     return (uint64_t) (r >> 64) ^ (uint64_t) r;
 #else
     uint64_t hm1 = m1 >> 32, hm2 = m2 >> 32;
@@ -245,7 +254,7 @@ key64_hash(uint64_t key, uint32_t seed)
 long
 rb_objid_hash(st_index_t index)
 {
-    return (long)key64_hash(rb_hash_start(index), (uint32_t)prime2);
+    return (long)key64_hash(rb_hash_start(index), prime2);
 }
 
 static st_index_t
@@ -282,7 +291,7 @@ rb_ident_hash(st_data_t n)
     }
 #endif
 
-    return (st_index_t)key64_hash(rb_hash_start((st_index_t)n), (uint32_t)prime2);
+    return (st_index_t)key64_hash(rb_hash_start((st_index_t)n), prime2);
 }
 
 static const struct st_hash_type identhash = {
@@ -1574,19 +1583,25 @@ fstring_existing_str(VALUE str)
     }
 }
 
+VALUE
+rb_hash_key_str(VALUE key)
+{
+    VALUE k;
+
+    if (!RB_OBJ_TAINTED(key) &&
+	(k = fstring_existing_str(key)) != Qnil) {
+	return k;
+    }
+    else {
+	return rb_str_new_frozen(key);
+    }
+}
+
 static int
 hash_aset_str(st_data_t *key, st_data_t *val, struct update_arg *arg, int existing)
 {
     if (!existing && !RB_OBJ_FROZEN(*key)) {
-	VALUE k;
-
-	if (!RB_OBJ_TAINTED(*key) &&
-	    (k = fstring_existing_str(*key)) != Qnil) {
-	    *key = k;
-	}
-	else {
-	    *key = rb_str_new_frozen(*key);
-	}
+	*key = rb_hash_key_str(*key);
     }
     return hash_aset(key, val, arg, existing);
 }
@@ -1902,6 +1917,8 @@ rb_hash_transform_keys(VALUE hash)
     return result;
 }
 
+static VALUE rb_hash_flatten(int argc, VALUE *argv, VALUE hash);
+
 /*
  *  call-seq:
  *     hsh.transform_keys! {|key| block } -> hsh
@@ -1925,12 +1942,14 @@ rb_hash_transform_keys_bang(VALUE hash)
     RETURN_SIZED_ENUMERATOR(hash, 0, 0, hash_enum_size);
     rb_hash_modify_check(hash);
     if (RHASH(hash)->ntbl) {
-	long i;
-	VALUE keys = rb_hash_keys(hash);
-	for (i = 0; i < RARRAY_LEN(keys); ++i) {
-	    VALUE key = RARRAY_AREF(keys, i), new_key = rb_yield(key);
-	    rb_hash_aset(hash, new_key, rb_hash_delete(hash, key));
-	}
+        long i;
+        VALUE pairs = rb_hash_flatten(0, NULL, hash);
+        rb_hash_clear(hash);
+        for (i = 0; i < RARRAY_LEN(pairs); i += 2) {
+            VALUE key = RARRAY_AREF(pairs, i), new_key = rb_yield(key),
+                  val = RARRAY_AREF(pairs, i+1);
+            rb_hash_aset(hash, new_key, val);
+        }
     }
     return hash;
 }

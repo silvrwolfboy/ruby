@@ -676,14 +676,17 @@ class TestProcess < Test::Unit::TestCase
         return
       end
       IO.popen([RUBY, '-e', <<-'EOS']) {|io|
+        STDOUT.sync = true
         trap(:USR1) { print "trap\n" }
+        puts "start"
         system("cat", :in => "fifo")
       EOS
-        sleep 1
+        assert_equal("start\n", io.gets)
+        sleep 0.2 # wait for the child to stop at opening "fifo"
         Process.kill(:USR1, io.pid)
-        sleep 1
+        assert_equal("trap\n", io.readpartial(8))
         File.write("fifo", "ok\n")
-        assert_equal("trap\nok\n", io.read)
+        assert_equal("ok\n", io.read)
       }
     }
   end unless windows? # does not support fifo
@@ -1847,7 +1850,12 @@ class TestProcess < Test::Unit::TestCase
     skip "Process.groups not implemented on Windows platform" if windows?
     feature6975 = '[ruby-core:47414]'
 
-    [30000, *Process.groups.map {|g| g = Etc.getgrgid(g); [g.name, g.gid]}].each do |group, gid|
+    groups = Process.groups.map do |g|
+      g = Etc.getgrgid(g) rescue next
+      [g.name, g.gid]
+    end
+    groups.compact!
+    [30000, *groups].each do |group, gid|
       assert_nothing_raised(feature6975) do
         begin
           system(*TRUECOMMAND, gid: group)

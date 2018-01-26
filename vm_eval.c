@@ -443,34 +443,34 @@ rb_check_funcall_with_hook(VALUE recv, ID mid, int argc, const VALUE *argv,
 const char *
 rb_type_str(enum ruby_value_type type)
 {
-#define type_case(t) case t: return #t;
+#define type_case(t) t: return #t
     switch (type) {
-      type_case(T_NONE)
-      type_case(T_OBJECT)
-      type_case(T_CLASS)
-      type_case(T_MODULE)
-      type_case(T_FLOAT)
-      type_case(T_STRING)
-      type_case(T_REGEXP)
-      type_case(T_ARRAY)
-      type_case(T_HASH)
-      type_case(T_STRUCT)
-      type_case(T_BIGNUM)
-      type_case(T_FILE)
-      type_case(T_DATA)
-      type_case(T_MATCH)
-      type_case(T_COMPLEX)
-      type_case(T_RATIONAL)
-      type_case(T_NIL)
-      type_case(T_TRUE)
-      type_case(T_FALSE)
-      type_case(T_SYMBOL)
-      type_case(T_FIXNUM)
-      type_case(T_IMEMO)
-      type_case(T_UNDEF)
-      type_case(T_NODE)
-      type_case(T_ICLASS)
-      type_case(T_ZOMBIE)
+      case type_case(T_NONE);
+      case type_case(T_OBJECT);
+      case type_case(T_CLASS);
+      case type_case(T_MODULE);
+      case type_case(T_FLOAT);
+      case type_case(T_STRING);
+      case type_case(T_REGEXP);
+      case type_case(T_ARRAY);
+      case type_case(T_HASH);
+      case type_case(T_STRUCT);
+      case type_case(T_BIGNUM);
+      case type_case(T_FILE);
+      case type_case(T_DATA);
+      case type_case(T_MATCH);
+      case type_case(T_COMPLEX);
+      case type_case(T_RATIONAL);
+      case type_case(T_NIL);
+      case type_case(T_TRUE);
+      case type_case(T_FALSE);
+      case type_case(T_SYMBOL);
+      case type_case(T_FIXNUM);
+      case type_case(T_IMEMO);
+      case type_case(T_UNDEF);
+      case type_case(T_NODE);
+      case type_case(T_ICLASS);
+      case type_case(T_ZOMBIE);
       case T_MASK: break;
     }
 #undef type_case
@@ -1060,7 +1060,7 @@ loop_stop(VALUE dummy, VALUE exc)
 static VALUE
 rb_f_loop_size(VALUE self, VALUE args, VALUE eobj)
 {
-    return DBL2NUM(INFINITY);
+    return DBL2NUM(HUGE_VAL);
 }
 
 /*
@@ -1148,7 +1148,7 @@ rb_iterate0(VALUE (* it_proc) (VALUE), VALUE data1,
 	    retval = THROW_DATA_VAL(err);
 	}
 	else if (0) {
-	    SDR(); fprintf(stderr, "%p, %p\n", cfp, escape_cfp);
+	    SDR(); fprintf(stderr, "%p, %p\n", (void *)cfp, (void *)escape_cfp);
 	}
     }
     EC_POP_TAG();
@@ -1242,132 +1242,103 @@ rb_each(VALUE obj)
     return rb_call(obj, idEach, 0, 0, CALL_FCALL);
 }
 
-static VALUE
-adjust_backtrace_in_eval(const rb_execution_context_t *ec, VALUE errinfo)
+void rb_parser_warn_location(VALUE, int);
+static const rb_iseq_t *
+eval_make_iseq(VALUE src, VALUE fname, int line, const rb_binding_t *bind,
+	       const struct rb_block *base_block)
 {
-    VALUE errat = rb_get_backtrace(errinfo);
-    VALUE mesg = rb_attr_get(errinfo, id_mesg);
-    if (RB_TYPE_P(errat, T_ARRAY)) {
-	VALUE bt2 = rb_ec_backtrace_str_ary(ec, 0, 0);
-	if (RARRAY_LEN(bt2) > 0) {
-	    if (RB_TYPE_P(mesg, T_STRING) && !RSTRING_LEN(mesg)) {
-		rb_ivar_set(errinfo, id_mesg, RARRAY_AREF(errat, 0));
-	    }
-	    RARRAY_ASET(errat, 0, RARRAY_AREF(bt2, 0));
-	}
+    const VALUE parser = rb_parser_new();
+    const rb_iseq_t *const parent = vm_block_iseq(base_block);
+    VALUE realpath = Qnil;
+    rb_iseq_t *iseq = 0;
+    rb_ast_t *ast;
+
+    if (!fname) {
+	fname = rb_source_location(&line);
     }
-    return errinfo;
+
+    if (fname != Qundef) {
+	realpath = fname;
+    }
+    else if (bind) {
+	fname = pathobj_path(bind->pathobj);
+	realpath = pathobj_realpath(bind->pathobj);
+	line = bind->first_lineno;
+	rb_parser_warn_location(parser, TRUE);
+    }
+    else {
+	fname = rb_usascii_str_new_cstr("(eval)");
+    }
+
+    rb_parser_set_context(parser, base_block, FALSE);
+    ast = rb_parser_compile_string_path(parser, fname, src, line);
+    if (ast->body.root) {
+	iseq = rb_iseq_new_with_opt(&ast->body,
+				    parent->body->location.label,
+				    fname, realpath, INT2FIX(line),
+				    parent, ISEQ_TYPE_EVAL, NULL);
+    }
+    rb_ast_dispose(ast);
+
+    if (0 && iseq) {		/* for debug */
+	VALUE disasm = rb_iseq_disasm(iseq);
+	printf("%s\n", StringValuePtr(disasm));
+    }
+
+    return iseq;
 }
 
 static VALUE
-eval_string_with_cref(VALUE self, VALUE src, VALUE scope, rb_cref_t *const cref_arg,
-		      VALUE filename, int lineno)
+eval_string_with_cref(VALUE self, VALUE src, rb_cref_t *cref, VALUE file, int line)
 {
-    int state;
-    VALUE result = Qundef;
     rb_execution_context_t *ec = GET_EC();
     struct rb_block block;
-    const struct rb_block *base_block;
-    volatile VALUE file;
-    volatile int line;
-
-    file = filename ? filename : rb_source_location(&lineno);
-    line = lineno;
-
-    {
-	rb_cref_t *cref = cref_arg;
-	rb_binding_t *bind = 0;
-	const rb_iseq_t *iseq;
-	VALUE realpath = Qnil;
-	VALUE fname;
-
-	if (file != Qundef) {
-	    realpath = file;
-	}
-
-	if (!NIL_P(scope)) {
-	    bind = Check_TypedStruct(scope, &ruby_binding_data_type);
-
-	    if (NIL_P(realpath)) {
-		file = pathobj_path(bind->pathobj);
-		realpath = pathobj_realpath(bind->pathobj);
-		line = bind->first_lineno;
-	    }
-	    base_block = &bind->block;
-	}
-	else {
-	    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(ec, ec->cfp);
-
-	    if (cfp != 0) {
-		block.as.captured = *VM_CFP_TO_CAPTURED_BLOCK(cfp);
-		block.as.captured.self = self;
-		block.as.captured.code.iseq = cfp->iseq;
-		block.type = block_type_iseq;
-		base_block = &block;
-	    }
-	    else {
-		rb_raise(rb_eRuntimeError, "Can't eval on top of Fiber or Thread");
-	    }
-	}
-
-	if ((fname = file) == Qundef) {
-	    fname = rb_usascii_str_new_cstr("(eval)");
-	}
-
-	/* make eval iseq */
-	iseq = rb_iseq_compile_with_option(src, fname, realpath, INT2FIX(line), base_block, Qnil);
-
-	if (!iseq) {
-	    rb_exc_raise(adjust_backtrace_in_eval(ec, ec->errinfo));
-	}
-
-	/* TODO: what the code checking? */
-	if (!cref && base_block->as.captured.code.val) {
-	    if (NIL_P(scope)) {
-		rb_cref_t *orig_cref = rb_vm_get_cref(vm_block_ep(base_block));
-		cref = vm_cref_dup(orig_cref);
-	    }
-	    else {
-		cref = NULL; /* use stacked CREF */
-	    }
-	}
-	vm_set_eval_stack(ec, iseq, cref, base_block);
-
-	if (0) {		/* for debug */
-	    VALUE disasm = rb_iseq_disasm(iseq);
-	    printf("%s\n", StringValuePtr(disasm));
-	}
-
-	/* save new env */
-	if (bind && iseq->body->local_table_size > 0) {
-	    vm_bind_update_env(scope, bind, vm_make_env_object(ec, ec->cfp));
-	}
+    const rb_iseq_t *iseq;
+    rb_control_frame_t *cfp = rb_vm_get_ruby_level_next_cfp(ec, ec->cfp);
+    if (!cfp) {
+	rb_raise(rb_eRuntimeError, "Can't eval on top of Fiber or Thread");
     }
 
-    if (file != Qundef) {
-	/* kick */
-	return vm_exec(ec);
+    block.as.captured = *VM_CFP_TO_CAPTURED_BLOCK(cfp);
+    block.as.captured.self = self;
+    block.as.captured.code.iseq = cfp->iseq;
+    block.type = block_type_iseq;
+
+    iseq = eval_make_iseq(src, file, line, NULL, &block);
+    if (!iseq) {
+	rb_exc_raise(ec->errinfo);
     }
 
-    EC_PUSH_TAG(ec);
-    if ((state = EC_EXEC_TAG()) == TAG_NONE) {
-	result = vm_exec(ec);
+    /* TODO: what the code checking? */
+    if (!cref && block.as.captured.code.val) {
+	rb_cref_t *orig_cref = rb_vm_get_cref(vm_block_ep(&block));
+	cref = vm_cref_dup(orig_cref);
     }
-    EC_POP_TAG();
+    vm_set_eval_stack(ec, iseq, cref, &block);
 
-    if (state) {
-	if (state == TAG_RAISE) {
-	    adjust_backtrace_in_eval(ec, ec->errinfo);
-	}
-	EC_JUMP_TAG(ec, state);
-    }
-    return result;
+    /* kick */
+    return vm_exec(ec);
 }
 
 static VALUE
-eval_string(VALUE self, VALUE src, VALUE scope, VALUE file, int line)
+eval_string_with_scope(VALUE scope, VALUE src, VALUE file, int line)
 {
-    return eval_string_with_cref(self, src, scope, 0, file, line);
+    rb_execution_context_t *ec = GET_EC();
+    rb_binding_t *bind = Check_TypedStruct(scope, &ruby_binding_data_type);
+    const rb_iseq_t *iseq = eval_make_iseq(src, file, line, bind, &bind->block);
+    if (!iseq) {
+	rb_exc_raise(ec->errinfo);
+    }
+
+    vm_set_eval_stack(ec, iseq, NULL, &bind->block);
+
+    /* save new env */
+    if (iseq->body->local_table_size > 0) {
+	vm_bind_update_env(scope, bind, vm_make_env_object(ec, ec->cfp));
+    }
+
+    /* kick */
+    return vm_exec(ec);
 }
 
 /*
@@ -1406,7 +1377,11 @@ rb_f_eval(int argc, const VALUE *argv, VALUE self)
 
     if (!NIL_P(vfile))
 	file = vfile;
-    return eval_string(self, src, scope, file, line);
+
+    if (NIL_P(scope))
+	return eval_string_with_cref(self, src, NULL, file, line);
+    else
+	return eval_string_with_scope(scope, src, file, line);
 }
 
 /** @note This function name is not stable. */
@@ -1414,7 +1389,7 @@ VALUE
 ruby_eval_string_from_file(const char *str, const char *filename)
 {
     VALUE file = filename ? rb_str_new_cstr(filename) : 0;
-    return eval_string(rb_vm_top_self(), rb_str_new2(str), Qnil, file, 1);
+    return eval_string_with_cref(rb_vm_top_self(), rb_str_new2(str), NULL, file, 1);
 }
 
 struct eval_string_from_file_arg {
@@ -1426,7 +1401,7 @@ static VALUE
 eval_string_from_file_helper(VALUE data)
 {
     const struct eval_string_from_file_arg *const arg = (struct eval_string_from_file_arg*)data;
-    return eval_string(rb_vm_top_self(), arg->str, Qnil, arg->filename, 1);
+    return eval_string_with_cref(rb_vm_top_self(), arg->str, NULL, arg->filename, 1);
 }
 
 VALUE
@@ -1515,7 +1490,7 @@ rb_eval_cmd(VALUE cmd, VALUE arg, int level)
 {
     enum ruby_tag_type state;
     volatile VALUE val = Qnil;		/* OK */
-    const int VAR_NOCLOBBERED(safe) = rb_safe_level();
+    const int VAR_NOCLOBBERED(current_safe_level) = rb_safe_level();
     rb_execution_context_t * volatile ec = GET_EC();
 
     if (OBJ_TAINTED(cmd)) {
@@ -1530,12 +1505,12 @@ rb_eval_cmd(VALUE cmd, VALUE arg, int level)
 			      RARRAY_CONST_PTR(arg));
 	}
 	else {
-	    val = eval_string(rb_vm_top_self(), cmd, Qnil, 0, 0);
+	    val = eval_string_with_cref(rb_vm_top_self(), cmd, NULL, 0, 0);
 	}
     }
     EC_POP_TAG();
 
-    rb_set_safe_level_force(safe);
+    rb_set_safe_level_force(current_safe_level);
     if (state) EC_JUMP_TAG(ec, state);
     return val;
 }
@@ -1615,7 +1590,7 @@ eval_under(VALUE under, VALUE self, VALUE src, VALUE file, int line)
 {
     rb_cref_t *cref = vm_cref_push(GET_EC(), under, NULL, SPECIAL_CONST_P(self) && !NIL_P(under));
     SafeStringValue(src);
-    return eval_string_with_cref(self, src, Qnil, cref, file, line);
+    return eval_string_with_cref(self, src, cref, file, line);
 }
 
 static VALUE
@@ -2175,9 +2150,9 @@ Init_vm_eval(void)
     rb_define_private_method(rb_cBasicObject, "method_missing", rb_method_missing, -1);
 
 #if 1
-    rb_add_method(rb_cBasicObject, rb_intern("__send__"),
+    rb_add_method(rb_cBasicObject, id__send__,
 		  VM_METHOD_TYPE_OPTIMIZED, (void *)OPTIMIZED_METHOD_TYPE_SEND, METHOD_VISI_PUBLIC);
-    rb_add_method(rb_mKernel, rb_intern("send"),
+    rb_add_method(rb_mKernel, idSend,
 		  VM_METHOD_TYPE_OPTIMIZED, (void *)OPTIMIZED_METHOD_TYPE_SEND, METHOD_VISI_PUBLIC);
 #else
     rb_define_method(rb_cBasicObject, "__send__", rb_f_send, -1);

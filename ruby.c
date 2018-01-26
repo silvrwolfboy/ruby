@@ -15,8 +15,9 @@
 #include <windows.h>
 #include <sys/cygwin.h>
 #endif
-#include "internal.h"
+#include "ruby/encoding.h"
 #include "ruby/thread.h"
+#include "internal.h"
 #include "eval_intern.h"
 #include "dln.h"
 #include <stdio.h>
@@ -1704,7 +1705,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 	rb_enc_set_default_internal(Qnil);
     rb_stdio_set_default_encoding();
 
-    if (!ast->root) {
+    if (!ast->body.root) {
 	rb_ast_dispose(ast);
 	return Qfalse;
     }
@@ -1726,7 +1727,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
     }
 
     if (dump & (DUMP_BIT(parsetree)|DUMP_BIT(parsetree_with_comment))) {
-	rb_io_write(rb_stdout, rb_parser_dump_tree(ast->root, dump & DUMP_BIT(parsetree_with_comment)));
+	rb_io_write(rb_stdout, rb_parser_dump_tree(ast->body.root, dump & DUMP_BIT(parsetree_with_comment)));
 	rb_io_flush(rb_stdout);
 	dump &= ~DUMP_BIT(parsetree)&~DUMP_BIT(parsetree_with_comment);
 	if (!dump) {
@@ -1749,7 +1750,7 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 	    }
 	}
 	base_block = toplevel_context(toplevel_binding);
-	iseq = rb_iseq_new_main(ast->root, opt->script_name, path, vm_block_iseq(base_block));
+	iseq = rb_iseq_new_main(&ast->body, opt->script_name, path, vm_block_iseq(base_block));
 	rb_ast_dispose(ast);
     }
 
@@ -1964,7 +1965,7 @@ open_load_file(VALUE fname_v, int *xflag)
 #endif
 
 	if ((fd = rb_cloexec_open(fname, mode, 0)) < 0) {
-	    int e = errno;
+	    e = errno;
 	    if (!rb_gc_for_fd(e)) {
 		rb_load_fail(fname_v, strerror(e));
 	    }

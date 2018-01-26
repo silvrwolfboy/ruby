@@ -165,6 +165,7 @@ RUBY_SYMBOL_EXPORT_BEGIN
 
 /* compile.c */
 VALUE rb_iseq_compile_node(rb_iseq_t *iseq, const NODE *node);
+VALUE rb_iseq_compile_ifunc(rb_iseq_t *iseq, const struct vm_ifunc *ifunc);
 int rb_iseq_translate_threaded_code(rb_iseq_t *iseq);
 VALUE *rb_iseq_original_iseq(const rb_iseq_t *iseq);
 void rb_iseq_build_from_ary(rb_iseq_t *iseq, VALUE misc,
@@ -180,6 +181,8 @@ unsigned int rb_iseq_line_no(const rb_iseq_t *iseq, size_t pos);
 void rb_iseq_trace_set(const rb_iseq_t *iseq, rb_event_flag_t turnon_events);
 void rb_iseq_trace_set_all(rb_event_flag_t turnon_events);
 void rb_iseq_trace_on_all(void);
+void rb_iseq_insns_info_encode_positions(const rb_iseq_t *iseq);
+void rb_iseq_insns_info_decode_positions(const rb_iseq_t *iseq);
 
 VALUE rb_iseqw_new(const rb_iseq_t *iseq);
 const rb_iseq_t *rb_iseqw_to_iseq(VALUE iseqw);
@@ -189,7 +192,7 @@ VALUE rb_iseq_label(const rb_iseq_t *iseq);
 VALUE rb_iseq_base_label(const rb_iseq_t *iseq);
 VALUE rb_iseq_first_lineno(const rb_iseq_t *iseq);
 VALUE rb_iseq_method_name(const rb_iseq_t *iseq);
-void rb_iseq_code_range(const rb_iseq_t *iseq, int *first_lineno, int *first_column, int *last_lineno, int *last_column);
+void rb_iseq_code_location(const rb_iseq_t *iseq, int *first_lineno, int *first_column, int *last_lineno, int *last_column);
 
 /* proc.c */
 const rb_iseq_t *rb_method_iseq(VALUE body);
@@ -203,7 +206,6 @@ struct rb_compile_option_struct {
     unsigned int operands_unification: 1;
     unsigned int instructions_unification: 1;
     unsigned int stack_caching: 1;
-    unsigned int trace_instruction: 1;
     unsigned int frozen_string_literal: 1;
     unsigned int debug_frozen_string_literal: 1;
     unsigned int coverage_enabled: 1;
@@ -211,7 +213,6 @@ struct rb_compile_option_struct {
 };
 
 struct iseq_insn_info_entry {
-    unsigned int position;
     int line_no;
     rb_event_flag_t events;
 };
@@ -248,18 +249,19 @@ struct iseq_catch_table_entry {
 
 PACKED_STRUCT_UNALIGNED(struct iseq_catch_table {
     unsigned int size;
-    struct iseq_catch_table_entry entries[1]; /* flexible array */
+    struct iseq_catch_table_entry entries[FLEX_ARY_LEN];
 });
 
 static inline int
 iseq_catch_table_bytes(int n)
 {
     enum {
-	catch_table_entries_max = (INT_MAX - sizeof(struct iseq_catch_table)) / sizeof(struct iseq_catch_table_entry)
+	catch_table_entry_size = sizeof(struct iseq_catch_table_entry),
+	catch_table_entries_max = (INT_MAX - offsetof(struct iseq_catch_table, entries)) / catch_table_entry_size
     };
     if (n > catch_table_entries_max) rb_fatal("too large iseq_catch_table - %d", n);
-    return (int)(sizeof(struct iseq_catch_table) +
-		 (n - 1) * sizeof(struct iseq_catch_table_entry));
+    return (int)(offsetof(struct iseq_catch_table, entries) +
+		 n * catch_table_entry_size);
 }
 
 #define INITIAL_ISEQ_COMPILE_DATA_STORAGE_BUFF_SIZE (512)
@@ -268,16 +270,13 @@ struct iseq_compile_data_storage {
     struct iseq_compile_data_storage *next;
     unsigned int pos;
     unsigned int size;
-    char buff[1]; /* flexible array */
+    char buff[FLEX_ARY_LEN];
 };
-
-/* account for flexible array */
-#define SIZEOF_ISEQ_COMPILE_DATA_STORAGE \
-    (sizeof(struct iseq_compile_data_storage) - 1)
 
 /* defined? */
 
 enum defined_type {
+    DEFINED_NOT_DEFINED,
     DEFINED_NIL = 1,
     DEFINED_IVAR,
     DEFINED_LVAR,

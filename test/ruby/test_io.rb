@@ -869,7 +869,8 @@ class TestIO < Test::Unit::TestCase
               s1.close
               IO.select([s2])
               Process.kill(:USR1, Process.ppid)
-              s2.read
+              buf = String.new(capacity: 16384)
+              nil while s2.read(16384, buf)
             end
             s2.close
             nr.times do
@@ -1195,7 +1196,7 @@ class TestIO < Test::Unit::TestCase
     opts = {}
     if defined?(Process::RLIMIT_NPROC)
       lim = Process.getrlimit(Process::RLIMIT_NPROC)[1]
-      opts[:rlimit_nproc] = [lim, 1024].min
+      opts[:rlimit_nproc] = [lim, 2048].min
     end
     f = IO.popen([ruby] + args, 'r+', opts)
     pid = f.pid

@@ -56,11 +56,20 @@
 
 #define RUBY_VM_THREAD_MODEL 2
 
+/*
+ * implementation selector of get_insn_info algorithm
+ *   0: linear search
+ *   1: binary search
+ *   2: succinct bitvector
+ */
+#ifndef VM_INSN_INFO_TABLE_IMPL
+# define VM_INSN_INFO_TABLE_IMPL 2
+#endif
+
 #include "ruby/ruby.h"
 #include "ruby/st.h"
 
 #include "node.h"
-#include "vm_debug.h"
 #include "vm_opts.h"
 #include "id.h"
 #include "method.h"
@@ -130,6 +139,7 @@
 #endif /* OPT_CALL_THREADED_CODE */
 
 typedef unsigned long rb_num_t;
+typedef   signed long rb_snum_t;
 
 enum ruby_tag_type {
     RUBY_TAG_NONE	= 0x0,
@@ -252,7 +262,7 @@ typedef struct rb_iseq_location_struct {
     VALUE base_label;   /* String */
     VALUE label;        /* String */
     VALUE first_lineno; /* TODO: may be unsigned short */
-    rb_code_range_t code_range;
+    rb_code_location_t code_location;
 } rb_iseq_location_t;
 
 #define PATHOBJ_PATH     0
@@ -292,7 +302,7 @@ struct rb_iseq_constant_body {
 	ISEQ_TYPE_ENSURE,
 	ISEQ_TYPE_EVAL,
 	ISEQ_TYPE_MAIN,
-	ISEQ_TYPE_DEFINED_GUARD
+	ISEQ_TYPE_PLAIN
     } type;              /* instruction sequence type */
 
     unsigned int iseq_size;
@@ -371,7 +381,14 @@ struct rb_iseq_constant_body {
     rb_iseq_location_t location;
 
     /* insn info, must be freed */
-    const struct iseq_insn_info_entry *insns_info;
+    struct iseq_insn_info {
+	const struct iseq_insn_info_entry *body;
+	unsigned int *positions;
+	unsigned int size;
+#if VM_INSN_INFO_TABLE_IMPL == 2
+	struct succ_index_table *succ_index_table;
+#endif
+    } insns_info;
 
     const ID *local_table;		/* must free */
 
@@ -396,7 +413,6 @@ struct rb_iseq_constant_body {
     unsigned int is_size;
     unsigned int ci_size;
     unsigned int ci_kw_size;
-    unsigned int insns_info_size;
     unsigned int stack_max; /* for stack overflow check */
 };
 
@@ -473,6 +489,7 @@ enum ruby_basic_operators {
     BOP_UMINUS,
     BOP_MAX,
     BOP_MIN,
+    BOP_CALL,
 
     BOP_LAST_
 };
@@ -515,6 +532,9 @@ typedef struct rb_vm_struct {
     unsigned int running: 1;
     unsigned int thread_abort_on_exception: 1;
     unsigned int thread_report_on_exception: 1;
+
+    unsigned int safe_level_: 1;
+
     int trace_running;
     volatile int sleeper;
 
@@ -606,6 +626,7 @@ typedef struct rb_vm_struct {
 #define NIL_REDEFINED_OP_FLAG    (1 << 9)
 #define TRUE_REDEFINED_OP_FLAG   (1 << 10)
 #define FALSE_REDEFINED_OP_FLAG  (1 << 11)
+#define PROC_REDEFINED_OP_FLAG   (1 << 12)
 
 #define BASIC_OP_UNREDEFINED_P(op, klass) (LIKELY((GET_VM()->redefined_flag[(op)]&(klass)) == 0))
 
@@ -736,7 +757,6 @@ typedef struct rb_execution_context_struct {
 
     struct rb_vm_tag *tag;
     struct rb_vm_protect_tag *protect_tag;
-    int safe_level;
     int raised_flag;
 
     /* interrupt flags */
@@ -872,11 +892,13 @@ typedef enum {
 RUBY_SYMBOL_EXPORT_BEGIN
 
 /* node -> iseq */
-rb_iseq_t *rb_iseq_new         (const NODE *node, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent, enum iseq_type);
-rb_iseq_t *rb_iseq_new_top     (const NODE *node, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent);
-rb_iseq_t *rb_iseq_new_main    (const NODE *node,             VALUE path, VALUE realpath, const rb_iseq_t *parent);
-rb_iseq_t *rb_iseq_new_with_opt(const NODE *node, VALUE name, VALUE path, VALUE realpath, VALUE first_lineno,
+rb_iseq_t *rb_iseq_new         (const rb_ast_body_t *ast, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent, enum iseq_type);
+rb_iseq_t *rb_iseq_new_top     (const rb_ast_body_t *ast, VALUE name, VALUE path, VALUE realpath, const rb_iseq_t *parent);
+rb_iseq_t *rb_iseq_new_main    (const rb_ast_body_t *ast,             VALUE path, VALUE realpath, const rb_iseq_t *parent);
+rb_iseq_t *rb_iseq_new_with_opt(const rb_ast_body_t *ast, VALUE name, VALUE path, VALUE realpath, VALUE first_lineno,
 				const rb_iseq_t *parent, enum iseq_type, const rb_compile_option_t*);
+rb_iseq_t *rb_iseq_new_ifunc(const struct vm_ifunc *ifunc, VALUE name, VALUE path, VALUE realpath, VALUE first_lineno,
+			     const rb_iseq_t *parent, enum iseq_type, const rb_compile_option_t*);
 
 /* src -> iseq */
 rb_iseq_t *rb_iseq_compile(VALUE src, VALUE file, VALUE line);
@@ -899,9 +921,8 @@ RUBY_SYMBOL_EXPORT_END
 
 typedef struct {
     const struct rb_block block;
-    int8_t safe_level;		/* 0..1 */
-    int8_t is_from_method;	/* bool */
-    int8_t is_lambda;		/* bool */
+    unsigned int is_from_method: 1;	/* bool */
+    unsigned int is_lambda: 1;		/* bool */
 } rb_proc_t;
 
 typedef struct {
@@ -937,7 +958,6 @@ enum vm_check_match_type {
 enum vm_call_flag_bits {
     VM_CALL_ARGS_SPLAT_bit,     /* m(*args) */
     VM_CALL_ARGS_BLOCKARG_bit,  /* m(&block) */
-    VM_CALL_ARGS_BLOCKARG_BLOCKPARAM_bit,  /* m(&block) and block is a passed block parameter */
     VM_CALL_FCALL_bit,          /* m(...) */
     VM_CALL_VCALL_bit,          /* m */
     VM_CALL_ARGS_SIMPLE_bit,    /* (ci->flag & (SPLAT|BLOCKARG)) && blockiseq == NULL && ci->kw_arg == NULL */
@@ -952,7 +972,6 @@ enum vm_call_flag_bits {
 
 #define VM_CALL_ARGS_SPLAT      (0x01 << VM_CALL_ARGS_SPLAT_bit)
 #define VM_CALL_ARGS_BLOCKARG   (0x01 << VM_CALL_ARGS_BLOCKARG_bit)
-#define VM_CALL_ARGS_BLOCKARG_BLOCKPARAM (0x01 << VM_CALL_ARGS_BLOCKARG_BLOCKPARAM_bit)
 #define VM_CALL_FCALL           (0x01 << VM_CALL_FCALL_bit)
 #define VM_CALL_VCALL           (0x01 << VM_CALL_VCALL_bit)
 #define VM_CALL_ARGS_SIMPLE     (0x01 << VM_CALL_ARGS_SIMPLE_bit)
@@ -1007,7 +1026,7 @@ enum {
      * X   : tag for GC marking (It seems as Fixnum)
      * EEE : 3 bits Env flags
      * FF..: 6 bits Frame flags
-     * MM..: 16 bits frame magic (to check frame corruption)
+     * MM..: 15 bits frame magic (to check frame corruption)
      */
 
     /* frame types */
@@ -1018,10 +1037,10 @@ enum {
     VM_FRAME_MAGIC_CFUNC  = 0x55550001,
     VM_FRAME_MAGIC_IFUNC  = 0x66660001,
     VM_FRAME_MAGIC_EVAL   = 0x77770001,
-    VM_FRAME_MAGIC_RESCUE = 0x88880001,
-    VM_FRAME_MAGIC_DUMMY  = 0x99990001,
+    VM_FRAME_MAGIC_RESCUE = 0x78880001,
+    VM_FRAME_MAGIC_DUMMY  = 0x79990001,
 
-    VM_FRAME_MAGIC_MASK   = 0xffff0001,
+    VM_FRAME_MAGIC_MASK   = 0x7fff0001,
 
     /* frame flag */
     VM_FRAME_FLAG_PASSED    = 0x0010,
@@ -1464,8 +1483,9 @@ VM_BH_FROM_PROC(VALUE procval)
 
 /* VM related object allocate functions */
 VALUE rb_thread_alloc(VALUE klass);
-VALUE rb_proc_alloc(VALUE klass);
 VALUE rb_binding_alloc(VALUE klass);
+VALUE rb_proc_alloc(VALUE klass);
+VALUE rb_proc_dup(VALUE self);
 
 /* for debug */
 extern void rb_vmdebug_stack_dump_raw(const rb_execution_context_t *ec, const rb_control_frame_t *cfp);

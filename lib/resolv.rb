@@ -169,7 +169,7 @@ class Resolv
     begin
       raise LoadError unless /mswin|mingw|cygwin/ =~ RUBY_PLATFORM
       require 'win32/resolv'
-      DefaultFileName = Win32::Resolv.get_hosts_path
+      DefaultFileName = Win32::Resolv.get_hosts_path || IO::NULL
     rescue LoadError
       DefaultFileName = '/etc/hosts'
     end
@@ -236,9 +236,7 @@ class Resolv
 
     def each_address(name, &proc)
       lazy_initialize
-      if @name2addr.include?(name)
-        @name2addr[name].each(&proc)
-      end
+      @name2addr[name]&.each(&proc)
     end
 
     ##
@@ -2603,7 +2601,7 @@ class Resolv
     def each_address(name)
       name = Resolv::DNS::Name.create(name)
 
-      return unless name.to_a.last.to_s == 'local'
+      return unless name[-1].to_s == 'local'
 
       super(name)
     end

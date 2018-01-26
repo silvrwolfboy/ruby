@@ -13,8 +13,6 @@
 #define RUBY_INTERNAL_H 1
 
 #include "ruby.h"
-#include "ruby/encoding.h"
-#include "ruby/io.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -79,8 +77,10 @@ extern "C" {
 # define __has_extension __has_feature
 #endif
 
-#if GCC_VERSION_SINCE(4, 6, 0) || __has_extension(c_static_assert)
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 # define STATIC_ASSERT(name, expr) _Static_assert(expr, #name ": " #expr)
+#elif GCC_VERSION_SINCE(4, 6, 0) || __has_extension(c_static_assert)
+# define STATIC_ASSERT(name, expr) RB_GNUC_EXTENSION _Static_assert(expr, #name ": " #expr)
 #else
 # define STATIC_ASSERT(name, expr) typedef int static_assert_##name##_check[1 - 2*!(expr)]
 #endif
@@ -107,7 +107,7 @@ extern "C" {
     __builtin_mul_overflow_p((a), (b), (__typeof__(a * b))0)
 #elif defined HAVE_BUILTIN___BUILTIN_MUL_OVERFLOW
 #define MUL_OVERFLOW_P(a, b) \
-    ({__typeof__(a) c; __builtin_mul_overflow((a), (b), &c);})
+    RB_GNUC_EXTENSION_BLOCK(__typeof__(a) c; __builtin_mul_overflow((a), (b), &c))
 #endif
 
 #define MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, min, max) ( \
@@ -120,10 +120,10 @@ extern "C" {
 #ifdef HAVE_BUILTIN___BUILTIN_MUL_OVERFLOW_P
 /* __builtin_mul_overflow_p can take bitfield */
 /* and GCC permits bitfields for integers other than int */
-#define MUL_OVERFLOW_FIXNUM_P(a, b) ({ \
+#define MUL_OVERFLOW_FIXNUM_P(a, b) RB_GNUC_EXTENSION_BLOCK( \
     struct { long fixnum : SIZEOF_LONG * CHAR_BIT - 1; } c; \
     __builtin_mul_overflow_p((a), (b), c.fixnum); \
-})
+)
 #else
 #define MUL_OVERFLOW_FIXNUM_P(a, b) MUL_OVERFLOW_SIGNED_INTEGER_P(a, b, FIXNUM_MIN, FIXNUM_MAX)
 #endif
@@ -293,10 +293,15 @@ nlz_int128(uint128_t x)
 static inline unsigned int
 nlz_intptr(uintptr_t x)
 {
-#if SIZEOF_VOIDP == 8
-    return nlz_long_long(x);
-#elif SIZEOF_VOIDP == 4
+#if SIZEOF_UINTPTR_T == SIZEOF_INT
     return nlz_int(x);
+#elif SIZEOF_UINTPTR_T == SIZEOF_LONG
+    return nlz_long(x);
+#elif SIZEOF_UINTPTR_T == SIZEOF_LONG_LONG
+    return nlz_long_long(x);
+#else
+    #error no known integer type corresponds uintptr_t
+    return /* sane compiler */ ~0;
 #endif
 }
 
@@ -507,12 +512,18 @@ rb_fix_mod_fix(VALUE x, VALUE y)
     return mod;
 }
 
-#if defined(HAVE_UINT128_T)
+#if defined(HAVE_UINT128_T) && defined(HAVE_LONG_LONG)
 #   define bit_length(x) \
     (unsigned int) \
     (sizeof(x) <= SIZEOF_INT ? SIZEOF_INT * CHAR_BIT - nlz_int((unsigned int)(x)) : \
      sizeof(x) <= SIZEOF_LONG ? SIZEOF_LONG * CHAR_BIT - nlz_long((unsigned long)(x)) : \
      sizeof(x) <= SIZEOF_LONG_LONG ? SIZEOF_LONG_LONG * CHAR_BIT - nlz_long_long((unsigned LONG_LONG)(x)) : \
+     SIZEOF_INT128_T * CHAR_BIT - nlz_int128((uint128_t)(x)))
+#elif defined(HAVE_UINT128_T)
+#   define bit_length(x) \
+    (unsigned int) \
+    (sizeof(x) <= SIZEOF_INT ? SIZEOF_INT * CHAR_BIT - nlz_int((unsigned int)(x)) : \
+     sizeof(x) <= SIZEOF_LONG ? SIZEOF_LONG * CHAR_BIT - nlz_long((unsigned long)(x)) : \
      SIZEOF_INT128_T * CHAR_BIT - nlz_int128((uint128_t)(x)))
 #elif defined(HAVE_LONG_LONG)
 #   define bit_length(x) \
@@ -914,8 +925,8 @@ struct vm_throw_data {
 
 struct vm_ifunc_argc {
 #if SIZEOF_INT * 2 > SIZEOF_VALUE
-    int min: (SIZEOF_VALUE * CHAR_BIT) / 2;
-    int max: (SIZEOF_VALUE * CHAR_BIT) / 2;
+    signed int min: (SIZEOF_VALUE * CHAR_BIT) / 2;
+    signed int max: (SIZEOF_VALUE * CHAR_BIT) / 2;
 #else
     int min, max;
 #endif
@@ -1048,7 +1059,7 @@ VALUE rb_ary_aref1(VALUE ary, VALUE i);
 VALUE rb_ary_aref2(VALUE ary, VALUE b, VALUE e);
 size_t rb_ary_memsize(VALUE);
 VALUE rb_to_array_type(VALUE obj);
-#ifdef __GNUC__
+#if defined(__GNUC__) && defined(HAVE_VA_ARGS_MACRO)
 #define rb_ary_new_from_args(n, ...) \
     __extension__ ({ \
 	const VALUE args_to_new_ary[] = {__VA_ARGS__}; \
@@ -1137,8 +1148,10 @@ void Init_ext(void);
 /* encoding.c */
 ID rb_id_encoding(void);
 void rb_gc_mark_encodings(void);
+#ifdef RUBY_ENCODING_H
 rb_encoding *rb_enc_get_from_index(int index);
 rb_encoding *rb_enc_check_str(VALUE str1, VALUE str2);
+#endif
 int rb_encdb_replicate(const char *alias, const char *orig);
 int rb_encdb_alias(const char *alias, const char *orig);
 int rb_encdb_dummy(const char *name);
@@ -1157,21 +1170,23 @@ extern VALUE rb_eEAGAIN;
 extern VALUE rb_eEWOULDBLOCK;
 extern VALUE rb_eEINPROGRESS;
 void rb_report_bug_valist(VALUE file, int line, const char *fmt, va_list args);
-VALUE rb_syntax_error_append(VALUE, VALUE, int, int, rb_encoding*, const char*, va_list);
 VALUE rb_check_backtrace(VALUE);
 NORETURN(void rb_async_bug_errno(const char *,int));
 const char *rb_builtin_type_name(int t);
 const char *rb_builtin_class_name(VALUE x);
 PRINTF_ARGS(void rb_sys_warn(const char *fmt, ...), 1, 2);
 PRINTF_ARGS(void rb_syserr_warn(int err, const char *fmt, ...), 2, 3);
+PRINTF_ARGS(void rb_sys_warning(const char *fmt, ...), 1, 2);
+PRINTF_ARGS(void rb_syserr_warning(int err, const char *fmt, ...), 2, 3);
+#ifdef RUBY_ENCODING_H
+VALUE rb_syntax_error_append(VALUE, VALUE, int, int, rb_encoding*, const char*, va_list);
 PRINTF_ARGS(void rb_enc_warn(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_sys_enc_warn(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_syserr_enc_warn(int err, rb_encoding *enc, const char *fmt, ...), 3, 4);
-PRINTF_ARGS(void rb_sys_warning(const char *fmt, ...), 1, 2);
-PRINTF_ARGS(void rb_syserr_warning(int err, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_sys_enc_warning(rb_encoding *enc, const char *fmt, ...), 2, 3);
 PRINTF_ARGS(void rb_syserr_enc_warning(int err, rb_encoding *enc, const char *fmt, ...), 3, 4);
+#endif
 
 #define rb_raise_cstr(etype, mesg) \
     rb_exc_raise(rb_exc_new_str(etype, rb_str_new_cstr(mesg)))
@@ -1194,6 +1209,9 @@ VALUE rb_warning_string(const char *fmt, ...);
 
 /* eval.c */
 VALUE rb_refinement_module_get_refined_class(VALUE module);
+extern ID ruby_static_id_signo, ruby_static_id_status;
+#define id_signo ruby_static_id_signo
+#define id_status ruby_static_id_status
 
 /* eval_error.c */
 VALUE rb_get_backtrace(VALUE info);
@@ -1284,6 +1302,7 @@ st_table *rb_init_identtable(void);
 st_table *rb_init_identtable_with_size(st_index_t size);
 VALUE rb_hash_compare_by_id_p(VALUE hash);
 VALUE rb_to_hash_type(VALUE obj);
+VALUE rb_hash_key_str(VALUE);
 
 #define RHASH_TBL_RAW(h) rb_hash_tbl_raw(h)
 VALUE rb_hash_keys(VALUE hash);
@@ -1301,7 +1320,9 @@ void ruby_set_inplace_mode(const char *);
 ssize_t rb_io_bufread(VALUE io, void *buf, size_t size);
 void rb_stdio_set_default_encoding(void);
 VALUE rb_io_flush_raw(VALUE, int);
+#ifdef RUBY_IO_H
 size_t rb_io_memsize(const rb_io_t *);
+#endif
 int rb_stderr_tty_p(void);
 
 /* load.c */
@@ -1546,7 +1567,9 @@ struct RBasicRaw {
 #endif
 VALUE rb_parser_get_yydebug(VALUE);
 VALUE rb_parser_set_yydebug(VALUE, VALUE);
+RUBY_SYMBOL_EXPORT_BEGIN
 VALUE rb_parser_set_context(VALUE, const struct rb_block *, int);
+RUBY_SYMBOL_EXPORT_END
 void *rb_parser_load_file(VALUE parser, VALUE name);
 int rb_is_const_name(VALUE name);
 int rb_is_class_name(VALUE name);
@@ -1608,6 +1631,7 @@ struct rb_execarg {
     unsigned new_pgroup_flag : 1;
     unsigned uid_given : 1;
     unsigned gid_given : 1;
+    unsigned exception : 1;
     rb_pid_t pgroup_pgid; /* asis(-1), new pgroup(0), specified pgroup (0<V). */
     VALUE rlimit_limits; /* Qfalse or [[rtype, softlim, hardlim], ...] */
     mode_t umask_mask;
@@ -1754,6 +1778,7 @@ VALUE rb_to_symbol_type(VALUE obj);
 /* struct.c */
 VALUE rb_struct_init_copy(VALUE copy, VALUE s);
 VALUE rb_struct_lookup(VALUE s, VALUE idx);
+VALUE rb_struct_s_keyword_init(VALUE klass);
 
 /* time.c */
 struct timeval rb_time_timeval(VALUE);
@@ -1785,17 +1810,23 @@ int rb_divert_reserved_fd(int fd);
 
 /* transcode.c */
 extern VALUE rb_cEncodingConverter;
+#ifdef RUBY_ENCODING_H
 size_t rb_econv_memsize(rb_econv_t *);
+#endif
 
 /* us_ascii.c */
+#ifdef RUBY_ENCODING_H
 extern rb_encoding OnigEncodingUS_ASCII;
+#endif
 
 /* util.c */
 char *ruby_dtoa(double d_, int mode, int ndigits, int *decpt, int *sign, char **rve);
 char *ruby_hdtoa(double d, const char *xdigs, int ndigits, int *decpt, int *sign, char **rve);
 
 /* utf_8.c */
+#ifdef RUBY_ENCODING_H
 extern rb_encoding OnigEncodingUTF_8;
+#endif
 
 /* variable.c */
 void rb_gc_mark_global_tbl(void);
@@ -1916,7 +1947,7 @@ NORETURN(void rb_unexpected_type(VALUE,int));
      rb_unexpected_type((VALUE)(v), (t)) : (void)0)
 
 /* file.c (export) */
-#ifdef HAVE_READLINK
+#if defined HAVE_READLINK && defined RUBY_ENCODING_H
 VALUE rb_readlink(VALUE path, rb_encoding *enc);
 #endif
 #ifdef __APPLE__
@@ -1938,9 +1969,9 @@ VALUE rb_int_positive_pow(long x, unsigned long y);
 /* process.c (export) */
 int rb_exec_async_signal_safe(const struct rb_execarg *e, char *errmsg, size_t errmsg_buflen);
 rb_pid_t rb_fork_async_signal_safe(int *status, int (*chfunc)(void*, char *, size_t), void *charg, VALUE fds, char *errmsg, size_t errmsg_buflen);
-VALUE rb_execarg_new(int argc, const VALUE *argv, int accept_shell);
+VALUE rb_execarg_new(int argc, const VALUE *argv, int accept_shell, int allow_exc_opt);
 struct rb_execarg *rb_execarg_get(VALUE execarg_obj); /* dangerous.  needs GC guard. */
-VALUE rb_execarg_init(int argc, const VALUE *argv, int accept_shell, VALUE execarg_obj);
+VALUE rb_execarg_init(int argc, const VALUE *argv, int accept_shell, VALUE execarg_obj, int allow_exc_opt);
 int rb_execarg_addopt(VALUE execarg_obj, VALUE key, VALUE val);
 void rb_execarg_parent_start(VALUE execarg_obj);
 void rb_execarg_parent_end(VALUE execarg_obj);
@@ -2025,6 +2056,15 @@ rb_obj_builtin_type(VALUE obj)
     return RB_SPECIAL_CONST_P(obj) ? -1 :
 	RB_BUILTIN_TYPE(obj);
 }
+#endif
+
+/* A macro for defining a flexible array, like: VALUE ary[FLEX_ARY_LEN]; */
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+# define FLEX_ARY_LEN   /* VALUE ary[]; */
+#elif defined(__GNUC__) && !defined(__STRICT_ANSI__)
+# define FLEX_ARY_LEN 0 /* VALUE ary[0]; */
+#else
+# define FLEX_ARY_LEN 1 /* VALUE ary[1]; */
 #endif
 
 #if defined(__cplusplus)

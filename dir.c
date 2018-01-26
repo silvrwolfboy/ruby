@@ -11,9 +11,11 @@
 
 **********************************************************************/
 
-#include "internal.h"
-#include "encindex.h"
+#include "ruby/encoding.h"
 #include "ruby/thread.h"
+#include "internal.h"
+#include "id.h"
+#include "encindex.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -615,6 +617,8 @@ dir_s_open(int argc, VALUE *argv, VALUE klass)
     return dir;
 }
 
+NORETURN(static void dir_closed(void));
+
 static void
 dir_closed(void)
 {
@@ -659,7 +663,7 @@ dir_inspect(VALUE dir)
 	rb_str_cat2(str, ">");
 	return str;
     }
-    return rb_funcallv(dir, rb_intern("to_s"), 0, 0);
+    return rb_funcallv(dir, idTo_s, 0, 0);
 }
 
 /* Workaround for Solaris 10 that does not have dirfd.
@@ -1446,7 +1450,7 @@ nogvl_opendir_at(void *ptr)
 			       O_DIRECTORY|
 #  endif /* O_DIRECTORY */
 			       0);
-    int fd = openat(oaa->basefd, oaa->path, 0, opendir_flags);
+    int fd = openat(oaa->basefd, oaa->path, opendir_flags);
 
     dirp = fd >= 0 ? fdopendir(fd) : 0;
     if (!dirp) {
@@ -1454,7 +1458,7 @@ nogvl_opendir_at(void *ptr)
 
 	switch (gc_for_fd_with_gvl(e)) {
 	  default:
-	    if (fd < 0) fd = openat(oaa->basefd, oaa->path, 0, opendir_flags);
+	    if (fd < 0) fd = openat(oaa->basefd, oaa->path, opendir_flags);
 	    if (fd >= 0) dirp = fdopendir(fd);
 	    if (dirp) return dirp;
 
@@ -2856,6 +2860,13 @@ dir_s_each_child(int argc, VALUE *argv, VALUE io)
 }
 
 static VALUE
+dir_each_child_m(VALUE dir)
+{
+    RETURN_ENUMERATOR(dir, 0, 0);
+    return dir_each_entry(dir, dir_yield, Qnil, TRUE);
+}
+
+static VALUE
 dir_collect_children(VALUE dir)
 {
     VALUE ary = rb_ary_new();
@@ -3208,6 +3219,8 @@ Init_Dir(void)
     rb_define_method(rb_cDir,"inspect", dir_inspect, 0);
     rb_define_method(rb_cDir,"read", dir_read, 0);
     rb_define_method(rb_cDir,"each", dir_each, 0);
+    rb_define_method(rb_cDir,"each_child", dir_each_child_m, 0);
+    rb_define_method(rb_cDir,"children", dir_collect_children, 0);
     rb_define_method(rb_cDir,"rewind", dir_rewind, 0);
     rb_define_method(rb_cDir,"tell", dir_tell, 0);
     rb_define_method(rb_cDir,"seek", dir_seek, 1);

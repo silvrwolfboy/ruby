@@ -259,7 +259,7 @@ LIBS = $(LIBS) imagehlp.lib shlwapi.lib $(EXTLIBS)
 !if !defined(MISSING)
 MISSING = crypt.obj ffs.obj langinfo.obj lgamma_r.obj strlcat.obj strlcpy.obj win32/win32.obj win32/file.obj setproctitle.obj
 !if $(RT_VER) < 120
-MISSING = $(MISSING) acosh.obj cbrt.obj erf.obj tgamma.obj
+MISSING = $(MISSING) acosh.obj cbrt.obj erf.obj nan.obj tgamma.obj
 !endif
 MISSING = $(MISSING) explicit_bzero.obj
 !endif
@@ -636,6 +636,8 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define PACKED_STRUCT_UNALIGNED(x) x
 !endif
 #define RUBY_EXTERN extern __declspec(dllimport)
+#define RUBY_ALIGNAS(n) __declspec(align(n))
+#define RUBY_ALIGNOF __alignof
 #define HAVE_DECL_SYS_NERR 1
 #define HAVE_LIMITS_H 1
 #define HAVE_FCNTL_H 1
@@ -734,6 +736,9 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define HAVE_FLOCK 1
 #define HAVE_ISNAN 1
 #define HAVE_FINITE 1
+!if $(RT_VAR) >= 120
+#define HAVE_NAN 1
+!endif
 #define HAVE_HYPOT 1
 #define HAVE_FMOD 1
 #define HAVE_FREXP 1
@@ -1189,7 +1194,7 @@ INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
 	@for %J in (\
 "%I: $$(srcdir)/insns.def {$$(VPATH)}vm_opts.h \" \
 "	  $$(srcdir)/defs/opt_operand.def $$(srcdir)/defs/opt_insn_unif.def \" \
-"	  $$(srcdir)/tool/instruction.rb $$(srcdir)/tool/insns2vm.rb" \
+"	  $$(srcdir)/tool/insns2vm.rb" \
 "	@$$(RM) $$(PROGRAM)" \
 "	$$(BASERUBY) -Ku $$(srcdir)/tool/insns2vm.rb $$(INSNS2VMOPT) %I" \
 "" \
