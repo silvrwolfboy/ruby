@@ -865,7 +865,7 @@ struct RMoved {
 
 struct RUBY_ALIGNAS(SIZEOF_VALUE) RBasic {
     VALUE flags;
-    const VALUE klass;
+    VALUE klass;
 };
 
 VALUE rb_obj_hide(VALUE obj);

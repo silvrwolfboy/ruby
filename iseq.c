@@ -115,7 +115,7 @@ rb_iseq_free(const rb_iseq_t *iseq)
 
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
 static int
-rb_vm_insn_addr2insn2(const void *addr) /* cold path */
+rb_vm_insn_addr2insn2(const void *addr)
 {
     int insn;
     const void * const *table = rb_vm_get_insns_address_table();
@@ -129,32 +129,39 @@ rb_vm_insn_addr2insn2(const void *addr) /* cold path */
 }
 #endif
 
+static int
+rb_vm_insn_null_translator(const void *addr)
+{
+    return (int)addr;
+}
+
 typedef VALUE iseq_value_itr_t(void *ctx, VALUE obj);
+typedef int rb_vm_insns_translator_t(const void *addr);
 
 static int
-iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data)
+iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data, rb_vm_insns_translator_t * translator)
 {
-#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
-    VALUE insn = rb_vm_insn_addr2insn2((void *)code[pos]);
-#else
-    VALUE insn = code[pos];
-#endif
+    VALUE insn = translator((void *)code[pos]);
     int len = insn_len(insn);
     int op_no;
     const char *types = insn_op_types(insn);
 
     for (op_no = 0; types[op_no]; op_no++) {
 	char type = types[op_no];
-	VALUE op = code[pos + op_no + 1];
 	switch (type) {
-	    case TS_VALUE:
-		if (SPECIAL_CONST_P(op)) {
-		} else {
-		    code[pos + op_no + 1] = func(data, op);
-		}
-		break;
 	    case TS_CDHASH:
-		break;
+	    case TS_ISEQ:
+	    case TS_VALUE:
+		{
+		    VALUE op = code[pos + op_no + 1];
+		    if (!SPECIAL_CONST_P(op)) {
+			VALUE newop = func(data, op);
+			if (newop != op) {
+			    code[pos + op_no + 1] = newop;
+			}
+		    }
+		    break;
+		}
 	    default:
 		break;
 	}
@@ -163,25 +170,43 @@ iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data
     return len;
 }
 
-void
+static void
 rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
 {
     unsigned int size;
     const VALUE *code;
     size_t n;
+    rb_vm_insns_translator_t * translator;
 
     size = iseq->body->iseq_size;
     code = iseq->body->iseq_encoded;
 
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+    if (FL_TEST(iseq, ISEQ_TRANSLATED)) {
+	translator = rb_vm_insn_addr2insn2;
+    } else {
+	translator = rb_vm_insn_null_translator;
+    }
+#else
+    translator = rb_vm_insn_null_translator;
+#endif
+
     for (n = 0; n < size;) {
-	n += iseq_extract_values(code, n, func, data);
+	n += iseq_extract_values(code, n, func, data, translator);
     }
 }
 
 static VALUE
-each_insn_value(void *ctx, VALUE obj)
+update_each_insn_value(void *ctx, VALUE obj)
 {
     return rb_gc_new_location(obj);
+}
+
+static VALUE
+mark_each_insn_value(void *ctx, VALUE obj)
+{
+    rb_gc_mark_no_pin(obj);
+    return obj;
 }
 
 void
@@ -192,7 +217,7 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 
 	if (RTEST(body->mark_ary)) {
 	    body->mark_ary = rb_gc_new_location(body->mark_ary);
-	    rb_iseq_each_value(iseq, each_insn_value, NULL);
+	    rb_iseq_each_value(iseq, update_each_insn_value, NULL);
 	}
 
 	body->location.label = rb_gc_new_location(body->location.label);
@@ -203,6 +228,18 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 	}
 	if (body->parent_iseq) {
 	    body->parent_iseq = rb_gc_new_location((VALUE)body->parent_iseq);
+	}
+
+	if (body->catch_table) {
+	    const struct iseq_catch_table *table = body->catch_table;
+	    unsigned int i;
+	    for(i = 0; i < table->size; i++) {
+		struct iseq_catch_table_entry *entry;
+		entry = &table->entries[i];
+		if (entry->iseq) {
+		    entry->iseq = rb_gc_new_location((VALUE)entry->iseq);
+		}
+	    }
 	}
     }
 }
@@ -219,12 +256,26 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	    rb_gc_mark_no_pin(body->mark_ary);
 	    rb_gc_mark_values(RARRAY_LEN(body->mark_ary), RARRAY_CONST_PTR(body->mark_ary));
 	}
+	rb_iseq_each_value(iseq, mark_each_insn_value, NULL);
 	rb_gc_mark_no_pin(body->location.label);
 	rb_gc_mark_no_pin(body->location.base_label);
 	rb_gc_mark_no_pin(body->location.pathobj);
 	RUBY_MARK_NO_PIN_UNLESS_NULL(body->local_iseq);
 	RUBY_MARK_NO_PIN_UNLESS_NULL((VALUE)body->parent_iseq);
+
+	if (body->catch_table) {
+	    const struct iseq_catch_table *table = body->catch_table;
+	    unsigned int i;
+	    for(i = 0; i < table->size; i++) {
+		const struct iseq_catch_table_entry *entry;
+		entry = &table->entries[i];
+		if (entry->iseq) {
+		    rb_gc_mark_no_pin((VALUE)entry->iseq);
+		}
+	    }
+	}
     }
+
 
     if (FL_TEST(iseq, ISEQ_NOT_LOADED_YET)) {
 	rb_gc_mark(iseq->aux.loader.obj);
