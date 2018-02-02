@@ -161,6 +161,14 @@ iseq_extract_values(const VALUE *code, size_t pos, iseq_value_itr_t * func, void
 		    }
 		    break;
 		}
+	    case TS_IC:
+		if (BIN(once) == insn || BIN(trace_once) == insn) {
+		    union iseq_inline_storage_entry *const is = (union iseq_inline_storage_entry *)code[pos + op_no + 1];
+		    if (is->once.value) {
+			func(data, is->once.value);
+		    }
+		}
+		break;
 	    default:
 		break;
 	}
@@ -397,13 +405,6 @@ set_relation(rb_iseq_t *iseq, const rb_iseq_t *piseq)
     if (type == ISEQ_TYPE_MAIN) {
 	iseq->body->local_iseq = iseq;
     }
-}
-
-void
-rb_iseq_add_mark_object(const rb_iseq_t *iseq, VALUE obj)
-{
-    /* TODO: check dedup */
-    rb_ary_push(ISEQ_MARK_ARY(iseq), obj);
 }
 
 static VALUE

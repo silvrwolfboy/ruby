@@ -3298,10 +3298,10 @@ vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, IC ic)
     else if (is->once.running_thread == NULL) {
 	VALUE val;
 	is->once.running_thread = th;
-	val = is->once.value = rb_ensure(vm_once_exec, (VALUE)iseq, vm_once_clear, (VALUE)is);
+	val = rb_ensure(vm_once_exec, (VALUE)iseq, vm_once_clear, (VALUE)is);
+	RB_OBJ_WRITE(ec->cfp->iseq, &is->once.value, val);
 	/* is->once.running_thread is cleared by vm_once_clear() */
 	is->once.running_thread = RUNNING_THREAD_ONCE_DONE; /* success */
-	rb_iseq_add_mark_object(ec->cfp->iseq, val);
 	return val;
     }
     else if (is->once.running_thread == th) {
