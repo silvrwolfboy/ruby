@@ -8644,7 +8644,8 @@ ibf_dump_iseq_each(struct ibf_dump *dump, const rb_iseq_t *iseq)
     dump_body.is_entries =           NULL;
     dump_body.ci_entries =           ibf_dump_ci_entries(dump, iseq);
     dump_body.cc_entries =           NULL;
-    dump_body.mark_ary =             ISEQ_FLIP_CNT(iseq);
+    dump_body.variable.coverage      = Qnil;
+    dump_body.variable.original_iseq = Qnil;
 
     return ibf_dump_write(dump, &dump_body, sizeof(dump_body));
 }
@@ -8676,7 +8677,7 @@ ibf_load_iseq_each(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t of
     load_body->ci_kw_size = body->ci_kw_size;
     load_body->insns_info.size = body->insns_info.size;
 
-    RB_OBJ_WRITE(iseq, &load_body->mark_ary, iseq_mark_ary_create((int)body->mark_ary));
+    iseq_mark_ary_create(iseq, (int)body->variable.flip_count);
 
     {
 	VALUE realpath = Qnil, path = ibf_load_object(load, body->location.pathobj);

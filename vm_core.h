@@ -411,7 +411,11 @@ struct rb_iseq_constant_body {
 				      */
     struct rb_call_cache *cc_entries; /* size is ci_size = ci_kw_size */
 
-    VALUE mark_ary;     /* Array: includes operands which should be GC marked */
+    struct {
+      rb_num_t flip_count;
+      VALUE coverage;
+      VALUE original_iseq;
+    } variable;
 
     unsigned int local_table_size;
     unsigned int is_size;

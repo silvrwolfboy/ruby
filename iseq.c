@@ -218,7 +218,8 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	const struct rb_iseq_constant_body *body = iseq->body;
 
 	rb_iseq_each_value(iseq, each_insn_value, NULL);
-	RUBY_MARK_UNLESS_NULL(body->mark_ary);
+	rb_gc_mark(body->variable.coverage);
+	rb_gc_mark(body->variable.original_iseq);
 	rb_gc_mark(body->location.label);
 	rb_gc_mark(body->location.base_label);
 	rb_gc_mark(body->location.pathobj);
@@ -427,7 +428,7 @@ prepare_iseq_build(rb_iseq_t *iseq,
     if (iseq != iseq->body->local_iseq) {
 	RB_OBJ_WRITE(iseq, &iseq->body->location.base_label, iseq->body->local_iseq->body->location.label);
     }
-    RB_OBJ_WRITE(iseq, &iseq->body->mark_ary, iseq_mark_ary_create(0));
+    iseq_mark_ary_create(iseq, 0);
 
     ISEQ_COMPILE_DATA_ALLOC(iseq);
     RB_OBJ_WRITE(iseq, &ISEQ_COMPILE_DATA(iseq)->err_info, err_info);
