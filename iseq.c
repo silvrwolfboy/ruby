@@ -217,7 +217,10 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     if (iseq->body) {
 	const struct rb_iseq_constant_body *body = iseq->body;
 
-	rb_iseq_each_value(iseq, each_insn_value, NULL);
+	if(FL_TEST(iseq, ISEQ_MARKABLE_ISEQ)) {
+	    rb_iseq_each_value(iseq, each_insn_value, NULL);
+	}
+
 	rb_gc_mark(body->variable.coverage);
 	rb_gc_mark(body->variable.original_iseq);
 	rb_gc_mark(body->location.label);

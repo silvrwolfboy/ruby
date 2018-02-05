@@ -2018,6 +2018,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			    rb_hash_rehash(map);
 			    freeze_hide_obj(map);
 			    generated_iseq[code_index + 1 + j] = map;
+			    FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
 			    break;
 			}
 		      case TS_LINDEX:
@@ -2028,6 +2029,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			{
 			    VALUE v = operands[j];
 			    generated_iseq[code_index + 1 + j] = v;
+			    if (!SPECIAL_CONST_P(v)) {
+				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    }
 			    break;
 			}
 		      case TS_VALUE:	/* VALUE */
@@ -2035,6 +2039,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			    VALUE v = operands[j];
 			    generated_iseq[code_index + 1 + j] = v;
 			    /* to mark ruby object */
+			    if (!SPECIAL_CONST_P(v)) {
+				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    }
 			    break;
 			}
 		      case TS_IC: /* inline cache */
@@ -2045,6 +2052,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 				rb_bug("iseq_set_sequence: ic_index overflow: index: %d, size: %d", ic_index, iseq->body->is_size);
 			    }
 			    generated_iseq[code_index + 1 + j] = (VALUE)ic;
+			    if (BIN(once) == insn || BIN(trace_once) == insn) {
+				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    }
 			    break;
 			}
 		      case TS_CALLINFO: /* call info */
