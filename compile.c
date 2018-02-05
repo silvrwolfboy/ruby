@@ -2052,9 +2052,17 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 				rb_bug("iseq_set_sequence: ic_index overflow: index: %d, size: %d", ic_index, iseq->body->is_size);
 			    }
 			    generated_iseq[code_index + 1 + j] = (VALUE)ic;
-			    if (BIN(once) == insn || BIN(trace_once) == insn) {
-				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    break;
+			}
+		      case TS_ISE: /* inline storage entry */
+			{
+			    unsigned int ic_index = FIX2UINT(operands[j]);
+			    IC ic = (IC)&iseq->body->is_entries[ic_index];
+			    if (UNLIKELY(ic_index >= iseq->body->is_size)) {
+				rb_bug("iseq_set_sequence: ic_index overflow: index: %d, size: %d", ic_index, iseq->body->is_size);
 			    }
+			    generated_iseq[code_index + 1 + j] = (VALUE)ic;
+			    FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
 			    break;
 			}
 		      case TS_CALLINFO: /* call info */
@@ -7299,6 +7307,7 @@ insn_data_to_s_detail(INSN *iobj)
 		    break;
 		}
 	      case TS_IC:	/* inline cache */
+	      case TS_ISE:	/* inline storage entry */
 		rb_str_catf(str, "<ic:%d>", FIX2INT(OPERAND_AT(iobj, j)));
 		break;
 	      case TS_CALLINFO: /* call info */
@@ -7684,6 +7693,7 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *const anchor,
 			argv[j] = (VALUE)rb_global_entry(SYM2ID(op));
 			break;
 		      case TS_IC:
+		      case TS_ISE:
 			argv[j] = op;
 			if (NUM2UINT(op) >= iseq->body->is_size) {
 			    iseq->body->is_size = NUM2INT(op) + 1;
@@ -8289,6 +8299,7 @@ ibf_dump_code(struct ibf_dump *dump, const rb_iseq_t *iseq)
 		code[code_index] = (VALUE)ibf_dump_iseq(dump, (const rb_iseq_t *)op);
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		{
 		    unsigned int i;
 		    for (i=0; i<iseq->body->is_size; i++) {
@@ -8354,6 +8365,7 @@ ibf_load_code(const struct ibf_load *load, const rb_iseq_t *iseq, const struct r
 		code[code_index] = (VALUE)ibf_load_iseq(load, (const rb_iseq_t *)op);
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		code[code_index] = (VALUE)&is_entries[(int)op];
 		break;
 	      case TS_CALLINFO:

@@ -161,14 +161,14 @@ iseq_extract_values(const VALUE *code, size_t pos, iseq_value_itr_t * func, void
 		    }
 		    break;
 		}
-	    case TS_IC:
-		if (BIN(once) == insn || BIN(trace_once) == insn) {
+	    case TS_ISE:
+		{
 		    union iseq_inline_storage_entry *const is = (union iseq_inline_storage_entry *)code[pos + op_no + 1];
 		    if (is->once.value) {
 			func(data, is->once.value);
 		    }
+		    break;
 		}
-		break;
 	    default:
 		break;
 	}
@@ -1717,6 +1717,7 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
 	break;
 
       case TS_IC:
+      case TS_ISE:
 	ret = rb_sprintf("<is:%"PRIdPTRDIFF">", (union iseq_inline_storage_entry *)op - iseq->body->is_entries);
 	break;
 
@@ -2460,6 +2461,7 @@ iseq_data_to_ary(const rb_iseq_t *iseq)
 		}
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		{
 		    union iseq_inline_storage_entry *is = (union iseq_inline_storage_entry *)*seq;
 		    rb_ary_push(ary, INT2FIX(is - iseq->body->is_entries));

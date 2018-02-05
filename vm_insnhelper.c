@@ -3285,11 +3285,10 @@ vm_ic_update(IC ic, VALUE val, const VALUE *reg_ep)
 }
 
 static VALUE
-vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, IC ic)
+vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, ISE is)
 {
     rb_thread_t *th = rb_ec_thread_ptr(ec);
     rb_thread_t *const RUNNING_THREAD_ONCE_DONE = (rb_thread_t *)(0x1);
-    union iseq_inline_storage_entry *const is = (union iseq_inline_storage_entry *)ic;
 
   again:
     if (is->once.running_thread == RUNNING_THREAD_ONCE_DONE) {

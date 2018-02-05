@@ -1013,6 +1013,7 @@ enum vm_svar_index {
 
 /* inline cache */
 typedef struct iseq_inline_cache_entry *IC;
+typedef union iseq_inline_storage_entry *ISE;
 typedef struct rb_call_info *CALL_INFO;
 typedef struct rb_call_cache *CALL_CACHE;
 
