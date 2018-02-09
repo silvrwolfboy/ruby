@@ -2111,6 +2111,15 @@ rb_vm_call_cfunc(VALUE recv, VALUE (*func)(VALUE), VALUE arg,
 void rb_vm_trace_mark_event_hooks(rb_hook_list_t *hooks);
 
 void
+rb_vm_update_references(void *ptr)
+{
+    if (ptr) {
+	rb_vm_t *vm = ptr;
+	rb_update_st_references(vm->frozen_strings);
+    }
+}
+
+void
 rb_vm_mark(void *ptr)
 {
     RUBY_MARK_ENTER("vm");
@@ -2153,7 +2162,6 @@ rb_vm_mark(void *ptr)
 	rb_gc_mark(vm->defined_module_hash);
 	/* Prevent classes from moving */
 	rb_mark_tbl(rb_hash_tbl(vm->defined_module_hash));
-	rb_mark_hash(vm->frozen_strings);
 
 	if (vm->loading_table) {
 	    rb_mark_tbl(vm->loading_table);

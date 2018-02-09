@@ -469,6 +469,7 @@ void rb_gc_mark_locations(const VALUE*, const VALUE*);
 void rb_mark_tbl(struct st_table*);
 void rb_mark_set(struct st_table*);
 void rb_mark_hash(struct st_table*);
+void rb_update_st_references(struct st_table *ht);
 void rb_gc_mark_maybe(VALUE);
 void rb_gc_mark(VALUE);
 void rb_gc_mark_no_pin(VALUE);

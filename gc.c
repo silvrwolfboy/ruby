@@ -7199,6 +7199,12 @@ gc_ref_update_hash(rb_objspace_t * objspace, VALUE v)
     gc_update_table_refs(objspace, rb_hash_tbl_raw(v));
 }
 
+void rb_update_st_references(struct st_table *ht)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    gc_update_table_refs(objspace, ht);
+}
+
 static void
 gc_ref_update_method_entry(rb_objspace_t *objspace, rb_method_entry_t *me)
 {
@@ -7528,7 +7534,11 @@ extern rb_symbols_t global_symbols;
 static void
 gc_update_references(rb_objspace_t * objspace)
 {
+    rb_execution_context_t *ec = GET_EC();
+    rb_vm_t *vm = rb_ec_vm_ptr(ec);
+
     rb_objspace_each_objects_without_setup(gc_ref_update, objspace);
+    rb_vm_update_references(vm);
     gc_update_table_refs(objspace, global_symbols.str_sym);
 }
 
