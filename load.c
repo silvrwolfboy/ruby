@@ -166,6 +166,12 @@ get_loaded_features_index_raw(void)
     return GET_VM()->loaded_features_index;
 }
 
+static VALUE
+get_loaded_features_index_pool_raw(void)
+{
+    return GET_VM()->loaded_features_index_pool;
+}
+
 static st_table *
 get_loading_table(void)
 {
@@ -173,21 +179,18 @@ get_loading_table(void)
 }
 
 static void
-features_index_add_single(VALUE short_feature, VALUE offset)
+features_index_add_single(const char *short_feature_cstr, VALUE offset)
 {
     struct st_table *features_index;
     VALUE this_feature_index = Qnil;
-    char *short_feature_cstr;
 
     Check_Type(offset, T_FIXNUM);
-    Check_Type(short_feature, T_STRING);
-    short_feature_cstr = StringValueCStr(short_feature);
 
     features_index = get_loaded_features_index_raw();
     st_lookup(features_index, (st_data_t)short_feature_cstr, (st_data_t *)&this_feature_index);
 
     if (NIL_P(this_feature_index)) {
-	st_insert(features_index, (st_data_t)ruby_strdup(short_feature_cstr), (st_data_t)offset);
+	st_insert(features_index, (st_data_t)short_feature_cstr, (st_data_t)offset);
     }
     else if (RB_TYPE_P(this_feature_index, T_FIXNUM)) {
 	VALUE feature_indexes[2];
@@ -215,8 +218,8 @@ features_index_add_single(VALUE short_feature, VALUE offset)
 static void
 features_index_add(VALUE feature, VALUE offset)
 {
-    VALUE short_feature;
-    const char *feature_str, *feature_end, *ext, *p;
+    VALUE short_feature_no_ext;
+    const char *feature_str, *feature_end, *feature_no_ext_str, *ext, *p;
 
     feature_str = StringValuePtr(feature);
     feature_end = feature_str + RSTRING_LEN(feature);
@@ -229,7 +232,16 @@ features_index_add(VALUE feature, VALUE offset)
     /* Now `ext` points to the only string matching %r{^\.[^./]*$} that is
        at the end of `feature`, or is NULL if there is no such string. */
 
-    p = ext ? ext : feature_end;
+    if (ext) {
+	p = ext;
+	short_feature_no_ext = rb_fstring(rb_str_freeze(rb_str_subseq(feature, 0, ext - feature_str)));
+	feature_no_ext_str = StringValuePtr(short_feature_no_ext);
+	rb_ary_push(get_loaded_features_index_pool_raw(), short_feature_no_ext);
+    } else {
+	p = feature_end;
+	short_feature_no_ext = Qnil;
+    }
+
     while (1) {
 	long beg;
 
@@ -240,17 +252,14 @@ features_index_add(VALUE feature, VALUE offset)
 	    break;
 	/* Now *p == '/'.  We reach this point for every '/' in `feature`. */
 	beg = p + 1 - feature_str;
-	short_feature = rb_str_subseq(feature, beg, feature_end - p - 1);
-	features_index_add_single(short_feature, offset);
+	features_index_add_single(feature_str + beg, offset);
 	if (ext) {
-	    short_feature = rb_str_subseq(feature, beg, ext - p - 1);
-	    features_index_add_single(short_feature, offset);
+	    features_index_add_single(feature_no_ext_str + beg, offset);
 	}
     }
-    features_index_add_single(feature, offset);
+    features_index_add_single(feature_str, offset);
     if (ext) {
-	short_feature = rb_str_subseq(feature, 0, ext - feature_str);
-	features_index_add_single(short_feature, offset);
+	features_index_add_single(feature_no_ext_str, offset);
     }
 }
 
@@ -262,7 +271,6 @@ loaded_features_index_clear_i(st_data_t key, st_data_t val, st_data_t arg)
 	rb_ary_free(obj);
 	xfree((void *)obj);
     }
-    xfree((char *)key);
     return ST_DELETE;
 }
 
@@ -277,6 +285,7 @@ get_loaded_features_index(void)
 	/* The sharing was broken; something (other than us in rb_provide_feature())
 	   modified loaded_features.  Rebuild the index. */
 	st_foreach(vm->loaded_features_index, loaded_features_index_clear_i, 0);
+	rb_ary_clear(vm->loaded_features_index_pool);
 	features = vm->loaded_features;
 	for (i = 0; i < RARRAY_LEN(features); i++) {
 	    VALUE entry, as_str;
@@ -1193,6 +1202,7 @@ Init_load(void)
     vm->loaded_features = rb_ary_new();
     vm->loaded_features_snapshot = rb_ary_tmp_new(0);
     vm->loaded_features_index = st_init_strtable();
+    vm->loaded_features_index_pool = rb_ary_new();
 
     rb_define_global_function("load", rb_f_load, -1);
     rb_define_global_function("require", rb_f_require, 1);
