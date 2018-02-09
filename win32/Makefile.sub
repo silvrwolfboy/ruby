@@ -209,6 +209,9 @@ OUTFLAG       = -Fe
 !if !defined(COUTFLAG)
 COUTFLAG      = -Fo
 !endif
+!if !defined(CPPOUTFLAG)
+CPPOUTFLAG    = -Fi
+!endif
 !if !defined(CSRCFLAG)
 CSRCFLAG      = -Tc
 !endif
@@ -228,8 +231,14 @@ WARNFLAGS = -W2
 !endif
 !endif
 WERRORFLAG = -WX
+!if !defined(CFLAGS_NO_ARCH)
+CFLAGS_NO_ARCH = $(RUNTIMEFLAG) $(DEBUGFLAGS) $(WARNFLAGS) $(OPTFLAGS) $(COMPILERFLAG)
+!endif
+!if !defined(ARCH_FLAG)
+ARCH_FLAG = $(PROCESSOR_FLAG)
+!endif
 !if !defined(CFLAGS)
-CFLAGS = $(RUNTIMEFLAG) $(DEBUGFLAGS) $(WARNFLAGS) $(OPTFLAGS) $(PROCESSOR_FLAG) $(COMPILERFLAG)
+CFLAGS = $(CFLAGS_NO_ARCH) $(ARCH_FLAG)
 !endif
 !if !defined(CXXFLAGS)
 CXXFLAGS = $(CFLAGS)
@@ -277,6 +286,9 @@ LDSHARED_1 = @if exist $(@).manifest $(MANIFESTTOOL) -manifest $(@).manifest -ou
 LDSHARED_2 = @if exist $(@).manifest @$(RM) $(@:/=\).manifest
 !endif
 CPPFLAGS = $(DEFS) $(ARCHDEFS) $(CPPFLAGS)
+MJIT_HEADER_FLAGS = -P
+MJIT_HEADER_SUFFIX =
+MJIT_HEADER_ARCH =
 
 DLDFLAGS = $(LDFLAGS) -dll
 SOLIBS =
@@ -342,6 +354,7 @@ LIBRUBY_SO    = $(RUBY_SO_NAME).dll
 LIBRUBY_SONAME= $(RUBY_SO_NAME).dll
 LIBRUBY       = $(RUBY_SO_NAME).lib
 LIBRUBYARG    = $(LIBRUBY)
+LIBRUBYARG_SHARED = $(LIBRUBY)
 LIBRUBY_RELATIVE = yes
 
 THREAD_MODEL  = win32
@@ -608,6 +621,11 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define HAVE_PROTOTYPES 1
 #define TOKEN_PASTE(x,y) x##y
 #define HAVE_STDARG_PROTOTYPES 1
+!if $(MSC_VER) >= 1800
+#define HAVE_VA_COPY 1
+!else
+#define HAVE_VA_COPY_VIA_STRUCT_ASSIGNMENT 1
+!endif
 !if $(MSC_VER) > 1100
 #define NORETURN(x) __declspec(noreturn) x
 !endif
@@ -736,7 +754,7 @@ $(CONFIG_H): $(MKFILES) $(srcdir)/win32/Makefile.sub $(win_srcdir)/Makefile.sub
 #define HAVE_FLOCK 1
 #define HAVE_ISNAN 1
 #define HAVE_FINITE 1
-!if $(RT_VAR) >= 120
+!if $(RT_VER) >= 120
 #define HAVE_NAN 1
 !endif
 #define HAVE_HYPOT 1
@@ -980,6 +998,7 @@ s,@top_srcdir@,$(srcdir),;t t
 s,@try_header@,try_compile,;t t
 s,@ruby_pc@,$(ruby_pc),;t t
 <<KEEP
+XCFLAGS = $(XCFLAGS) $(MJIT_CPPFLAGS)
 
 miniruby: miniruby$(EXEEXT)
 
@@ -1187,7 +1206,7 @@ probes.h: {$(VPATH)}probes.dmyh
 <<KEEP
 
 INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
-	  vmtc.inc vm.inc
+	  vmtc.inc vm.inc mjit_compile.inc
 
 !if [exit > insns_rules.mk]
 !else if [for %I in ($(INSNS)) do \

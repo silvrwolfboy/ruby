@@ -59,6 +59,7 @@ empty =
 CC_VERSION = @CC_VERSION@
 OUTFLAG = @OUTFLAG@$(empty)
 COUTFLAG = @COUTFLAG@$(empty)
+CPPOUTFLAG = $(COUTFLAG)
 ARCH_FLAG = @ARCH_FLAG@
 CFLAGS_NO_ARCH = @CFLAGS@
 CFLAGS = $(CFLAGS_NO_ARCH) $(ARCH_FLAG)
@@ -67,8 +68,11 @@ optflags = @optflags@
 debugflags = @debugflags@
 warnflags = @warnflags@ @strict_warnflags@
 cppflags = @cppflags@
-XCFLAGS = @XCFLAGS@
+XCFLAGS = @XCFLAGS@ $(MJIT_CPPFLAGS)
 CPPFLAGS = @CPPFLAGS@ $(INCFLAGS)
+MJIT_HEADER_FLAGS = @MJIT_HEADER_FLAGS@
+MJIT_HEADER_SUFFIX =
+MJIT_HEADER_ARCH =
 LDFLAGS = @STATIC@ $(CFLAGS) @LDFLAGS@
 EXTLDFLAGS = @EXTLDFLAGS@
 XLDFLAGS = @XLDFLAGS@ $(EXTLDFLAGS)
@@ -511,7 +515,7 @@ update-simplecov:
 update-coverage: update-simplecov update-simplecov-html update-doclie
 
 INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
-	  vmtc.inc vm.inc
+	  vmtc.inc vm.inc mjit_compile.inc
 
 $(INSNS): $(srcdir)/insns.def vm_opts.h \
 	  $(srcdir)/defs/opt_operand.def $(srcdir)/defs/opt_insn_unif.def \

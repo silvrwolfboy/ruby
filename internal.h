@@ -85,6 +85,25 @@ extern "C" {
 # define STATIC_ASSERT(name, expr) typedef int static_assert_##name##_check[1 - 2*!(expr)]
 #endif
 
+#if defined(HAVE_VA_COPY)
+/* OK, nothing to do */
+#elif defined(HAVE_VA_COPY_MACRO)
+#define va_copy(dst, src) VA_COPY((dst), (src))
+#elif defined(HAVE___VA_COPY)
+#define va_copy(dst, src) __va_copy((dst), (src))
+#elif defined(HAVE___BUILTIN_VA_COPY)
+#define va_copy(dst, src) __builtin_va_copy((dst), (src))
+#elif defined(HAVE_VA_COPY_VIA_STRUCT_ASSIGNMENT)
+#define va_copy(dst, src) do (dst) = (src); while (0)
+#elif defined(HAVE_VA_COPY_VIA_POINTER_ASSIGNMENT)
+#define va_copy(dst, src) do *(dst) = *(src); while (0)
+#elif defined(HAVE_VA_COPY_VIA_MEMCPY)
+#include <string.h>
+#define va_copy(dst, src) memcpy(&(dst), &(src), sizeof(va_list))
+#else
+#error >>>> no way to simuate va_copy <<<<
+#endif
+
 #define SIGNED_INTEGER_TYPE_P(int_type) (0 > ((int_type)0)-1)
 #define SIGNED_INTEGER_MAX(sint_type) \
   (sint_type) \
@@ -1059,6 +1078,7 @@ VALUE rb_ary_aref1(VALUE ary, VALUE i);
 VALUE rb_ary_aref2(VALUE ary, VALUE b, VALUE e);
 size_t rb_ary_memsize(VALUE);
 VALUE rb_to_array_type(VALUE obj);
+VALUE rb_check_to_array(VALUE ary);
 #if defined(__GNUC__) && defined(HAVE_VA_ARGS_MACRO)
 #define rb_ary_new_from_args(n, ...) \
     __extension__ ({ \
@@ -1123,6 +1143,7 @@ int rb_dvar_defined(ID, const struct rb_block *);
 int rb_local_defined(ID, const struct rb_block *);
 const char * rb_insns_name(int i);
 VALUE rb_insns_name_array(void);
+int rb_vm_insn_addr2insn(const void *);
 
 /* complex.c */
 VALUE rb_complex_plus(VALUE, VALUE);
@@ -1836,6 +1857,7 @@ VALUE rb_attr_delete(VALUE, ID);
 VALUE rb_ivar_lookup(VALUE obj, ID id, VALUE undef);
 void rb_autoload_str(VALUE mod, ID id, VALUE file);
 void rb_deprecate_constant(VALUE mod, const char *name);
+NORETURN(VALUE rb_mod_const_missing(VALUE,VALUE));
 
 /* version.c */
 extern const char ruby_engine[];
@@ -2065,6 +2087,19 @@ rb_obj_builtin_type(VALUE obj)
 # define FLEX_ARY_LEN 0 /* VALUE ary[0]; */
 #else
 # define FLEX_ARY_LEN 1 /* VALUE ary[1]; */
+#endif
+
+/*
+ * For declaring bitfields out of non-unsigned int types:
+ *   struct date {
+ *      BITFIELD(enum months) month:4;
+ *      ...
+ *   };
+ */
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+# define BITFIELD(type) type
+#else
+# define BITFIELD(type) unsigned int
 #endif
 
 #if defined(__cplusplus)

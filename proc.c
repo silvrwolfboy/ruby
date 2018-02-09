@@ -677,7 +677,7 @@ rb_vm_ifunc_new(VALUE (*func)(ANYARGS), const void *data, int min_argc, int max_
     return IFUNC_NEW(func, data, arity.packed);
 }
 
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_func_proc_new(rb_block_call_func_t func, VALUE val)
 {
     struct vm_ifunc *ifunc = rb_vm_ifunc_proc_new(func, (void *)val);
@@ -1206,7 +1206,7 @@ rb_hash_proc(st_index_t hash, VALUE prc)
     return rb_hash_uint(hash, (st_index_t)proc->block.as.captured.ep >> 16);
 }
 
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_sym_to_proc(VALUE sym)
 {
     static VALUE sym_proc_cache = Qfalse;
@@ -2725,6 +2725,7 @@ method_super_method(VALUE method)
 
     TypedData_Get_Struct(method, struct METHOD, &method_data_type, data);
     iclass = data->iclass;
+    if (!iclass) return Qnil;
     super_class = RCLASS_SUPER(RCLASS_ORIGIN(iclass));
     mid = data->me->called_id;
     if (!super_class) return Qnil;

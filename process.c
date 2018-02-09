@@ -545,10 +545,18 @@ pst_pid(VALUE st)
     return rb_attr_get(st, id_pid);
 }
 
+static VALUE pst_message_status(VALUE str, int status);
+
 static void
 pst_message(VALUE str, rb_pid_t pid, int status)
 {
     rb_str_catf(str, "pid %ld", (long)pid);
+    pst_message_status(str, status);
+}
+
+static VALUE
+pst_message_status(VALUE str, int status)
+{
     if (WIFSTOPPED(status)) {
 	int stopsig = WSTOPSIG(status);
 	const char *signame = ruby_signal_name(stopsig);
@@ -577,6 +585,7 @@ pst_message(VALUE str, rb_pid_t pid, int status)
 	rb_str_cat2(str, " (core dumped)");
     }
 #endif
+    return str;
 }
 
 
@@ -2201,7 +2210,9 @@ rb_exec_fillarg(VALUE prog, int argc, VALUE *argv, VALUE env, VALUE opthash, VAL
                 }
             }
             eargp->invoke.cmd.argv_buf = argv_buf;
-            eargp->invoke.cmd.command_name = hide_obj(rb_str_new_cstr(RSTRING_PTR(argv_buf)));
+            eargp->invoke.cmd.command_name =
+                hide_obj(rb_str_subseq(argv_buf, 0, strlen(RSTRING_PTR(argv_buf))));
+            rb_enc_copy(eargp->invoke.cmd.command_name, prog);
         }
     }
 #endif
@@ -4090,8 +4101,10 @@ rb_f_system(int argc, VALUE *argv)
     status = PST2INT(rb_last_status_get());
     if (status == EXIT_SUCCESS) return Qtrue;
     if (eargp->exception) {
-        rb_raise(rb_eRuntimeError, "Command failed with status (%d): %s",
-                 WEXITSTATUS(status), RSTRING_PTR(eargp->invoke.sh.shell_script));
+        VALUE str = rb_str_new_cstr("Command failed with");
+        rb_str_cat_cstr(pst_message_status(str, status), ": ");
+        rb_str_append(str, eargp->invoke.sh.shell_script);
+        rb_exc_raise(rb_exc_new_str(rb_eRuntimeError, str));
     }
     else {
         return Qfalse;

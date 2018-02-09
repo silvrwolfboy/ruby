@@ -543,6 +543,9 @@ class TestIO < Test::Unit::TestCase
 
   if have_nonblock?
     def test_copy_stream_no_busy_wait
+      # JIT has busy wait on GC. It's hard to test this with JIT.
+      skip "MJIT has busy wait on GC. We can't test this with JIT." if RubyVM::MJIT.enabled?
+
       msg = 'r58534 [ruby-core:80969] [Backport #13533]'
       IO.pipe do |r,w|
         r.nonblock = true
@@ -2132,6 +2135,12 @@ class TestIO < Test::Unit::TestCase
   end
 
   def test_autoclose_true_closed_by_finalizer
+    if RubyVM::MJIT.enabled?
+      # This is skipped but this test passes with AOT mode.
+      # At least it should not be a JIT compiler's bug.
+      skip "MJIT worker does IO which is unexpected for this test"
+    end
+
     feature2250 = '[ruby-core:26222]'
     pre = 'ft2250'
     t = Tempfile.new(pre)
@@ -2147,7 +2156,7 @@ class TestIO < Test::Unit::TestCase
       assert_raise(Errno::EBADF, feature2250) {t.close}
     end
   ensure
-    t.close!
+    t&.close!
   end
 
   def test_autoclose_false_closed_by_finalizer
@@ -2535,7 +2544,8 @@ End
 
     assert_in_out_err([], "$> = $stderr\nputs 'foo'", [], %w(foo))
 
-    assert_separately(%w[-Eutf-8], <<-"end;") #    do
+    assert_separately(%w[-Eutf-8], "#{<<~"begin;"}\n#{<<~"end;"}")
+    begin;
       alias $\u{6a19 6e96 51fa 529b} $stdout
       x = eval("class X\u{307b 3052}; self; end".encode("euc-jp"))
       assert_raise_with_message(TypeError, /\\$\u{6a19 6e96 51fa 529b} must.*, X\u{307b 3052} given/) do

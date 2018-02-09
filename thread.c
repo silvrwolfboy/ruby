@@ -94,11 +94,14 @@ static ID id_locals;
 static void sleep_timeval(rb_thread_t *th, struct timeval time, int spurious_check);
 static void sleep_forever(rb_thread_t *th, int nodeadlock, int spurious_check);
 static void rb_thread_sleep_deadly_allow_spurious_wakeup(void);
-static double timeofday(void);
 static int rb_threadptr_dead(rb_thread_t *th);
 static void rb_check_deadlock(rb_vm_t *vm);
 static int rb_threadptr_pending_interrupt_empty_p(const rb_thread_t *th);
 static const char *thread_status_name(rb_thread_t *th, int detail);
+static void timeval_add(struct timeval *, const struct timeval *);
+static void timeval_sub(struct timeval *, const struct timeval *);
+static int timeval_update_expire(struct timeval *, const struct timeval *);
+static void getclockofday(struct timeval *);
 
 #define eKillSignal INT2FIX(0)
 #define eTerminateSignal INT2FIX(1)
@@ -133,7 +136,7 @@ static inline void blocking_region_end(rb_thread_t *th, struct rb_blocking_regio
 
 #ifdef __ia64
 #define RB_GC_SAVE_MACHINE_REGISTER_STACK(th)          \
-    do{(th)->machine.register_stack_end = rb_ia64_bsp();}while(0)
+    do{(th)->ec->machine.register_stack_end = rb_ia64_bsp();}while(0)
 #else
 #define RB_GC_SAVE_MACHINE_REGISTER_STACK(th)
 #endif
@@ -194,8 +197,30 @@ vm_check_ints_blocking(rb_execution_context_t *ec)
 static int
 vm_living_thread_num(rb_vm_t *vm)
 {
-    return (int)vm->living_thread_num;
+    return vm->living_thread_num;
 }
+
+/*
+ * poll() is supported by many OSes, but so far Linux is the only
+ * one we know of that supports using poll() in all places select()
+ * would work.
+ */
+#if defined(HAVE_POLL) && defined(__linux__)
+#  define USE_POLL
+#endif
+
+#ifdef USE_POLL
+static inline struct timespec *
+timespec_for(struct timespec *ts, const struct timeval *tv)
+{
+    if (tv) {
+        ts->tv_sec = tv->tv_sec;
+        ts->tv_nsec = tv->tv_usec * 1000;
+        return ts;
+    }
+    return 0;
+}
+#endif
 
 #if THREAD_DEBUG
 #ifdef HAVE_VA_ARGS_MACRO
@@ -334,7 +359,7 @@ rb_thread_debug(
 
     if (debug_mutex_initialized == 1) {
 	debug_mutex_initialized = 0;
-	native_mutex_initialize(&debug_mutex);
+        rb_native_mutex_initialize(&debug_mutex);
     }
 
     va_start(args, fmt);
@@ -352,31 +377,31 @@ rb_vm_gvl_destroy(rb_vm_t *vm)
 {
     gvl_release(vm);
     gvl_destroy(vm);
-    native_mutex_destroy(&vm->thread_destruct_lock);
+    rb_native_mutex_destroy(&vm->thread_destruct_lock);
 }
 
 void
 rb_nativethread_lock_initialize(rb_nativethread_lock_t *lock)
 {
-    native_mutex_initialize(lock);
+    rb_native_mutex_initialize(lock);
 }
 
 void
 rb_nativethread_lock_destroy(rb_nativethread_lock_t *lock)
 {
-    native_mutex_destroy(lock);
+    rb_native_mutex_destroy(lock);
 }
 
 void
 rb_nativethread_lock_lock(rb_nativethread_lock_t *lock)
 {
-    native_mutex_lock(lock);
+    rb_native_mutex_lock(lock);
 }
 
 void
 rb_nativethread_lock_unlock(rb_nativethread_lock_t *lock)
 {
-    native_mutex_unlock(lock);
+    rb_native_mutex_unlock(lock);
 }
 
 static int
@@ -392,15 +417,15 @@ unblock_function_set(rb_thread_t *th, rb_unblock_function_t *func, void *arg, in
 	    RUBY_VM_CHECK_INTS(th->ec);
 	}
 
-	native_mutex_lock(&th->interrupt_lock);
+        rb_native_mutex_lock(&th->interrupt_lock);
     } while (RUBY_VM_INTERRUPTED_ANY(th->ec) &&
-	     (native_mutex_unlock(&th->interrupt_lock), TRUE));
+             (rb_native_mutex_unlock(&th->interrupt_lock), TRUE));
 
     VM_ASSERT(th->unblock.func == NULL);
 
     th->unblock.func = func;
     th->unblock.arg = arg;
-    native_mutex_unlock(&th->interrupt_lock);
+    rb_native_mutex_unlock(&th->interrupt_lock);
 
     return TRUE;
 }
@@ -408,15 +433,15 @@ unblock_function_set(rb_thread_t *th, rb_unblock_function_t *func, void *arg, in
 static void
 unblock_function_clear(rb_thread_t *th)
 {
-    native_mutex_lock(&th->interrupt_lock);
+    rb_native_mutex_lock(&th->interrupt_lock);
     th->unblock.func = NULL;
-    native_mutex_unlock(&th->interrupt_lock);
+    rb_native_mutex_unlock(&th->interrupt_lock);
 }
 
 static void
 rb_threadptr_interrupt_common(rb_thread_t *th, int trap)
 {
-    native_mutex_lock(&th->interrupt_lock);
+    rb_native_mutex_lock(&th->interrupt_lock);
     if (trap) {
 	RUBY_VM_SET_TRAP_INTERRUPT(th->ec);
     }
@@ -429,7 +454,7 @@ rb_threadptr_interrupt_common(rb_thread_t *th, int trap)
     else {
 	/* none */
     }
-    native_mutex_unlock(&th->interrupt_lock);
+    rb_native_mutex_unlock(&th->interrupt_lock);
 }
 
 void
@@ -481,8 +506,6 @@ rb_threadptr_unlock_all_locking_mutexes(rb_thread_t *th)
     }
 }
 
-static struct timeval double2timeval(double d);
-
 void
 rb_thread_terminate_all(void)
 {
@@ -506,7 +529,7 @@ rb_thread_terminate_all(void)
 	terminate_all(vm, th);
 
 	while (vm_living_thread_num(vm) > 1) {
-	    struct timeval tv = double2timeval(1.0);
+	    struct timeval tv = { 1, 0 };
 	    /*
 	     * Thread exiting routine in thread_start_func_2 notify
 	     * me when the last sub-thread exit.
@@ -562,7 +585,7 @@ thread_cleanup_func(void *th_ptr, int atfork)
     if (atfork)
 	return;
 
-    native_mutex_destroy(&th->interrupt_lock);
+    rb_native_mutex_destroy(&th->interrupt_lock);
     native_thread_destroy(th);
 }
 
@@ -716,10 +739,10 @@ thread_start_func_2(rb_thread_t *th, VALUE *stack_start, VALUE *register_stack_s
 
 	rb_fiber_close(th->ec->fiber_ptr);
     }
-    native_mutex_lock(&th->vm->thread_destruct_lock);
+    rb_native_mutex_lock(&th->vm->thread_destruct_lock);
     /* make sure vm->running_thread never point me after this point.*/
     th->vm->running_thread = NULL;
-    native_mutex_unlock(&th->vm->thread_destruct_lock);
+    rb_native_mutex_unlock(&th->vm->thread_destruct_lock);
     thread_cleanup_func(th, FALSE);
     gvl_release(th->vm);
 
@@ -750,7 +773,7 @@ thread_create_core(VALUE thval, VALUE args, VALUE (*fn)(ANYARGS))
     th->pending_interrupt_mask_stack = rb_ary_dup(current_th->pending_interrupt_mask_stack);
     RBASIC_CLEAR_CLASS(th->pending_interrupt_mask_stack);
 
-    native_mutex_initialize(&th->interrupt_lock);
+    rb_native_mutex_initialize(&th->interrupt_lock);
 
     /* kick thread */
     err = native_thread_create(th);
@@ -848,12 +871,9 @@ rb_thread_create(VALUE (*fn)(ANYARGS), void *arg)
 }
 
 
-/* +infty, for this purpose */
-#define DELAY_INFTY 1E30
-
 struct join_arg {
     rb_thread_t *target, *waiting;
-    double delay;
+    struct timeval *limit;
 };
 
 static VALUE
@@ -882,11 +902,15 @@ thread_join_sleep(VALUE arg)
 {
     struct join_arg *p = (struct join_arg *)arg;
     rb_thread_t *target_th = p->target, *th = p->waiting;
-    const int forever = p->delay == DELAY_INFTY;
-    const double limit = forever ? 0 : timeofday() + p->delay;
+    struct timeval to;
+
+    if (p->limit) {
+        getclockofday(&to);
+        timeval_add(&to, p->limit);
+    }
 
     while (target_th->status != THREAD_KILLED) {
-	if (forever) {
+	if (!p->limit) {
 	    th->status = THREAD_STOPPED_FOREVER;
 	    th->vm->sleeper++;
 	    rb_check_deadlock(th->vm);
@@ -894,17 +918,13 @@ thread_join_sleep(VALUE arg)
 	    th->vm->sleeper--;
 	}
 	else {
-	    double now = timeofday();
-	    struct timeval tv;
-
-	    if (now > limit) {
+            if (timeval_update_expire(p->limit, &to)) {
 		thread_debug("thread_join: timeout (thid: %"PRI_THREAD_ID")\n",
 			     thread_id_str(target_th));
 		return Qfalse;
 	    }
-	    tv = double2timeval(limit - now);
 	    th->status = THREAD_STOPPED;
-	    native_sleep(th, &tv);
+	    native_sleep(th, p->limit);
 	}
 	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
 	th->status = THREAD_RUNNABLE;
@@ -915,7 +935,7 @@ thread_join_sleep(VALUE arg)
 }
 
 static VALUE
-thread_join(rb_thread_t *target_th, double delay)
+thread_join(rb_thread_t *target_th, struct timeval *tv)
 {
     rb_thread_t *th = GET_THREAD();
     struct join_arg arg;
@@ -929,7 +949,7 @@ thread_join(rb_thread_t *target_th, double delay)
 
     arg.target = target_th;
     arg.waiting = th;
-    arg.delay = delay;
+    arg.limit = tv;
 
     thread_debug("thread_join (thid: %"PRI_THREAD_ID", status: %s)\n",
 		 thread_id_str(target_th), thread_status_name(target_th, TRUE));
@@ -974,6 +994,8 @@ thread_join(rb_thread_t *target_th, double delay)
     return target_th->self;
 }
 
+static struct timeval double2timeval(double);
+
 /*
  *  call-seq:
  *     thr.join          -> thr
@@ -1016,15 +1038,29 @@ thread_join(rb_thread_t *target_th, double delay)
 static VALUE
 thread_join_m(int argc, VALUE *argv, VALUE self)
 {
-    double delay = DELAY_INFTY;
     VALUE limit;
+    struct timeval timeval;
+    struct timeval *tv = 0;
 
     rb_scan_args(argc, argv, "01", &limit);
-    if (!NIL_P(limit)) {
-	delay = rb_num2dbl(limit);
+
+    /*
+     * This supports INFINITY and negative values, so we can't use
+     * rb_time_interval right now...
+     */
+    switch (TYPE(limit)) {
+      case T_NIL: break;
+      case T_FIXNUM:
+        timeval.tv_sec = NUM2TIMET(limit);
+        timeval.tv_usec = 0;
+        tv = &timeval;
+        break;
+      default:
+        timeval = double2timeval(rb_num2dbl(limit));
+        tv = &timeval;
     }
 
-    return thread_join(rb_thread_ptr(self), delay);
+    return thread_join(rb_thread_ptr(self), tv);
 }
 
 /*
@@ -1045,7 +1081,7 @@ static VALUE
 thread_value(VALUE self)
 {
     rb_thread_t *th = rb_thread_ptr(self);
-    thread_join(th, DELAY_INFTY);
+    thread_join(th, 0);
     return th->value;
 }
 
@@ -1160,6 +1196,16 @@ timeval_add(struct timeval *dst, const struct timeval *tv)
     }
 }
 
+static void
+timeval_sub(struct timeval *dst, const struct timeval *tv)
+{
+    dst->tv_sec -= tv->tv_sec;
+    if ((dst->tv_usec -= tv->tv_usec) < 0) {
+	--dst->tv_sec;
+	dst->tv_usec += 1000000;
+    }
+}
+
 static int
 timeval_update_expire(struct timeval *tv, const struct timeval *to)
 {
@@ -1172,11 +1218,8 @@ timeval_update_expire(struct timeval *tv, const struct timeval *to)
 		 "%"PRI_TIMET_PREFIX"d.%.6ld > %"PRI_TIMET_PREFIX"d.%.6ld\n",
 		 (time_t)to->tv_sec, (long)to->tv_usec,
 		 (time_t)tvn.tv_sec, (long)tvn.tv_usec);
-    tv->tv_sec = to->tv_sec - tvn.tv_sec;
-    if ((tv->tv_usec = to->tv_usec - tvn.tv_usec) < 0) {
-	--tv->tv_sec;
-	tv->tv_usec += 1000000;
-    }
+    *tv = *to;
+    timeval_sub(tv, &tvn);
     return 0;
 }
 
@@ -1220,24 +1263,6 @@ rb_thread_sleep_deadly_allow_spurious_wakeup(void)
 {
     thread_debug("rb_thread_sleep_deadly_allow_spurious_wakeup\n");
     sleep_forever(GET_THREAD(), TRUE, FALSE);
-}
-
-static double
-timeofday(void)
-{
-#if defined(HAVE_CLOCK_GETTIME) && defined(CLOCK_MONOTONIC)
-    struct timespec tp;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &tp) == 0) {
-        return (double)tp.tv_sec + (double)tp.tv_nsec * 1e-9;
-    }
-    else
-#endif
-    {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
-    }
 }
 
 void
@@ -2064,7 +2089,7 @@ threadptr_get_interrupts(rb_thread_t *th)
     return interrupt & (rb_atomic_t)~ec->interrupt_mask;
 }
 
-void
+MJIT_FUNC_EXPORTED void
 rb_threadptr_execute_interrupts(rb_thread_t *th, int blocking_timing)
 {
     rb_atomic_t interrupt;
@@ -3740,17 +3765,20 @@ retryable(int e)
 #define restore_fdset(fds1, fds2) \
     ((fds1) ? rb_fd_dup(fds1, fds2) : (void)0)
 
-static inline void
-update_timeval(struct timeval *timeout, double limit)
+static inline int
+update_timeval(struct timeval *timeout, const struct timeval *to)
 {
     if (timeout) {
-	double d = limit - timeofday();
+        struct timeval tvn;
 
-	timeout->tv_sec = (time_t)d;
-	timeout->tv_usec = (int)((d-(double)timeout->tv_sec)*1e6);
-	if (timeout->tv_sec < 0)  timeout->tv_sec = 0;
-	if (timeout->tv_usec < 0) timeout->tv_usec = 0;
+        getclockofday(&tvn);
+        *timeout = *to;
+        timeval_sub(timeout, &tvn);
+
+        if (timeout->tv_sec < 0)  timeout->tv_sec = 0;
+        if (timeout->tv_usec < 0) timeout->tv_usec = 0;
     }
+    return TRUE;
 }
 
 static int
@@ -3762,22 +3790,18 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
     rb_fdset_t MAYBE_UNUSED(orig_read);
     rb_fdset_t MAYBE_UNUSED(orig_write);
     rb_fdset_t MAYBE_UNUSED(orig_except);
-    double limit = 0;
-    struct timeval wait_rest;
+    struct timeval to;
     rb_thread_t *th = GET_THREAD();
 
 #define do_select_update() \
     (restore_fdset(readfds, &orig_read), \
      restore_fdset(writefds, &orig_write), \
      restore_fdset(exceptfds, &orig_except), \
-     update_timeval(timeout, limit), \
-     TRUE)
+     update_timeval(timeout, &to))
 
     if (timeout) {
-	limit = timeofday();
-	limit += (double)timeout->tv_sec+(double)timeout->tv_usec*1e-6;
-	wait_rest = *timeout;
-	timeout = &wait_rest;
+        getclockofday(&to);
+        timeval_add(&to, timeout);
     }
 
 #define fd_init_copy(f) \
@@ -3866,15 +3890,6 @@ rb_thread_fd_select(int max, rb_fdset_t * read, rb_fdset_t * write, rb_fdset_t *
     return do_select(max, read, write, except, timeout);
 }
 
-/*
- * poll() is supported by many OSes, but so far Linux is the only
- * one we know of that supports using poll() in all places select()
- * would work.
- */
-#if defined(HAVE_POLL) && defined(__linux__)
-#  define USE_POLL
-#endif
-
 #ifdef USE_POLL
 
 /* The same with linux kernel. TODO: make platform independent definition. */
@@ -3911,57 +3926,37 @@ ppoll(struct pollfd *fds, nfds_t nfds,
 }
 #endif
 
-static inline void
-update_timespec(struct timespec *timeout, double limit)
-{
-    if (timeout) {
-	double d = limit - timeofday();
-
-	timeout->tv_sec = (long)d;
-	timeout->tv_nsec = (long)((d-(double)timeout->tv_sec)*1e9);
-	if (timeout->tv_sec < 0)  timeout->tv_sec = 0;
-	if (timeout->tv_nsec < 0) timeout->tv_nsec = 0;
-    }
-}
-
 /*
  * returns a mask of events
  */
 int
-rb_wait_for_single_fd(int fd, int events, struct timeval *tv)
+rb_wait_for_single_fd(int fd, int events, struct timeval *timeout)
 {
     struct pollfd fds;
     int result = 0, lerrno;
-    double limit = 0;
     struct timespec ts;
-    struct timespec *timeout = NULL;
+    struct timeval to;
     rb_thread_t *th = GET_THREAD();
 
-#define poll_update() \
-    (update_timespec(timeout, limit), \
-     TRUE)
-
-    if (tv) {
-	ts.tv_sec = tv->tv_sec;
-	ts.tv_nsec = tv->tv_usec * 1000;
-	limit = timeofday();
-	limit += (double)tv->tv_sec + (double)tv->tv_usec * 1e-6;
-	timeout = &ts;
+    if (timeout) {
+        getclockofday(&to);
+        timeval_add(&to, timeout);
     }
 
     fds.fd = fd;
     fds.events = (short)events;
 
     do {
-	fds.revents = 0;
-	lerrno = 0;
-	BLOCKING_REGION({
-	    result = ppoll(&fds, 1, timeout, NULL);
-	    if (result < 0) lerrno = errno;
-	}, ubf_select, th, FALSE);
+        fds.revents = 0;
+        lerrno = 0;
+        BLOCKING_REGION({
+            result = ppoll(&fds, 1, timespec_for(&ts, timeout), NULL);
+            if (result < 0) lerrno = errno;
+        }, ubf_select, th, FALSE);
 
-	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
-    } while (result < 0 && retryable(errno = lerrno) && poll_update());
+        RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
+    } while (result < 0 && retryable(errno = lerrno) &&
+            update_timeval(timeout, &to));
     if (result < 0) return -1;
 
     if (fds.revents & POLLNVAL) {
@@ -4101,12 +4096,12 @@ timer_thread_function(void *arg)
      * vm->running_thread switch. however it guarantees th->running_thread
      * point to valid pointer or NULL.
      */
-    native_mutex_lock(&vm->thread_destruct_lock);
+    rb_native_mutex_lock(&vm->thread_destruct_lock);
     /* for time slice */
     if (vm->running_thread) {
 	RUBY_VM_SET_TIMER_INTERRUPT(vm->running_thread->ec);
     }
-    native_mutex_unlock(&vm->thread_destruct_lock);
+    rb_native_mutex_unlock(&vm->thread_destruct_lock);
 
     /* check signal */
     rb_threadptr_check_signal(vm->main_thread);
@@ -4941,8 +4936,8 @@ Init_Thread(void)
 	    /* acquire global vm lock */
 	    gvl_init(th->vm);
 	    gvl_acquire(th->vm, th);
-	    native_mutex_initialize(&th->vm->thread_destruct_lock);
-	    native_mutex_initialize(&th->interrupt_lock);
+            rb_native_mutex_initialize(&th->vm->thread_destruct_lock);
+            rb_native_mutex_initialize(&th->interrupt_lock);
 
 	    th->pending_interrupt_queue = rb_ary_tmp_new(0);
 	    th->pending_interrupt_queue_checked = 0;

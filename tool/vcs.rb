@@ -14,7 +14,7 @@ unless File.respond_to? :realpath
 end
 
 def IO.pread(*args)
-  STDERR.puts(*args.inspect) if $DEBUG
+  STDERR.puts(args.inspect) if $DEBUG
   popen(*args) {|f|f.read}
 end
 
@@ -91,9 +91,21 @@ else
   end
   using DebugPOpen
   module DebugSystem
-    def system(*args, exception: true, **opts)
-      STDERR.puts [*args, **opts].inspect if $DEBUG
-      ret = super(*args, **opts, exception: exception)
+    def system(*args)
+      STDERR.puts args.inspect if $DEBUG
+      exception = false
+      opts = Hash.try_convert(args[-1])
+      if RUBY_VERSION >= "2.6"
+        unless opts
+          opts = {}
+          args << opts
+        end
+        exception = opts.fetch(:exception) {opts[:exception] = true}
+      elsif opts
+        exception = opts.delete(:exception) {true}
+        args.pop if opts.empty?
+      end
+      ret = super(*args)
       raise "Command failed with status (#$?): #{args[0]}" if exception and !ret
       ret
     end
@@ -104,6 +116,7 @@ else
 end
 
 class VCS
+  prepend(DebugSystem) if defined?(DebugSystem)
   class NotFoundError < RuntimeError; end
 
   @@dirs = []
@@ -481,6 +494,7 @@ class VCS
     def commit
       rev = cmd_read(%W"#{COMMAND} svn info"+[STDERR=>[:child, :out]])[/^Last Changed Rev: (\d+)/, 1]
       com = cmd_read(%W"#{COMMAND} svn find-rev r#{rev}").chomp
+      head = cmd_read(%W"#{COMMAND} symbolic-ref --short HEAD").chomp
 
       commits = cmd_read([COMMAND, "log", "--reverse", "--format=%H %ae %ce", "#{com}..@"], "rb").split("\n")
       commits.each_with_index do |l, i|
@@ -490,6 +504,7 @@ class VCS
         dcommit << "--add-author-from" unless a == c
         dcommit << r
         system(*dcommit) or return false
+        system(COMMAND, "checkout", head) or return false
         system(COMMAND, "rebase") or return false
       end
 

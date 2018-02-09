@@ -61,14 +61,14 @@
 #define DBL_EPSILON 2.2204460492503131e-16
 #endif
 
-#ifdef HAVE_INFINITY
+#ifndef USE_RB_INFINITY
 #elif !defined(WORDS_BIGENDIAN) /* BYTE_ORDER == LITTLE_ENDIAN */
 const union bytesequence4_or_float rb_infinity = {{0x00, 0x00, 0x80, 0x7f}};
 #else
 const union bytesequence4_or_float rb_infinity = {{0x7f, 0x80, 0x00, 0x00}};
 #endif
 
-#ifdef HAVE_NAN
+#ifndef USE_RB_NAN
 #elif !defined(WORDS_BIGENDIAN) /* BYTE_ORDER == LITTLE_ENDIAN */
 const union bytesequence4_or_float rb_nan = {{0x00, 0x00, 0xc0, 0x7f}};
 #else
@@ -1157,7 +1157,7 @@ flodivmod(double x, double y, double *divp, double *modp)
  * An error will be raised if y == 0.
  */
 
-double
+MJIT_FUNC_EXPORTED double
 ruby_float_mod(double x, double y)
 {
     double mod;
@@ -1333,7 +1333,7 @@ num_equal(VALUE x, VALUE y)
  *  so an implementation-dependent value is returned.
  */
 
-VALUE
+MJIT_FUNC_EXPORTED VALUE
 rb_float_equal(VALUE x, VALUE y)
 {
     volatile double a, b;
@@ -1436,7 +1436,7 @@ flo_cmp(VALUE x, VALUE y)
     return rb_dbl_cmp(a, b);
 }
 
-int
+MJIT_FUNC_EXPORTED int
 rb_float_cmp(VALUE x, VALUE y)
 {
     return NUM2INT(flo_cmp(x, y));

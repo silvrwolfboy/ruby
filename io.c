@@ -610,6 +610,14 @@ is_socket(int fd, VALUE path)
 
 static const char closed_stream[] = "closed stream";
 
+static void
+io_fd_check_closed(int fd)
+{
+    if (fd < 0) {
+	rb_raise(rb_eIOError, closed_stream);
+    }
+}
+
 void
 rb_eof_error(void)
 {
@@ -635,9 +643,7 @@ void
 rb_io_check_closed(rb_io_t *fptr)
 {
     rb_io_check_initialized(fptr);
-    if (fptr->fd < 0) {
-	rb_raise(rb_eIOError, closed_stream);
-    }
+    io_fd_check_closed(fptr->fd);
 }
 
 static rb_io_t *
@@ -1099,9 +1105,7 @@ io_fflush(rb_io_t *fptr)
 int
 rb_io_wait_readable(int f)
 {
-    if (f < 0) {
-	rb_raise(rb_eIOError, closed_stream);
-    }
+    io_fd_check_closed(f);
     switch (errno) {
       case EINTR:
 #if defined(ERESTART)
@@ -1125,9 +1129,7 @@ rb_io_wait_readable(int f)
 int
 rb_io_wait_writable(int f)
 {
-    if (f < 0) {
-	rb_raise(rb_eIOError, closed_stream);
-    }
+    io_fd_check_closed(f);
     switch (errno) {
       case EINTR:
 #if defined(ERESTART)
@@ -4521,8 +4523,7 @@ fptr_finalize_flush(rb_io_t *fptr, int noraise, int keepgvl)
     }
     if (fptr->wbuf.len) {
 	if (noraise) {
-	    if ((int)io_flush_buffer_sync(fptr) < 0 && NIL_P(err))
-		err = Qtrue;
+	    io_flush_buffer_sync(fptr);
 	}
 	else {
 	    if (io_fflush(fptr) < 0 && NIL_P(err))
@@ -4541,7 +4542,7 @@ fptr_finalize_flush(rb_io_t *fptr, int noraise, int keepgvl)
 	/* stdio_file is deallocated anyway
          * even if fclose failed.  */
 	if ((maygvl_fclose(stdio_file, noraise) < 0) && NIL_P(err))
-	    err = noraise ? Qtrue : INT2NUM(errno);
+	    if (!noraise) err = INT2NUM(errno);
     }
     else if (0 <= fd) {
 	/* fptr->fd may be closed even if close fails.
@@ -4552,7 +4553,7 @@ fptr_finalize_flush(rb_io_t *fptr, int noraise, int keepgvl)
 	keepgvl |= !(mode & FMODE_WRITABLE);
 	keepgvl |= noraise;
 	if ((maygvl_close(fd, keepgvl) < 0) && NIL_P(err))
-	    err = noraise ? Qtrue : INT2NUM(errno);
+	    if (!noraise) err = INT2NUM(errno);
     }
 
     if (!NIL_P(err) && !noraise) {
@@ -6150,23 +6151,16 @@ pipe_add_fptr(rb_io_t *fptr)
 static void
 pipe_del_fptr(rb_io_t *fptr)
 {
-    struct pipe_list *list = pipe_list;
+    struct pipe_list **prev = &pipe_list;
     struct pipe_list *tmp;
 
-    if (list->fptr == fptr) {
-	pipe_list = list->next;
-	free(list);
-	return;
-    }
-
-    while (list->next) {
-	if (list->next->fptr == fptr) {
-	    tmp = list->next;
-	    list->next = list->next->next;
+    while ((tmp = *prev) != 0) {
+	if (tmp->fptr == fptr) {
+	    *prev = tmp->next;
 	    free(tmp);
 	    return;
 	}
-	list = list->next;
+	prev = &tmp->next;
     }
 }
 
@@ -6202,6 +6196,31 @@ pipe_finalize(rb_io_t *fptr, int noraise)
     pipe_del_fptr(fptr);
 }
 #endif
+
+static void
+fptr_copy_finalizer(rb_io_t *fptr, const rb_io_t *orig)
+{
+#if defined(__CYGWIN__) || !defined(HAVE_WORKING_FORK)
+    void (*const old_finalize)(struct rb_io_t*,int) = fptr->finalize;
+
+    if (old_finalize == orig->finalize) return;
+#endif
+
+    fptr->finalize = orig->finalize;
+
+#if defined(__CYGWIN__) || !defined(HAVE_WORKING_FORK)
+    if (old_finalize != pipe_finalize) {
+	struct pipe_list *list;
+	for (list = pipe_list; list; list = list->next) {
+	    if (list->fptr == fptr) break;
+	}
+	if (!list) pipe_add_fptr(fptr);
+    }
+    else {
+	pipe_del_fptr(fptr);
+    }
+#endif
+}
 
 void
 rb_io_synchronized(rb_io_t *fptr)
@@ -7151,11 +7170,7 @@ io_reopen(VALUE io, VALUE nfile)
     fptr->lineno = orig->lineno;
     if (RTEST(orig->pathv)) fptr->pathv = orig->pathv;
     else if (!IS_PREP_STDIO(fptr)) fptr->pathv = Qnil;
-    fptr->finalize = orig->finalize;
-#if defined (__CYGWIN__) || !defined(HAVE_WORKING_FORK)
-    if (fptr->finalize == pipe_finalize)
-	pipe_add_fptr(fptr);
-#endif
+    fptr_copy_finalizer(fptr, orig);
 
     fd = fptr->fd;
     fd2 = orig->fd;
@@ -7334,11 +7349,7 @@ rb_io_init_copy(VALUE dest, VALUE io)
     fptr->pid = orig->pid;
     fptr->lineno = orig->lineno;
     if (!NIL_P(orig->pathv)) fptr->pathv = orig->pathv;
-    fptr->finalize = orig->finalize;
-#if defined (__CYGWIN__) || !defined(HAVE_WORKING_FORK)
-    if (fptr->finalize == pipe_finalize)
-	pipe_add_fptr(fptr);
-#endif
+    fptr_copy_finalizer(fptr, orig);
 
     fd = ruby_dup(orig->fd);
     fptr->fd = fd;

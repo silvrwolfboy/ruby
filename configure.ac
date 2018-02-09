@@ -6,6 +6,13 @@ AC_CONFIG_MACRO_DIRS(tool/m4)
 
 AC_PREREQ(2.67)
 
+dnl   override AC_CHECKING
+dnl   placed here due to aclocal(1)'s
+dnl   ignoring this definition in separate files
+AC_DEFUN([AC_CHECKING],[dnl
+AC_REQUIRE([_COLORIZE_RESULT_PREPARE])dnl
+AS_MESSAGE([checking ${msg_checking}$1${msg_reset}...])])dnl
+
 AC_DISABLE_OPTION_CHECKING
 
 AC_ARG_VAR([cflags], [additional CFLAGS])
@@ -520,20 +527,6 @@ AS_IF([test "$GCC:${warnflags+set}:no" = yes::no], [
 ])
 RUBY_TRY_CFLAGS(-Qunused-arguments, [RUBY_APPEND_OPTIONS(rb_cv_wsuppress_flags, -Qunused-arguments)])
 
-for n in huge_val infinity nan; do
-    m=AS_TR_CPP($n)
-    AC_CACHE_CHECK([whether $m is available without C99 option], rb_cv_$n,
-	[AC_COMPILE_IFELSE(
-	    [AC_LANG_BOOL_COMPILE_TRY(AC_INCLUDES_DEFAULT([@%:@include <math.h>
-@%:@ifndef $m
-@%:@error no $m
-@%:@endif
-]), [1])], [eval rb_cv_$n=yes], [eval rb_cv_$n=no])])
-    AS_IF([eval test '"$rb_cv_'$n'"' = yes], [
-	AC_DEFINE_UNQUOTED([HAVE_]$m)
-    ])
-done
-
 AC_ARG_WITH(compress-debug-sections,
 	AS_HELP_STRING([--with-compress-debug-sections=type],
 	    [enable debug section compression]),
@@ -546,6 +539,8 @@ AS_IF([test "$GCC" = yes], [
     # _FORTIFY_SOURCE=2 by default. So, let's support it for protecting us from
     # a mistake of silly C extensions.
     RUBY_TRY_CFLAGS(-D_FORTIFY_SOURCE=2, [RUBY_APPEND_OPTION(XCFLAGS, -D_FORTIFY_SOURCE=2)])
+
+    : ${MJIT_HEADER_FLAGS='-P -dD'}
 
     # -fstack-protector
     AS_CASE(["$target_os"],
@@ -1254,6 +1249,24 @@ int foo(int x, ...);
   rb_cv_va_args_macro=no)])
 AS_IF([test "$rb_cv_va_args_macro" = yes], [
   AC_DEFINE(HAVE_VA_ARGS_MACRO)
+])
+
+AC_CACHE_CHECK([appropriate way to simulate va_copy], rb_cv_va_copy, [dnl
+    RUBY_CHECK_VA_COPY([va_copy], [va_copy((dst),(src))])
+    RUBY_CHECK_VA_COPY([VA_COPY macro], [VA_COPY((dst),(src))])
+    RUBY_CHECK_VA_COPY([__va_copy], [__va_copy((dst),(src))])
+    RUBY_CHECK_VA_COPY([__builtin_va_copy], [__builtin_va_copy((dst),(src))])
+    RUBY_CHECK_VA_COPY([va_copy via struct assignment],
+        [do (dst) = (src); while (0)])
+    RUBY_CHECK_VA_COPY([va_copy via pointer assignment],
+        [do *(dst) = *(src); while (0)])
+    RUBY_CHECK_VA_COPY([va_copy via memcpy],
+        [memcpy(&(dst), &(src), sizeof(va_list))])
+])
+AS_IF([test "x$rb_cv_va_copy" = x], [
+    AC_ERROR([no way to simulate va_copy])
+], [
+    AC_DEFINE_UNQUOTED(AS_TR_CPP(HAVE_$rb_cv_va_copy))
 ])
 
 AC_CACHE_CHECK([for alignas() syntax], rb_cv_have_alignas, [
@@ -2464,6 +2477,7 @@ LIBEXT=a
 
 AC_SUBST(DLDFLAGS)dnl
 AC_SUBST(ARCH_FLAG)dnl
+AC_SUBST(MJIT_HEADER_FLAGS)dnl
 
 AC_SUBST(STATIC)dnl
 AC_SUBST(CCDLFLAGS)dnl

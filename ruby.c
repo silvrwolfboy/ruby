@@ -51,6 +51,8 @@
 
 #include "ruby/util.h"
 
+#include "mjit.h"
+
 #ifndef HAVE_STDLIB_H
 char *getenv();
 #endif
@@ -135,6 +137,7 @@ struct ruby_cmdline_options {
     VALUE req_list;
     unsigned int features;
     unsigned int dump;
+    struct mjit_options mjit;
     int safe_level;
     int sflag, xflag;
     unsigned int warning: 1;
@@ -193,7 +196,7 @@ static void
 show_usage_line(const char *str, unsigned int namelen, unsigned int secondlen, int help)
 {
     const unsigned int w = 16;
-    const int wrap = help && namelen + secondlen - 2 > w;
+    const int wrap = help && namelen + secondlen - 1 > w;
     printf("  %.*s%-*.*s%-*s%s\n", namelen-1, str,
 	   (wrap ? 0 : w - namelen + 1),
 	   (help ? secondlen-1 : 0), str + namelen,
@@ -238,6 +241,8 @@ usage(const char *name, int help)
 	M("-w",		   "",			   "turn warnings on for your script"),
 	M("-W[level=2]",   "",			   "set warning level; 0=silence, 1=medium, 2=verbose"),
 	M("-x[directory]", "",			   "strip off text before #!ruby line and perhaps cd to directory"),
+        M("--jit",         "",                     "enable MJIT with default options (experimental)"),
+        M("--jit-[option]","",                     "enable MJIT with an option (experimental)"),
 	M("-h",		   "",			   "show this message, --help for more info"),
     };
     static const struct message help_msg[] = {
@@ -263,6 +268,16 @@ usage(const char *name, int help)
 	M("rubyopt", "",        "RUBYOPT environment variable (default: enabled)"),
 	M("frozen-string-literal", "", "freeze all string literals (default: disabled)"),
     };
+    static const struct message mjit_options[] = {
+        M("--jit-cc=cc",         "", "C compiler to generate native code (gcc, clang)"),
+        M("--jit-warnings",      "", "Enable printing MJIT warnings"),
+        M("--jit-debug",         "", "Enable MJIT debugging (very slow)"),
+        M("--jit-wait",          "", "Wait until JIT compilation is finished everytime (for testing)"),
+        M("--jit-save-temps",    "", "Save MJIT temporary files in $TMP or /tmp (for testing)"),
+        M("--jit-verbose=num",   "", "Print MJIT logs of level num or less to stderr (default: 0)"),
+        M("--jit-max-cache=num", "", "Max number of methods to be JIT-ed in a cache (default: 1000)"),
+        M("--jit-min-calls=num", "", "Number of calls to trigger JIT (for testing, default: 5)"),
+    };
     int i;
     const int num = numberof(usage_msg) - (help ? 1 : 0);
 #define SHOW(m) show_usage_line((m).str, (m).namelen, (m).secondlen, help)
@@ -281,6 +296,9 @@ usage(const char *name, int help)
     puts("Features:");
     for (i = 0; i < numberof(features); ++i)
 	SHOW(features[i]);
+    puts("MJIT options (experimental):");
+    for (i = 0; i < numberof(mjit_options); ++i)
+	SHOW(mjit_options[i]);
 }
 
 #define rubylib_path_new rb_str_new
@@ -485,17 +503,8 @@ ruby_init_loadpath_safe(int safe_level)
     ID id_initial_load_path_mark;
     const char *paths = ruby_initial_load_paths;
 #if defined LOAD_RELATIVE
-# if defined HAVE_DLADDR || defined __CYGWIN__ || defined _WIN32
-#   define VARIABLE_LIBPATH 1
-# else
-#   define VARIABLE_LIBPATH 0
-# endif
-# if VARIABLE_LIBPATH
     char *libpath;
     VALUE sopath;
-# else
-    char libpath[MAXPATHLEN + 1];
-# endif
     size_t baselen;
     char *p;
 
@@ -527,11 +536,10 @@ ruby_init_loadpath_safe(int safe_level)
 #elif defined(HAVE_DLADDR)
     sopath = dladdr_path((void *)(VALUE)expand_include_path);
     libpath = RSTRING_PTR(sopath);
+#else
+# error relative load path is not supported on this platform.
 #endif
 
-#if !VARIABLE_LIBPATH
-    libpath[sizeof(libpath) - 1] = '\0';
-#endif
 #if defined DOSISH && !defined _WIN32
     translit_char(libpath, '\\', '/');
 #elif defined __CYGWIN__
@@ -582,26 +590,12 @@ ruby_init_loadpath_safe(int safe_level)
 	    p = p2;
 	}
 #endif
-#if !VARIABLE_LIBPATH
-	*p = 0;
-#endif
     }
-#if !VARIABLE_LIBPATH
-    else {
-	strlcpy(libpath, ".", sizeof(libpath));
-	p = libpath + 1;
-    }
-    baselen = p - libpath;
-#define PREFIX_PATH() rb_str_new(libpath, baselen)
-#else
     baselen = p - libpath;
     rb_str_resize(sopath, baselen);
     libpath = RSTRING_PTR(sopath);
 #define PREFIX_PATH() sopath
-#endif
-
 #define BASEPATH() rb_str_buf_cat(rb_str_buf_new(baselen+len), libpath, baselen)
-
 #define RUBY_RELATIVE(path, len) rb_str_buf_cat(BASEPATH(), (path), (len))
 #else
     const size_t exec_prefix_len = strlen(ruby_exec_prefix);
@@ -916,6 +910,55 @@ set_option_encoding_once(const char *type, VALUE *name, const char *e, long elen
     set_option_encoding_once("default_external", &(opt)->ext.enc.name, (e), (elen))
 #define set_source_encoding_once(opt, e, elen) \
     set_option_encoding_once("source", &(opt)->src.enc.name, (e), (elen))
+
+static enum rb_mjit_cc
+parse_mjit_cc(const char *s)
+{
+    if (strcmp(s, "gcc") == 0) {
+        return MJIT_CC_GCC;
+    }
+    else if (strcmp(s, "clang") == 0) {
+        return MJIT_CC_CLANG;
+    }
+    else {
+        rb_raise(rb_eRuntimeError, "invalid C compiler `%s' (available C compilers: gcc, clang)", s);
+    }
+}
+
+static void
+setup_mjit_options(const char *s, struct mjit_options *mjit_opt)
+{
+    mjit_opt->on = 1;
+    if (*s == 0) return;
+    if (strncmp(s, "-cc=", 4) == 0) {
+        mjit_opt->cc = parse_mjit_cc(s + 4);
+    }
+    else if (strcmp(s, "-warnings") == 0) {
+        mjit_opt->warnings = 1;
+    }
+    else if (strcmp(s, "-debug") == 0) {
+        mjit_opt->debug = 1;
+    }
+    else if (strcmp(s, "-wait") == 0) {
+        mjit_opt->wait = 1;
+    }
+    else if (strcmp(s, "-save-temps") == 0) {
+        mjit_opt->save_temps = 1;
+    }
+    else if (strncmp(s, "-verbose=", 9) == 0) {
+        mjit_opt->verbose = atoi(s + 9);
+    }
+    else if (strncmp(s, "-max-cache=", 11) == 0) {
+        mjit_opt->max_cache_size = atoi(s + 11);
+    }
+    else if (strncmp(s, "-min-calls=", 11) == 0) {
+        mjit_opt->min_calls = atoi(s + 11);
+    }
+    else {
+        rb_raise(rb_eRuntimeError,
+                 "invalid MJIT option `%s' (--help will show valid MJIT options)", s + 1);
+    }
+}
 
 static long
 proc_options(long argc, char **argv, ruby_cmdline_options_t *opt, int envopt)
@@ -1269,6 +1312,9 @@ proc_options(long argc, char **argv, ruby_cmdline_options_t *opt, int envopt)
 		opt->verbose = 1;
 		ruby_verbose = Qtrue;
 	    }
+            else if (strncmp("jit", s, 3) == 0) {
+                setup_mjit_options(s + 3, &opt->mjit);
+            }
 	    else if (strcmp("yydebug", s) == 0) {
 		if (envopt) goto noenvopt_long;
 		opt->dump |= DUMP_BIT(yydebug);
@@ -1560,6 +1606,13 @@ process_options(int argc, char **argv, ruby_cmdline_options_t *opt)
 
     ruby_gc_set_params(opt->safe_level);
     ruby_init_loadpath_safe(opt->safe_level);
+
+#ifndef MJIT_FORCE_ENABLE /* to use with: ./configure cppflags="-DMJIT_FORCE_ENABLE" */
+    if (opt->mjit.on)
+#endif
+        /* Using TMP_RUBY_PREFIX created by ruby_init_loadpath_safe(). */
+        mjit_init(&opt->mjit);
+
     Init_enc();
     lenc = rb_locale_encoding();
     rb_enc_associate(rb_progname, lenc);

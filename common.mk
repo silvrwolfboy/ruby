@@ -59,6 +59,12 @@ ENC_TRANS_D   = $(TIMESTAMPDIR)/.enc-trans.time
 RDOCOUT       = $(EXTOUT)/rdoc
 HTMLOUT       = $(EXTOUT)/html
 CAPIOUT       = doc/capi
+MJIT_HEADER   = rb_mjit_header.h
+MJIT_MIN_HEADER = $(MJIT_HEADER_BUILD_DIR)/rb_mjit_min_header-$(RUBY_PROGRAM_VERSION).h
+MJIT_CPPFLAGS = -DMJIT_HEADER_INSTALL_DIR=\""$(MJIT_HEADER_INSTALL_DIR)"\" \
+		-DLIBRUBYARG_SHARED=\""$(LIBRUBYARG_SHARED)"\"
+MJIT_HEADER_BUILD_DIR = $(EXTOUT)/include/$(arch)
+MJIT_HEADER_INSTALL_DIR = include/$(RUBY_BASE_NAME)-$(ruby_version)/$(arch)
 
 INITOBJS      = dmyext.$(OBJEXT) dmyenc.$(OBJEXT)
 NORMALMAINOBJ = main.$(OBJEXT)
@@ -95,6 +101,8 @@ COMMONOBJS    = array.$(OBJEXT) \
 		load.$(OBJEXT) \
 		marshal.$(OBJEXT) \
 		math.$(OBJEXT) \
+		mjit.$(OBJEXT) \
+		mjit_compile.$(OBJEXT) \
 		node.$(OBJEXT) \
 		numeric.$(OBJEXT) \
 		object.$(OBJEXT) \
@@ -186,13 +194,36 @@ SHOWFLAGS = showflags
 
 all: $(SHOWFLAGS) main docs
 
-main: $(SHOWFLAGS) exts $(ENCSTATIC:static=lib)encs
+main: $(SHOWFLAGS) exts $(ENCSTATIC:static=lib)encs $(MJIT_MIN_HEADER)
 	@$(NULLCMD)
+
+.PHONY: mjit-headers
+mjit-headers: $(MJIT_MIN_HEADER)
+
+$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: PHONY probes.h
+	$(ECHO) building $@
+	$(Q) $(CPP) $(MJIT_HEADER_FLAGS) $(CFLAGS) $(XCFLAGS) $(CPPFLAGS) -DMJIT_HEADER $(srcdir)/vm.c $(CPPOUTFLAG)$(@F).new
+	$(Q) $(IFCHANGE) $@ $(@F).new
+
+$(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(srcdir)/tool/transform_mjit_header.rb $(PREP)
+$(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h
+	$(ECHO) building $@
+	$(MINIRUBY) $(srcdir)/tool/transform_mjit_header.rb "$(CC) $(ARCH_FLAG)" $(MJIT_HEADER:.h=)$(MJIT_HEADER_ARCH).h $@
+	$(Q) $(MAKEDIRS) $(MJIT_HEADER_INSTALL_DIR)
+	$(Q) $(MINIRUBY) -rfileutils -e "include FileUtils::Verbose" \
+	  -e "src, dest = ARGV" \
+	  -e "exit if File.identical?(src, dest) or cmp(src, dest) rescue nil" \
+	  -e "def noraise; yield; rescue; rescue NotImplementedError; end" \
+	  -e "noraise {ln_sf('../'*dest.count('/')+src, dest)} or" \
+	  -e "noraise {ln(src, dest)} or" \
+	  -e "cp(src, dest)" \
+	  $@ $(MJIT_HEADER_INSTALL_DIR)/$(@F)
 
 .PHONY: showflags
 exts enc trans: $(SHOWFLAGS)
 showflags:
 	$(MESSAGE_BEGIN) \
+	"	BASERUBY = $(BASERUBY)" \
 	"	CC = $(CC)" \
 	"	LD = $(LD)" \
 	"	LDSHARED = $(LDSHARED)" \
@@ -532,6 +563,10 @@ clean-local:: clean-runnable
 	$(Q)$(RM) $(PROGRAM) $(WPROGRAM) miniruby$(EXEEXT) dmyext.$(OBJEXT) dmyenc.$(OBJEXT) $(ARCHFILE) .*.time
 	$(Q)$(RM) y.tab.c y.output encdb.h transdb.h config.log rbconfig.rb $(ruby_pc) probes.h probes.$(OBJEXT) probes.stamp ruby-glommed.$(OBJEXT)
 	$(Q)$(RM) GNUmakefile.old Makefile.old $(arch)-fake.rb bisect.sh $(ENC_TRANS_D)
+	$(Q)$(RM) $(MJIT_HEADER) $(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX:%=*).h
+	$(Q)$(RM) $(MJIT_MIN_HEADER) $(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX:%=*).h
+	$(Q)$(RM) $(MJIT_HEADER_INSTALL_DIR)/rb_mjit_min_header-*.h
+	-$(Q) $(RMDIRS) $(MJIT_HEADER_INSTALL_DIR) 2> $(NULL) || exit 0
 	-$(Q) $(RMDIR) enc/jis enc/trans enc 2> $(NULL) || exit 0
 clean-runnable:: PHONY
 	$(Q)$(CHDIR) bin 2>$(NULL) && $(RM) $(PROGRAM) $(WPROGRAM) $(GORUBY)$(EXEEXT) bin/*.$(DLEXT) 2>$(NULL) || exit 0
@@ -873,6 +908,17 @@ $(OBJS):  {$(VPATH)}config.h {$(VPATH)}missing.h
 INSNS2VMOPT = --srcdir="$(srcdir)"
 
 srcs_vpath = {$(VPATH)}
+
+# TODO: dependencies on tool/ruby_vm scripts.
+$(srcs_vpath)opt_sc.inc: $(srcdir)/tool/ruby_vm/views/opt_sc.inc.erb
+$(srcs_vpath)optinsn.inc: $(srcdir)/tool/ruby_vm/views/optinsn.inc.erb
+$(srcs_vpath)optunifs.inc: $(srcdir)/tool/ruby_vm/views/optunifs.inc.erb
+$(srcs_vpath)insns.inc: $(srcdir)/tool/ruby_vm/views/insns.inc.erb
+$(srcs_vpath)insns_info.inc: $(srcdir)/tool/ruby_vm/views/insns_info.inc.erb
+$(srcs_vpath)vmtc.inc: $(srcdir)/tool/ruby_vm/views/vmtc.inc.erb
+$(srcs_vpath)vm.inc: $(srcdir)/tool/ruby_vm/views/vm.inc.erb
+$(srcs_vpath)mjit_compile.inc: $(srcdir)/tool/ruby_vm/views/mjit_compile.inc.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_send.erb
+
 common-srcs: $(srcs_vpath)parse.c $(srcs_vpath)lex.c $(srcs_vpath)enc/trans/newline.c $(srcs_vpath)id.c \
 	     srcs-lib srcs-ext incs
 
@@ -1510,6 +1556,7 @@ cont.$(OBJEXT): {$(VPATH)}internal.h
 cont.$(OBJEXT): {$(VPATH)}io.h
 cont.$(OBJEXT): {$(VPATH)}method.h
 cont.$(OBJEXT): {$(VPATH)}missing.h
+cont.$(OBJEXT): {$(VPATH)}mjit.h
 cont.$(OBJEXT): {$(VPATH)}node.h
 cont.$(OBJEXT): {$(VPATH)}onigmo.h
 cont.$(OBJEXT): {$(VPATH)}oniguruma.h
@@ -1761,6 +1808,7 @@ eval.$(OBJEXT): {$(VPATH)}io.h
 eval.$(OBJEXT): {$(VPATH)}iseq.h
 eval.$(OBJEXT): {$(VPATH)}method.h
 eval.$(OBJEXT): {$(VPATH)}missing.h
+eval.$(OBJEXT): {$(VPATH)}mjit.h
 eval.$(OBJEXT): {$(VPATH)}node.h
 eval.$(OBJEXT): {$(VPATH)}onigmo.h
 eval.$(OBJEXT): {$(VPATH)}oniguruma.h
@@ -1821,6 +1869,7 @@ gc.$(OBJEXT): {$(VPATH)}internal.h
 gc.$(OBJEXT): {$(VPATH)}io.h
 gc.$(OBJEXT): {$(VPATH)}method.h
 gc.$(OBJEXT): {$(VPATH)}missing.h
+gc.$(OBJEXT): {$(VPATH)}mjit.h
 gc.$(OBJEXT): {$(VPATH)}node.h
 gc.$(OBJEXT): {$(VPATH)}onigmo.h
 gc.$(OBJEXT): {$(VPATH)}oniguruma.h
@@ -1961,6 +2010,7 @@ iseq.$(OBJEXT): {$(VPATH)}iseq.c
 iseq.$(OBJEXT): {$(VPATH)}iseq.h
 iseq.$(OBJEXT): {$(VPATH)}method.h
 iseq.$(OBJEXT): {$(VPATH)}missing.h
+iseq.$(OBJEXT): {$(VPATH)}mjit.h
 iseq.$(OBJEXT): {$(VPATH)}node.h
 iseq.$(OBJEXT): {$(VPATH)}node_name.inc
 iseq.$(OBJEXT): {$(VPATH)}onigmo.h
@@ -1975,6 +2025,20 @@ iseq.$(OBJEXT): {$(VPATH)}util.h
 iseq.$(OBJEXT): {$(VPATH)}vm_core.h
 iseq.$(OBJEXT): {$(VPATH)}vm_debug.h
 iseq.$(OBJEXT): {$(VPATH)}vm_opts.h
+mjit.$(OBJEXT): $(top_srcdir)/revision.h
+mjit.$(OBJEXT): {$(VPATH)}mjit.c
+mjit.$(OBJEXT): {$(VPATH)}mjit.h
+mjit.$(OBJEXT): {$(VPATH)}ruby_assert.h
+mjit.$(OBJEXT): {$(VPATH)}util.h
+mjit.$(OBJEXT): {$(VPATH)}version.h
+mjit.$(OBJEXT): {$(VPATH)}vm_core.h
+mjit_compile.$(OBJEXT): {$(VPATH)}insns.inc
+mjit_compile.$(OBJEXT): {$(VPATH)}insns_info.inc
+mjit_compile.$(OBJEXT): {$(VPATH)}internal.h
+mjit_compile.$(OBJEXT): {$(VPATH)}mjit.h
+mjit_compile.$(OBJEXT): {$(VPATH)}mjit_compile.c
+mjit_compile.$(OBJEXT): {$(VPATH)}mjit_compile.inc
+mjit_compile.$(OBJEXT): {$(VPATH)}vm_core.h
 load.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 load.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
 load.$(OBJEXT): $(CCAN_DIR)/list/list.h
@@ -2448,6 +2512,7 @@ ruby.$(OBJEXT): {$(VPATH)}internal.h
 ruby.$(OBJEXT): {$(VPATH)}io.h
 ruby.$(OBJEXT): {$(VPATH)}method.h
 ruby.$(OBJEXT): {$(VPATH)}missing.h
+ruby.$(OBJEXT): {$(VPATH)}mjit.h
 ruby.$(OBJEXT): {$(VPATH)}node.h
 ruby.$(OBJEXT): {$(VPATH)}onigmo.h
 ruby.$(OBJEXT): {$(VPATH)}oniguruma.h
@@ -2798,12 +2863,14 @@ vm.$(OBJEXT): {$(VPATH)}id.h
 vm.$(OBJEXT): {$(VPATH)}id_table.h
 vm.$(OBJEXT): {$(VPATH)}insns.def
 vm.$(OBJEXT): {$(VPATH)}insns.inc
+vm.$(OBJEXT): {$(VPATH)}insns_info.inc
 vm.$(OBJEXT): {$(VPATH)}intern.h
 vm.$(OBJEXT): {$(VPATH)}internal.h
 vm.$(OBJEXT): {$(VPATH)}io.h
 vm.$(OBJEXT): {$(VPATH)}iseq.h
 vm.$(OBJEXT): {$(VPATH)}method.h
 vm.$(OBJEXT): {$(VPATH)}missing.h
+vm.$(OBJEXT): {$(VPATH)}mjit.h
 vm.$(OBJEXT): {$(VPATH)}node.h
 vm.$(OBJEXT): {$(VPATH)}onigmo.h
 vm.$(OBJEXT): {$(VPATH)}oniguruma.h

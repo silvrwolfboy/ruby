@@ -746,7 +746,7 @@ rb_iseq_translate_threaded_code(rb_iseq_t *iseq)
 }
 
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
-static int
+int
 rb_vm_insn_addr2insn(const void *addr) /* cold path */
 {
     int insn;
@@ -2440,6 +2440,20 @@ same_debug_pos_p(LINK_ELEMENT *iobj1, LINK_ELEMENT *iobj2)
 }
 
 static int
+is_frozen_putstring(INSN *insn, VALUE *op)
+{
+    if (IS_INSN_ID(insn, putstring)) {
+        *op = OPERAND_AT(insn, 0);
+        return 1;
+    }
+    else if (IS_INSN_ID(insn, putobject)) { /* frozen_string_literal */
+        *op = OPERAND_AT(insn, 0);
+        return RB_TYPE_P(*op, T_STRING);
+    }
+    return 0;
+}
+
+static int
 iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcallopt)
 {
     INSN *const iobj = (INSN *)list;
@@ -2559,16 +2573,15 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
      * putobject "beg".."end"
      */
     if (IS_INSN_ID(iobj, checkmatch)) {
-	INSN *range = (INSN *)get_prev_insn(iobj);
-	INSN *beg, *end;
+        INSN *range = (INSN *)get_prev_insn(iobj);
+        INSN *beg, *end;
+        VALUE str_beg, str_end;
 
 	if (range && IS_INSN_ID(range, newrange) &&
-		(end = (INSN *)get_prev_insn(range)) != 0 &&
-		IS_INSN_ID(end, putstring) &&
-		(beg = (INSN *)get_prev_insn(end)) != 0 &&
-		IS_INSN_ID(beg, putstring)) {
-	    VALUE str_beg = OPERAND_AT(beg, 0);
-	    VALUE str_end = OPERAND_AT(end, 0);
+                (end = (INSN *)get_prev_insn(range)) != 0 &&
+                is_frozen_putstring(end, &str_end) &&
+                (beg = (INSN *)get_prev_insn(end)) != 0 &&
+                is_frozen_putstring(beg, &str_beg)) {
 	    int excl = FIX2INT(OPERAND_AT(range, 0));
 	    VALUE lit_range = rb_range_new(str_beg, str_end, excl);
 
@@ -2939,9 +2952,9 @@ insn_set_specialized_instruction(rb_iseq_t *iseq, INSN *iobj, int insn_id)
 	VALUE *old_operands = iobj->operands;
 	iobj->operand_size = 4;
 	iobj->operands = (VALUE *)compile_data_alloc(iseq, iobj->operand_size * sizeof(VALUE));
-	iobj->operands[0] = old_operands[0];
+	iobj->operands[0] = (VALUE)new_callinfo(iseq, idEq, 1, 0, NULL, FALSE);
 	iobj->operands[1] = Qfalse; /* CALL_CACHE */
-	iobj->operands[2] = (VALUE)new_callinfo(iseq, idEq, 1, 0, NULL, FALSE);
+	iobj->operands[2] = old_operands[0];
 	iobj->operands[3] = Qfalse; /* CALL_CACHE */
     }
 
@@ -5025,7 +5038,7 @@ static int
 compile_for_masgn(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node, int popped)
 {
     /* massign to var in "for"
-     * args.length == 1 && Array === (tmp = args[0]) ? tmp : args
+     * (args.length == 1 && Array.try_convert(args[0])) || args
      */
     const int line = nd_line(node);
     const NODE *var = node->nd_var;
@@ -5041,8 +5054,9 @@ compile_for_masgn(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const nod
     ADD_INSN1(ret, line, putobject, INT2FIX(0));
     ADD_CALL(ret, line, idAREF, INT2FIX(1));
     ADD_INSN1(ret, line, putobject, rb_cArray);
-    ADD_INSN1(ret, line, topn, INT2FIX(1));
-    ADD_CALL(ret, line, idEqq, INT2FIX(1));
+    ADD_INSN(ret, line, swap);
+    ADD_CALL(ret, line, rb_intern("try_convert"), INT2FIX(1));
+    ADD_INSN(ret, line, dup);
     ADD_INSNL(ret, line, branchunless, not_ary);
     ADD_INSN(ret, line, swap);
     ADD_LABEL(ret, not_ary);
@@ -6076,9 +6090,9 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, in
 	    ISEQ_COMPILE_DATA(iseq)->option->specialized_instruction) {
 	    VALUE str = freeze_literal(iseq, node->nd_args->nd_head->nd_lit);
 	    CHECK(COMPILE(ret, "recv", node->nd_recv));
-	    ADD_INSN3(ret, line, opt_aref_with,
+	    ADD_INSN3(ret, line, opt_aref_with, str,
 		      new_callinfo(iseq, idAREF, 1, 0, NULL, FALSE),
-		      NULL/* CALL_CACHE */, str);
+		      NULL/* CALL_CACHE */);
 	    if (popped) {
 		ADD_INSN(ret, line, pop);
 	    }
@@ -7090,9 +7104,9 @@ iseq_compile_each0(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *node, in
 		ADD_INSN(ret, line, swap);
 		ADD_INSN1(ret, line, topn, INT2FIX(1));
 	    }
-	    ADD_INSN3(ret, line, opt_aset_with,
+	    ADD_INSN3(ret, line, opt_aset_with, str,
 		      new_callinfo(iseq, idASET, 2, 0, NULL, FALSE),
-		      NULL/* CALL_CACHE */, str);
+		      NULL/* CALL_CACHE */);
 	    ADD_INSN(ret, line, pop);
 	    break;
 	}

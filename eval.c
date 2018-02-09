@@ -17,6 +17,7 @@
 #include "gc.h"
 #include "ruby/vm.h"
 #include "vm_core.h"
+#include "mjit.h"
 #include "probes_helper.h"
 
 NORETURN(void rb_raise_jump(VALUE, VALUE));
@@ -217,6 +218,8 @@ ruby_cleanup(volatile int ex)
 	    sysex = EXIT_FAILURE;
 	}
     }
+
+    mjit_finish(); /* We still need ISeqs here. */
 
     ruby_finalize_1();
 
@@ -641,7 +644,7 @@ rb_exc_fatal(VALUE mesg)
 void
 rb_interrupt(void)
 {
-    rb_raise(rb_eInterrupt, "%s", "");
+    rb_exc_raise(rb_exc_new(rb_eInterrupt, 0, 0));
 }
 
 enum {raise_opt_cause, raise_max_opt}; /*< \private */

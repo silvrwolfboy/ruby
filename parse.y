@@ -836,6 +836,7 @@ static void token_info_pop(struct parser_params*, const char *token, const rb_co
 %type <id>   f_kwrest f_label f_arg_asgn call_op call_op2 reswords relop dot_or_colon
 %token END_OF_INPUT 0	"end-of-input"
 %token <id> '.'
+%token <id> '\\'	"backslash"
 %token tUPLUS		RUBY_TOKEN(UPLUS)  "unary+"
 %token tUMINUS		RUBY_TOKEN(UMINUS) "unary-"
 %token tPOW		RUBY_TOKEN(POW)    "**"
@@ -7535,7 +7536,7 @@ parser_yylex(struct parser_params *p)
 		set_file_encoding(p, p->lex.pcur, p->lex.pend);
 	    }
 	}
-	p->lex.pcur = p->lex.pend;
+	lex_goto_eol(p);
         dispatch_scan_event(p, tCOMMENT);
         fallthru = TRUE;
 	/* fall through */
@@ -10575,27 +10576,30 @@ static NODE *
 parser_append_options(struct parser_params *p, NODE *node)
 {
     static const YYLTYPE default_location = {{1, 0}, {1, 0}};
+    const YYLTYPE *const LOC = &default_location;
 
     if (p->do_print) {
-	node = block_append(p, node,
-			    NEW_FCALL(rb_intern("print"),
-				      NEW_ARRAY(NEW_GVAR(idLASTLINE, &default_location), &NULL_LOC), &default_location));
+	NODE *print = NEW_FCALL(rb_intern("print"),
+				NEW_ARRAY(NEW_GVAR(idLASTLINE, LOC), LOC),
+				LOC);
+	node = block_append(p, node, print);
     }
 
     if (p->do_loop) {
 	if (p->do_split) {
-	    node = block_append(p, NEW_GASGN(rb_intern("$F"),
-					  NEW_CALL(NEW_GVAR(idLASTLINE, &default_location),
-						   rb_intern("split"), 0, &default_location),
-					  &NULL_LOC),
-				node);
+	    NODE *split = NEW_GASGN(rb_intern("$F"),
+				    NEW_CALL(NEW_GVAR(idLASTLINE, LOC),
+					     rb_intern("split"), 0, LOC),
+				    LOC);
+	    node = block_append(p, split, node);
 	}
 	if (p->do_chomp) {
-	    node = block_append(p, NEW_CALL(NEW_GVAR(idLASTLINE, &default_location),
-					 rb_intern("chomp!"), 0, &default_location), node);
+	    NODE *chomp = NEW_CALL(NEW_GVAR(idLASTLINE, LOC),
+				   rb_intern("chomp!"), 0, LOC);
+	    node = block_append(p, chomp, node);
 	}
 
-	node = NEW_WHILE(NEW_VCALL(idGets, &NULL_LOC), node, 1, &NULL_LOC);
+	node = NEW_WHILE(NEW_VCALL(idGets, LOC), node, 1, LOC);
     }
 
     return node;

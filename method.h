@@ -32,16 +32,10 @@ typedef enum {
     METHOD_VISI_MASK = 0x03
 } rb_method_visibility_t;
 
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
-#define bits_t rb_method_visibility_t
-#else
-#define bits_t unsigned int
-#endif
 typedef struct rb_scope_visi_struct {
-    bits_t method_visi : 3;
+    BITFIELD(rb_method_visibility_t) method_visi : 3;
     unsigned int module_func : 1;
 } rb_scope_visibility_t;
-#undef bits_t
 
 /*! CREF (Class REFerence) */
 typedef struct rb_cref_struct {
@@ -120,6 +114,8 @@ typedef enum {
 
     END_OF_ENUMERATION(VM_METHOD_TYPE)
 } rb_method_type_t;
+#define VM_METHOD_TYPE_MINIMUM_BITS 4
+/* TODO: STATIC_ASSERT for VM_METHOD_TYPE_MINIMUM_BITS */
 
 #ifndef rb_iseq_t
 typedef struct rb_iseq_struct rb_iseq_t;
@@ -159,7 +155,7 @@ enum method_optimized_type {
 };
 
 PACKED_STRUCT_UNALIGNED(struct rb_method_definition_struct {
-    unsigned int type :  4; /* method type */
+    BITFIELD(rb_method_type_t) type : VM_METHOD_TYPE_MINIMUM_BITS;
     int alias_count : 28;
     int complemented_count : 28;
 

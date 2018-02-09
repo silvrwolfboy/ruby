@@ -1,6 +1,7 @@
 # -*- coding: us-ascii -*-
 # frozen_string_literal: false
 require 'test/unit'
+require "rbconfig/sizeof"
 
 class TestThread < Test::Unit::TestCase
   class Thread < ::Thread
@@ -227,6 +228,14 @@ class TestThread < Test::Unit::TestCase
     t3.kill if t3
   end
 
+  def test_join_limits
+    [ RbConfig::LIMITS['FIXNUM_MAX'], RbConfig::LIMITS['UINT64_MAX'],
+      Float::INFINITY ].each do |limit|
+      t = Thread.new {}
+      assert_same t, t.join(limit), "limit=#{limit.inspect}"
+    end
+  end
+
   def test_kill_main_thread
     assert_in_out_err([], <<-INPUT, %w(1), [])
       p 1
@@ -271,6 +280,7 @@ class TestThread < Test::Unit::TestCase
       s += 1
     end
     Thread.pass until t.stop?
+    sleep 1 if RubyVM::MJIT.enabled? # t.stop? behaves unexpectedly with --jit-wait
     assert_equal(1, s)
     t.wakeup
     Thread.pass while t.alive?
