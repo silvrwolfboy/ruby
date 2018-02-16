@@ -557,13 +557,29 @@ class TestRubyOptimization < Test::Unit::TestCase
       when "1.8.0"..."1.8.8" then :bar
       end
     end;
-    [ nil, { frozen_string_literal: true } ].each do |opt|
-      iseq = RubyVM::InstructionSequence.compile(code, nil, nil, opt)
+    [ true, false ].each do |opt|
+      iseq = RubyVM::InstructionSequence.compile(code,
+                                                 frozen_string_literal: opt)
       insn = iseq.disasm
       assert_match %r{putobject\s+#{Regexp.quote('"1.8.0"..."1.8.8"')}}, insn
       assert_match %r{putobject\s+#{Regexp.quote('"2.0.0".."2.3.2"')}}, insn
       assert_no_match(/putstring/, insn)
       assert_no_match(/newrange/, insn)
+    end
+  end
+
+  def test_peephole_dstr
+    code = "#{<<~'begin;'}\n#{<<~'end;'}"
+    begin;
+      exp = -'a'
+      z = 'a'
+      [exp, -"#{z}"]
+    end;
+    [ false, true ].each do |fsl|
+      iseq = RubyVM::InstructionSequence.compile(code,
+                                                 frozen_string_literal: fsl)
+      assert_same(*iseq.eval,
+                  "[ruby-core:85542] [Bug #14475] fsl: #{fsl}")
     end
   end
 
@@ -709,6 +725,11 @@ class TestRubyOptimization < Test::Unit::TestCase
     bug = '[ruby-core:84340] [Bug #14201]'
     eval("{**(bug = nil; {})};42")
     assert_nil(bug)
+
+    bug = '[ruby-core:85486] [Bug #14459]'
+    h = {}
+    assert_equal(bug, eval('{ok: 42, **h}; bug'))
+    assert_equal(:ok, eval('{ok: bug = :ok, **h}; bug'))
   end
 
   def test_overwritten_blockparam

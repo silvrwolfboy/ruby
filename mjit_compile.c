@@ -75,6 +75,28 @@ compile_case_dispatch_each(VALUE key, VALUE value, VALUE arg)
     return ST_CONTINUE;
 }
 
+static void
+comment_id(FILE *f, ID id)
+{
+    VALUE name = rb_id2str(id);
+    const char *p, *e;
+    char c, prev = '\0';
+
+    if (!name) return;
+    p = RSTRING_PTR(name);
+    e = RSTRING_END(name);
+    fputs("/* :\"", f);
+    for (; p < e; ++p) {
+	switch (c = *p) {
+	  case '*': case '/': if (prev != (c ^ ('/' ^ '*'))) break;
+	  case '\\': case '"': fputc('\\', f);
+	}
+	fputc(c, f);
+	prev = c;
+    }
+    fputs("\" */", f);
+}
+
 static void compile_insns(FILE *f, const struct rb_iseq_constant_body *body, unsigned int stack_size,
                           unsigned int pos, struct compile_status *status);
 
@@ -142,6 +164,8 @@ mjit_compile(FILE *f, const struct rb_iseq_constant_body *body, const char *func
 #endif
     fprintf(f, "VALUE\n%s(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp)\n{\n", funcname);
     fprintf(f, "    VALUE *stack = reg_cfp->sp;\n");
+    fprintf(f, "    static const VALUE *const original_body_iseq = (VALUE *)0x%"PRIxVALUE";\n",
+            (VALUE)body->iseq_encoded);
 
     /* Simulate `opt_pc` in setup_parameters_complex */
     if (body->param.flags.has_opt) {
@@ -157,7 +181,7 @@ mjit_compile(FILE *f, const struct rb_iseq_constant_body *body, const char *func
     }
 
     /* ISeq might be used for catch table too. For that usage, this code cancels JIT execution. */
-    fprintf(f, "    if (reg_cfp->pc != 0x%"PRIxVALUE") {\n", (VALUE)body->iseq_encoded);
+    fprintf(f, "    if (reg_cfp->pc != original_body_iseq) {\n");
     fprintf(f, "        return Qundef;\n");
     fprintf(f, "    }\n");
 

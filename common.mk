@@ -64,7 +64,6 @@ MJIT_MIN_HEADER = $(MJIT_HEADER_BUILD_DIR)/rb_mjit_min_header-$(RUBY_PROGRAM_VER
 MJIT_CPPFLAGS = -DMJIT_HEADER_INSTALL_DIR=\""$(MJIT_HEADER_INSTALL_DIR)"\" \
 		-DLIBRUBYARG_SHARED=\""$(LIBRUBYARG_SHARED)"\"
 MJIT_HEADER_BUILD_DIR = $(EXTOUT)/include/$(arch)
-MJIT_HEADER_INSTALL_DIR = include/$(RUBY_BASE_NAME)-$(ruby_version)/$(arch)
 
 INITOBJS      = dmyext.$(OBJEXT) dmyenc.$(OBJEXT)
 NORMALMAINOBJ = main.$(OBJEXT)
@@ -192,32 +191,42 @@ COMPILE_PRELUDE = $(srcdir)/tool/generic_erb.rb $(srcdir)/template/prelude.c.tmp
 
 SHOWFLAGS = showflags
 
+MAKE_LINK = $(MINIRUBY) -rfileutils -e "include FileUtils::Verbose" \
+	  -e "src, dest = ARGV" \
+	  -e "exit if File.identical?(src, dest) or cmp(src, dest) rescue nil" \
+	  -e "def noraise; yield; rescue; rescue NotImplementedError; end" \
+	  -e "noraise {ln_sf('../'*dest.count('/')+src, dest)} or" \
+	  -e "noraise {ln(src, dest)} or" \
+	  -e "cp(src, dest)"
+
+
 all: $(SHOWFLAGS) main docs
 
 main: $(SHOWFLAGS) exts $(ENCSTATIC:static=lib)encs $(MJIT_MIN_HEADER)
 	@$(NULLCMD)
 
 .PHONY: mjit-headers
-mjit-headers: $(MJIT_MIN_HEADER)
+mjit-headers: $(TIMESTAMPDIR)/$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).time $(MJIT_MIN_HEADER) mjit_config.h
 
-$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: PHONY probes.h
-	$(ECHO) building $@
-	$(Q) $(CPP) $(MJIT_HEADER_FLAGS) $(CFLAGS) $(XCFLAGS) $(CPPFLAGS) -DMJIT_HEADER $(srcdir)/vm.c $(CPPOUTFLAG)$(@F).new
-	$(Q) $(IFCHANGE) $@ $(@F).new
+mjit.$(OBJEXT): mjit_config.h
+mjit_config.h: Makefile
 
+# Other `-Dxxx`s preceding `-DMJIT_HEADER` will be removed in transform_mjit_header.rb.
+# So `-DMJIT_HEADER` should be passed first when rb_mjit_header.h is generated.
+$(TIMESTAMPDIR)/$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).time: probes.h vm.$(OBJEXT)
+	$(ECHO) building $(@F:.time=.h)
+	$(Q) $(CPP) -DMJIT_HEADER $(MJIT_HEADER_FLAGS) $(CFLAGS) $(XCFLAGS) $(CPPFLAGS) $(srcdir)/vm.c $(CPPOUTFLAG)$(@F:.time=.h).new
+	$(Q) $(IFCHANGE) "--timestamp=$@" $(@F:.time=.h) $(@F:.time=.h).new
+
+$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(TIMESTAMPDIR)/$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).time
+
+$(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(TIMESTAMPDIR)/$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).time
 $(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(srcdir)/tool/transform_mjit_header.rb $(PREP)
 $(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h: $(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).h
 	$(ECHO) building $@
 	$(MINIRUBY) $(srcdir)/tool/transform_mjit_header.rb "$(CC) $(ARCH_FLAG)" $(MJIT_HEADER:.h=)$(MJIT_HEADER_ARCH).h $@
 	$(Q) $(MAKEDIRS) $(MJIT_HEADER_INSTALL_DIR)
-	$(Q) $(MINIRUBY) -rfileutils -e "include FileUtils::Verbose" \
-	  -e "src, dest = ARGV" \
-	  -e "exit if File.identical?(src, dest) or cmp(src, dest) rescue nil" \
-	  -e "def noraise; yield; rescue; rescue NotImplementedError; end" \
-	  -e "noraise {ln_sf('../'*dest.count('/')+src, dest)} or" \
-	  -e "noraise {ln(src, dest)} or" \
-	  -e "cp(src, dest)" \
-	  $@ $(MJIT_HEADER_INSTALL_DIR)/$(@F)
+	$(Q) $(MAKE_LINK) $@ $(MJIT_HEADER_INSTALL_DIR)/$(@F)
 
 .PHONY: showflags
 exts enc trans: $(SHOWFLAGS)
@@ -917,7 +926,9 @@ $(srcs_vpath)insns.inc: $(srcdir)/tool/ruby_vm/views/insns.inc.erb
 $(srcs_vpath)insns_info.inc: $(srcdir)/tool/ruby_vm/views/insns_info.inc.erb
 $(srcs_vpath)vmtc.inc: $(srcdir)/tool/ruby_vm/views/vmtc.inc.erb
 $(srcs_vpath)vm.inc: $(srcdir)/tool/ruby_vm/views/vm.inc.erb
-$(srcs_vpath)mjit_compile.inc: $(srcdir)/tool/ruby_vm/views/mjit_compile.inc.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_send.erb
+$(srcs_vpath)mjit_compile.inc: $(srcdir)/tool/ruby_vm/views/mjit_compile.inc.erb \
+  $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_send.erb \
+  $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn_body.erb
 
 common-srcs: $(srcs_vpath)parse.c $(srcs_vpath)lex.c $(srcs_vpath)enc/trans/newline.c $(srcs_vpath)id.c \
 	     srcs-lib srcs-ext incs
@@ -2025,12 +2036,11 @@ iseq.$(OBJEXT): {$(VPATH)}util.h
 iseq.$(OBJEXT): {$(VPATH)}vm_core.h
 iseq.$(OBJEXT): {$(VPATH)}vm_debug.h
 iseq.$(OBJEXT): {$(VPATH)}vm_opts.h
-mjit.$(OBJEXT): $(top_srcdir)/revision.h
+mjit.$(OBJEXT): $(hdrdir)/ruby/version.h
 mjit.$(OBJEXT): {$(VPATH)}mjit.c
 mjit.$(OBJEXT): {$(VPATH)}mjit.h
 mjit.$(OBJEXT): {$(VPATH)}ruby_assert.h
 mjit.$(OBJEXT): {$(VPATH)}util.h
-mjit.$(OBJEXT): {$(VPATH)}version.h
 mjit.$(OBJEXT): {$(VPATH)}vm_core.h
 mjit_compile.$(OBJEXT): {$(VPATH)}insns.inc
 mjit_compile.$(OBJEXT): {$(VPATH)}insns_info.inc

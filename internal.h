@@ -780,12 +780,15 @@ struct rb_subclass_entry {
 #if defined(HAVE_LONG_LONG)
 typedef unsigned LONG_LONG rb_serial_t;
 #define SERIALT2NUM ULL2NUM
+#define PRI_SERIALT_PREFIX PRI_LL_PREFIX
 #elif defined(HAVE_UINT64_T)
 typedef uint64_t rb_serial_t;
 #define SERIALT2NUM SIZET2NUM
+#define PRI_SERIALT_PREFIX PRI_64_PREFIX
 #else
 typedef unsigned long rb_serial_t;
 #define SERIALT2NUM ULONG2NUM
+#define PRI_SERIALT_PREFIX PRI_LONG_PREFIX
 #endif
 
 struct rb_classext_struct {
@@ -1090,6 +1093,22 @@ VALUE rb_check_to_array(VALUE ary);
     })
 #endif
 
+static inline VALUE
+rb_ary_entry_internal(VALUE ary, long offset)
+{
+    long len = RARRAY_LEN(ary);
+    const VALUE *ptr = RARRAY_CONST_PTR(ary);
+    if (len == 0) return Qnil;
+    if (offset < 0) {
+        offset += len;
+        if (offset < 0) return Qnil;
+    }
+    else if (len <= offset) {
+        return Qnil;
+    }
+    return ptr[offset];
+}
+
 /* bignum.c */
 extern const char ruby_digitmap[];
 double rb_big_fdiv_double(VALUE x, VALUE y);
@@ -1242,6 +1261,7 @@ void rb_call_end_proc(VALUE data);
 void rb_mark_end_proc(void);
 
 /* file.c */
+extern const char ruby_null_device[];
 VALUE rb_home_dir_of(VALUE user, VALUE result);
 VALUE rb_default_home_dir(VALUE result);
 VALUE rb_realpath_internal(VALUE basedir, VALUE path, int strict);
@@ -1858,9 +1878,6 @@ VALUE rb_ivar_lookup(VALUE obj, ID id, VALUE undef);
 void rb_autoload_str(VALUE mod, ID id, VALUE file);
 void rb_deprecate_constant(VALUE mod, const char *name);
 NORETURN(VALUE rb_mod_const_missing(VALUE,VALUE));
-
-/* version.c */
-extern const char ruby_engine[];
 
 /* vm_insnhelper.h */
 rb_serial_t rb_next_class_serial(void);

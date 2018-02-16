@@ -13,6 +13,13 @@ module MJITHeader
   FUNC_HEADER_REGEXP = /\A(\s*#{ATTR_REGEXP})*[^\[{(]*\((#{ATTR_REGEXP}|[^()])*\)(\s*#{ATTR_REGEXP})*\s*/
   TARGET_NAME_REGEXP = /\A(rb|ruby|vm|insn|attr)_/
 
+  # Predefined macros for compilers which are already supported by MJIT.
+  # We're going to support cl.exe too (WIP) but `cl.exe -E` can't produce macro.
+  SUPPORTED_CC_MACROS = [
+    '__GNUC__', # gcc
+    '__clang__', # clang
+  ]
+
   # For MinGW's ras.h. Those macros have its name in its definition and can't be preprocessed multiple times.
   RECURSIVE_MACROS = %w[
     RASCTRYINFO
@@ -78,18 +85,18 @@ module MJITHeader
   # Return true if CC with CFLAGS compiles successfully the current code.
   # Use STAGE in the message in case of a compilation failure
   def self.check_code!(code, cc, cflags, stage)
-    Tempfile.open(['', '.c'], mode: File::BINARY) do |f|
-      f.puts code
-      f.close
-      cmd = "#{cc} #{cflags} #{f.path}"
+    with_code(code) do |path|
+      cmd = "#{cc} #{cflags} #{path}"
       unless system(cmd, err: File::NULL)
         out = IO.popen(cmd, err: [:child, :out], &:read)
         STDERR.puts "error in #{stage} header file:\n#{out}"
 
-        if match = out.match(/error: conflicting types for '(?<name>[^']+)'/)
-          unless (related_lines = code.lines.grep(/#{match[:name]}/)).empty?
-            STDERR.puts "possibly related lines:\n#{related_lines.join("\n")}"
-          end
+        if match = out.match(/error: conflicting types for '[^']+'/)
+          STDERR.puts "\nDumping information for debugging:\n"\
+            "[ORIGINAL_HEADER_BEGIN]-----------------\n#{File.binread(ARGV[1])}\n"\
+            "[ORIGINAL_HEADER_END]-----------------\n\n"\
+            "[TRANSFORMED_HEADER_BEGIN]-----------------\n#{code}\n"\
+            "[TRANSFORMED_HEADER_END]-----------------\n"
         end
         exit false
       end
@@ -102,6 +109,7 @@ module MJITHeader
   end
 
   # -dD outputs those macros, and it produces redefinition warnings or errors
+  # This assumes common.mk passes `-DMJIT_HEADER` first when it creates rb_mjit_header.h.
   def self.remove_predefined_macros!(code)
     code.sub!(/\A(#define [^\n]+|\n)*(#define MJIT_HEADER 1\n)/, '\2')
   end
@@ -121,6 +129,34 @@ module MJITHeader
   def self.windows?
     RUBY_PLATFORM =~ /mswin|mingw|msys/
   end
+
+  def self.cl_exe?(cc)
+    cc =~ /\Acl(\z| |\.exe)/
+  end
+
+  # If code has macro which only supported compilers predefine, return true.
+  def self.supported_header?(code)
+    SUPPORTED_CC_MACROS.any? { |macro| code =~ /^#\s*define\s+#{Regexp.escape(macro)}\b/ }
+  end
+
+  # This checks if syntax check outputs "error: conflicting types for 'restrict'".
+  # If it's true, this script regards platform as AIX and add -std=c99 as workaround.
+  def self.conflicting_types?(code, cc, cflags)
+    with_code(code) do |path|
+      cmd = "#{cc} #{cflags} #{path}"
+      out = IO.popen(cmd, err: [:child, :out], &:read)
+      !$?.success? && out.match?(/error: conflicting types for '[^']+'/)
+    end
+  end
+
+  def self.with_code(code)
+    Tempfile.open(['', '.c'], mode: File::BINARY) do |f|
+      f.puts code
+      f.close
+      return yield(f.path)
+    end
+  end
+  private_class_method :with_code
 end
 
 if ARGV.size != 3
@@ -130,28 +166,37 @@ end
 cc      = ARGV[0]
 code    = File.binread(ARGV[1]) # Current version of the header file.
 outfile = ARGV[2]
-if cc =~ /\Acl(\z| |\.exe)/
+if MJITHeader.cl_exe?(cc)
   cflags = '-DMJIT_HEADER -Zs'
 else
   cflags = '-S -DMJIT_HEADER -fsyntax-only -Werror=implicit-function-declaration -Werror=implicit-int -Wfatal-errors'
 end
 
-if MJITHeader.windows?
-  MJITHeader.remove_harmful_macros!(code)
+if !MJITHeader.cl_exe?(cc) && !MJITHeader.supported_header?(code)
+  puts "This compiler (#{cc}) looks not supported for MJIT. Giving up to generate MJIT header."
+  MJITHeader.write("#error MJIT does not support '#{cc}' yet", outfile)
+  exit
 end
+
 MJITHeader.remove_predefined_macros!(code)
 
 if MJITHeader.windows? # transformation is broken with Windows headers for now
+  MJITHeader.remove_harmful_macros!(code)
   MJITHeader.check_code!(code, cc, cflags, 'initial')
   puts "\nSkipped transforming external functions to static on Windows."
   MJITHeader.write(code, outfile)
   exit
-else
-  macro, code = MJITHeader.separate_macro_and_code(code) # note: this does not work on MinGW
-
-  # Check initial file correctness in the manner of final output.
-  MJITHeader.check_code!("#{code}#{macro}", cc, cflags, 'initial')
 end
+
+macro, code = MJITHeader.separate_macro_and_code(code) # note: this does not work on MinGW
+code_to_check = "#{code}#{macro}" # macro should not affect code again
+
+if MJITHeader.conflicting_types?(code_to_check, cc, cflags)
+  cflags = "#{cflags} -std=c99" # For AIX gcc
+end
+
+# Check initial file correctness in the manner of final output.
+MJITHeader.check_code!(code_to_check, cc, cflags, 'initial')
 puts "\nTransforming external functions to static:"
 
 stop_pos     = -1

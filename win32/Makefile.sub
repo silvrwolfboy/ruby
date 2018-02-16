@@ -144,6 +144,9 @@ sitearch = $(ARCH)-$(RT)
 !if !defined(ruby_version)
 ruby_version = $(MAJOR).$(MINOR).0
 !endif
+!if !defined(RUBY_VERSION_NAME)
+RUBY_VERSION_NAME = $(RUBY_BASE_NAME)-$(ruby_version)
+!endif
 
 !ifndef RUBY_SO_NAME
 RUBY_SO_NAME = $(RT)-$(RUBY_BASE_NAME)$(ruby_version:.=)
@@ -210,7 +213,11 @@ OUTFLAG       = -Fe
 COUTFLAG      = -Fo
 !endif
 !if !defined(CPPOUTFLAG)
+! if $(MSC_VER) < 1600
+CPPOUTFLAG    = >
+! else
 CPPOUTFLAG    = -Fi
+! endif
 !endif
 !if !defined(CSRCFLAG)
 CSRCFLAG      = -Tc
@@ -286,9 +293,14 @@ LDSHARED_1 = @if exist $(@).manifest $(MANIFESTTOOL) -manifest $(@).manifest -ou
 LDSHARED_2 = @if exist $(@).manifest @$(RM) $(@:/=\).manifest
 !endif
 CPPFLAGS = $(DEFS) $(ARCHDEFS) $(CPPFLAGS)
+!if "$(CPPOUTFLAG)" == ">"
+MJIT_HEADER_FLAGS =
+!else
 MJIT_HEADER_FLAGS = -P
+!endif
 MJIT_HEADER_SUFFIX =
 MJIT_HEADER_ARCH =
+MJIT_HEADER_INSTALL_DIR = include/$(RUBY_VERSION_NAME)/$(arch)
 
 DLDFLAGS = $(LDFLAGS) -dll
 SOLIBS =
@@ -446,8 +458,8 @@ VCSUP = rem
 !endif
 ruby_pc = $(RUBY_BASE_NAME)-$(MAJOR).$(MINOR).pc
 
-MESSAGE_BEGIN = @for %I in (
-MESSAGE_END = ) do @echo.%~I
+MESSAGE_BEGIN = @(for %I in (
+MESSAGE_END = ) do @echo.%~I)
 ECHO_BEGIN = @echo.
 ECHO_END =
 
@@ -1230,3 +1242,36 @@ loadpath: verconf.h
 	@$(CPP) $(XCFLAGS) $(CPPFLAGS) $(srcdir)/loadpath.c | \
 	sed -e '1,/^const char ruby_initial_load_paths/d;/;/,$$d' \
 	    -e '/^^ /!d;s/ *"\\\\0"$$//;s/" *"//g'
+
+mjit_config.h:
+	@echo making <<$@
+#ifndef RUBY_MJIT_CONFIG_H
+#define RUBY_MJIT_CONFIG_H 1
+<<KEEP
+	@
+	@(set sep=#define MJIT_CC_COMMON ) & \
+	for %I in ($(CC)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_CC_COMMON */>> $@
+	@
+	@(set sep=#define MJIT_CFLAGS ) & \
+	for %I in ($(RUNTIMEFLAG) $(ARCH_FLAG)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_CFLAGS */>> $@
+	@
+	@(set sep=#define MJIT_OPTFLAGS ) & \
+	for %I in ($(OPTFLAGS)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_OPTFLAGS */>> $@
+	@
+	@(set sep=#define MJIT_DEBUGFLAGS ) & \
+	for %I in ($(DEBUGFLAGS)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_DEBUGFLAGS */>> $@
+	@
+	@(set sep=#define MJIT_LDSHARED ) & \
+	for %I in ($(LDSHARED)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_LDSHARED */>> $@
+	@
+	@(set sep=#define MJIT_DLDFLAGS ) & \
+	for %I in ($(DLDFLAGS)) do @(call echo.%%sep%%"%%~I", \& set sep= ) >> $@
+	@echo /* MJIT_DLDFLAGS */>> $@
+	@
+	@echo #endif /* RUBY_MJIT_CONFIG_H */>> $@
+	@$(Q:@=: :) type $@

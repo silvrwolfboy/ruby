@@ -660,7 +660,7 @@ rb_report_bug_valist(VALUE file, int line, const char *fmt, va_list args)
     report_bug_valist(RSTRING_PTR(file), line, fmt, NULL, args);
 }
 
-void
+MJIT_FUNC_EXPORTED void
 rb_assert_failure(const char *file, int line, const char *name, const char *expr)
 {
     FILE *out = stderr;
@@ -1463,7 +1463,7 @@ nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options)
     VALUE args = (argc > 2) ? argv[--argc] : Qnil;
     name_err_initialize_options(argc, argv, self, options);
     rb_ivar_set(self, id_args, args);
-    rb_ivar_set(self, id_private_call_p, RTEST(priv) ? Qtrue : Qfalse);
+    rb_ivar_set(self, id_private_call_p, priv);
     return self;
 }
 

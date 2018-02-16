@@ -2831,16 +2831,17 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
     }
 
     if (IS_INSN_ID(iobj, freezestring) &&
+	NIL_P(OPERAND_AT(iobj, 0)) &&
 	IS_NEXT_INSN_ID(&iobj->link, send)) {
 	INSN *niobj = (INSN *)iobj->link.next;
 	struct rb_call_info *ci = (struct rb_call_info *)OPERAND_AT(niobj, 0);
 	/*
-	 *  freezestring debug_info
-	 *  send <:+@, 0, ARG_SIMPLE>
+	 *  freezestring nil # no debug_info
+	 *  send <:+@, 0, ARG_SIMPLE>  # :-@, too
 	 * =>
-	 *  send <:+@, 0, ARG_SIMPLE>
+	 *  send <:+@, 0, ARG_SIMPLE>  # :-@, too
 	 */
-	if (ci->mid == idUPlus &&
+	if ((ci->mid == idUPlus || ci->mid == idUMinus) &&
 	    (ci->flag & VM_CALL_ARGS_SIMPLE) &&
 	    ci->orig_argc == 0) {
 	    ELEM_REMOVE(list);
@@ -3746,14 +3747,20 @@ compile_array(rb_iseq_t *iseq, LINK_ANCHOR *const ret, const NODE *const node_ro
 		      case COMPILE_ARRAY_TYPE_HASH:
 			if (i > 0) {
 			    if (first) {
-				ADD_INSN1(anchor, line, newhash, INT2FIX(i));
+				if (!popped) {
+				    ADD_INSN1(anchor, line, newhash, INT2FIX(i));
+				}
 				APPEND_LIST(ret, anchor);
 			    }
 			    else {
-				ADD_INSN1(ret, line, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
-				ADD_INSN(ret, line, swap);
+				if (!popped) {
+				    ADD_INSN1(ret, line, putspecialobject, INT2FIX(VM_SPECIAL_OBJECT_VMCORE));
+				    ADD_INSN(ret, line, swap);
+				}
 				APPEND_LIST(ret, anchor);
-				ADD_SEND(ret, line, id_core_hash_merge_ptr, INT2FIX(i + 1));
+				if (!popped) {
+				    ADD_SEND(ret, line, id_core_hash_merge_ptr, INT2FIX(i + 1));
+				}
 			    }
 			}
 			if (kw) {

@@ -2256,7 +2256,7 @@ AS_IF([test "${universal_binary-no}" = yes ], [
 
 AS_IF([test x"$enable_pthread" = xyes], [
     for pthread_lib in thr pthread pthreads c c_r root; do
-	AC_CHECK_LIB($pthread_lib, pthread_kill,
+	AC_CHECK_LIB($pthread_lib, pthread_create,
 		     rb_with_pthread=yes, rb_with_pthread=no)
 	AS_IF([test "$rb_with_pthread" = "yes"], [ break; fi
     done
@@ -2290,7 +2290,7 @@ AS_IF([test x"$enable_pthread" = xyes], [
 	AC_DEFINE(NON_SCALAR_THREAD_ID)
     ])
     AC_CHECK_FUNCS(sched_yield pthread_attr_setinheritsched \
-	pthread_attr_get_np pthread_attr_getstack \
+	pthread_attr_get_np pthread_attr_getstack pthread_attr_getguardsize \
 	pthread_get_stackaddr_np pthread_get_stacksize_np \
 	thr_stksegment pthread_stackseg_np pthread_getthrds_np \
 	pthread_condattr_setclock \
@@ -2478,6 +2478,7 @@ LIBEXT=a
 AC_SUBST(DLDFLAGS)dnl
 AC_SUBST(ARCH_FLAG)dnl
 AC_SUBST(MJIT_HEADER_FLAGS)dnl
+AC_SUBST(MJIT_HEADER_INSTALL_DIR)dnl
 
 AC_SUBST(STATIC)dnl
 AC_SUBST(CCDLFLAGS)dnl
@@ -2966,6 +2967,9 @@ AC_ARG_ENABLE(multiarch,
 	      [multiarch=], [unset multiarch])
 AS_IF([test ${multiarch+set}], [
    AC_DEFINE(ENABLE_MULTIARCH)
+   MJIT_HEADER_INSTALL_DIR=include/'${arch}/${RUBY_VERSION_NAME}'
+], [
+   MJIT_HEADER_INSTALL_DIR=include/'${RUBY_VERSION_NAME}/${arch}'
 ])
 
 archlibdir='${libdir}/${arch}'

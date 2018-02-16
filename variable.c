@@ -1864,6 +1864,7 @@ struct autoload_state {
 struct autoload_data_i {
     VALUE feature;
     int safe_level;
+    rb_const_flag_t flag;
     VALUE value;
     struct autoload_state *state; /* points to on-stack struct */
 };
@@ -1946,6 +1947,7 @@ rb_autoload_str(VALUE mod, ID id, VALUE file)
     ele->safe_level = rb_safe_level();
     ele->value = Qundef;
     ele->state = 0;
+    ele->flag = CONST_PUBLIC;
     st_insert(tbl, (st_data_t)id, (st_data_t)ad);
 }
 
@@ -2021,7 +2023,7 @@ check_autoload_required(VALUE mod, ID id, const char **loadingpath)
 }
 
 MJIT_FUNC_EXPORTED int
-rb_autoloading_value(VALUE mod, ID id, VALUE* value)
+rb_autoloading_value(VALUE mod, ID id, VALUE* value, rb_const_flag_t *flag)
 {
     VALUE load;
     struct autoload_data_i *ele;
@@ -2033,6 +2035,9 @@ rb_autoloading_value(VALUE mod, ID id, VALUE* value)
 	if (ele->value != Qundef) {
 	    if (value) {
 		*value = ele->value;
+	    }
+	    if (flag) {
+		*flag = ele->flag;
 	    }
 	    return 1;
 	}
@@ -2048,13 +2053,14 @@ autoload_defined_p(VALUE mod, ID id)
     if (!ce || ce->value != Qundef) {
 	return 0;
     }
-    return !rb_autoloading_value(mod, id, NULL);
+    return !rb_autoloading_value(mod, id, NULL, NULL);
 }
 
 struct autoload_const_set_args {
     VALUE mod;
     ID id;
     VALUE value;
+    rb_const_flag_t flag;
 };
 
 static void const_tbl_update(struct autoload_const_set_args *);
@@ -2101,6 +2107,7 @@ autoload_reset(VALUE arg)
 	args.mod = state->mod;
 	args.id = state->id;
 	args.value = state->ele->value;
+	args.flag = state->ele->flag;
 	safe_backup = rb_safe_level();
 	rb_set_safe_level_force(state->ele->safe_level);
 	rb_ensure(autoload_const_set, (VALUE)&args,
@@ -2247,6 +2254,7 @@ static VALUE
 rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
 {
     VALUE value, tmp, av;
+    rb_const_flag_t flag;
     int mod_retry = 0;
 
     tmp = klass;
@@ -2265,7 +2273,7 @@ rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility)
 	    if (value == Qundef) {
 		if (am == tmp) break;
 		am = tmp;
-		if (rb_autoloading_value(tmp, id, &av)) return av;
+		if (rb_autoloading_value(tmp, id, &av, &flag)) return av;
 		rb_autoload_load(tmp, id);
 		continue;
 	    }
@@ -2516,7 +2524,7 @@ rb_const_defined_0(VALUE klass, ID id, int exclude, int recurse, int visibility)
 		return (int)Qfalse;
 	    }
 	    if (ce->value == Qundef && !check_autoload_required(tmp, id, 0) &&
-		    !rb_autoloading_value(tmp, id, 0))
+		!rb_autoloading_value(tmp, id, NULL, NULL))
 		return (int)Qfalse;
 
 	    if (exclude && tmp == rb_cObject && klass != rb_cObject) {
@@ -2602,6 +2610,7 @@ rb_const_set(VALUE klass, ID id, VALUE val)
 	args.mod = klass;
 	args.id = id;
 	args.value = val;
+	args.flag = CONST_PUBLIC;
 	const_tbl_update(&args);
     }
     /*
@@ -2633,6 +2642,21 @@ rb_const_set(VALUE klass, ID id, VALUE val)
     }
 }
 
+static struct autoload_data_i *
+current_autoload_data(VALUE mod, ID id)
+{
+    struct autoload_data_i *ele;
+    VALUE load = autoload_data(mod, id);
+    if (!load) return 0;
+    ele = check_autoload_data(load);
+    if (!ele) return 0;
+    /* for autoloading thread, keep the defined value to autoloading storage */
+    if (ele->state && (ele->state->thread == rb_thread_current())) {
+	return ele;
+    }
+    return 0;
+}
+
 static void
 const_tbl_update(struct autoload_const_set_args *args)
 {
@@ -2641,19 +2665,15 @@ const_tbl_update(struct autoload_const_set_args *args)
     VALUE val = args->value;
     ID id = args->id;
     struct rb_id_table *tbl = RCLASS_CONST_TBL(klass);
-    rb_const_flag_t visibility = CONST_PUBLIC;
+    rb_const_flag_t visibility = args->flag;
     rb_const_entry_t *ce;
 
     if (rb_id_table_lookup(tbl, id, &value)) {
 	ce = (rb_const_entry_t *)value;
 	if (ce->value == Qundef) {
-	    VALUE load;
-	    struct autoload_data_i *ele;
+	    struct autoload_data_i *ele = current_autoload_data(klass, id);
 
-	    load = autoload_data(klass, id);
-	    /* for autoloading thread, keep the defined value to autoloading storage */
-	    if (load && (ele = check_autoload_data(load)) && ele->state &&
-			(ele->state->thread == rb_thread_current())) {
+	    if (ele) {
 		rb_clear_constant_cache();
 
 		ele->value = val; /* autoload_i is non-WB-protected */
@@ -2743,6 +2763,13 @@ set_const_visibility(VALUE mod, int argc, const VALUE *argv,
 	if ((ce = rb_const_lookup(mod, id))) {
 	    ce->flag &= ~mask;
 	    ce->flag |= flag;
+	    if (ce->value == Qundef) {
+		struct autoload_data_i *ele = current_autoload_data(mod, id);
+		if (ele) {
+		    ele->flag &= ~mask;
+		    ele->flag |= flag;
+		}
+	    }
 	}
 	else {
 	    if (i > 0) {

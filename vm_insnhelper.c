@@ -841,7 +841,7 @@ vm_get_ev_const(rb_execution_context_t *ec, VALUE orig_klass, ID id, int is_defi
 			if (am == klass) break;
 			am = klass;
 			if (is_defined) return 1;
-			if (rb_autoloading_value(klass, id, &av)) return av;
+			if (rb_autoloading_value(klass, id, &av, NULL)) return av;
 			rb_autoload_load(klass, id);
 			goto search_continue;
 		    }
@@ -3265,16 +3265,13 @@ vm_opt_newarray_min(rb_num_t num, const VALUE *ptr)
 
 #undef id_cmp
 
-static VALUE
+static int
 vm_ic_hit_p(IC ic, const VALUE *reg_ep)
 {
-    if (ic->ic_serial == GET_GLOBAL_CONSTANT_STATE() &&
-	(ic->ic_cref == NULL || ic->ic_cref == rb_vm_get_cref(reg_ep))) {
-	return ic->ic_value.value;
+    if (ic->ic_serial == GET_GLOBAL_CONSTANT_STATE()) {
+	return (ic->ic_cref == NULL || ic->ic_cref == rb_vm_get_cref(reg_ep));
     }
-    else {
-	return Qnil;
-    }
+    return FALSE;
 }
 
 static void
@@ -3650,7 +3647,12 @@ vm_opt_aref(VALUE recv, VALUE obj)
     }
     else if (RBASIC_CLASS(recv) == rb_cArray &&
 	     BASIC_OP_UNREDEFINED_P(BOP_AREF, ARRAY_REDEFINED_OP_FLAG)) {
-	return rb_ary_aref1(recv, obj);
+        if (FIXNUM_P(obj)) {
+            return rb_ary_entry_internal(recv, FIX2LONG(obj));
+        }
+        else {
+            return rb_ary_aref1(recv, obj);
+        }
     }
     else if (RBASIC_CLASS(recv) == rb_cHash &&
 	     BASIC_OP_UNREDEFINED_P(BOP_AREF, HASH_REDEFINED_OP_FLAG)) {

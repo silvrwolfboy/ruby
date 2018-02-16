@@ -76,12 +76,12 @@
 #include "internal.h"
 #include "vm_core.h"
 #include "mjit.h"
-#include "version.h"
 #include "gc.h"
 #include "constant.h"
 #include "id_table.h"
 #include "ruby_assert.h"
 #include "ruby/util.h"
+#include "ruby/version.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -92,6 +92,9 @@
 #include <dlfcn.h>
 #endif
 #include <errno.h>
+#ifdef HAVE_FCNTL_H
+#include <fcntl.h>
+#endif
 
 extern void rb_native_mutex_lock(rb_nativethread_lock_t *lock);
 extern void rb_native_mutex_unlock(rb_nativethread_lock_t *lock);
@@ -203,8 +206,6 @@ static char *tmp_dir;
 static VALUE valid_class_serials;
 /* Ruby level interface module.  */
 VALUE rb_mMJIT;
-/* Portable /dev/null, defined in file.c */
-extern const char *ruby_null_device;
 
 #ifdef _WIN32
 /* Linker option to enable libruby in the build directory. */
@@ -226,10 +227,10 @@ real_ms_time(void)
 /* Make and return copy of STR in the heap. */
 #define get_string ruby_strdup
 
-static void
-sprint_uniq_filename(char *str, unsigned long id, const char *prefix, const char *suffix)
+static int
+sprint_uniq_filename(char *str, size_t size, unsigned long id, const char *prefix, const char *suffix)
 {
-    sprintf(str, "%s/%sp%luu%lu%s", tmp_dir, prefix, (unsigned long) getpid(), id, suffix);
+    return snprintf(str, size, "%s/%sp%luu%lu%s", tmp_dir, prefix, (unsigned long) getpid(), id, suffix);
 }
 
 /* Return an unique file name in /tmp with PREFIX and SUFFIX and
@@ -238,9 +239,18 @@ sprint_uniq_filename(char *str, unsigned long id, const char *prefix, const char
 static char *
 get_uniq_filename(unsigned long id, const char *prefix, const char *suffix)
 {
-    char str[70];
-    sprint_uniq_filename(str, id, prefix, suffix);
-    return get_string(str);
+    char buff[70], *str = buff;
+    int size = sprint_uniq_filename(buff, sizeof(buff), id, prefix, suffix);
+    str = 0;
+    ++size;
+    str = xmalloc(size);
+    if (size <= (int)sizeof(buff)) {
+        memcpy(str, buff, size);
+    }
+    else {
+        sprint_uniq_filename(str, size, id, prefix, suffix);
+    }
+    return str;
 }
 
 /* Print the arguments according to FORMAT to stderr only if MJIT
@@ -288,8 +298,7 @@ form_args(int num, ...)
         len += args_len(args);
     }
     va_end(argp);
-    if ((res = xmalloc((len + 1) * sizeof(char *))) == NULL)
-        return NULL;
+    res = xmalloc((len + 1) * sizeof(char *));
     for (i = disp = 0; i < num; i++) {
         args = va_arg(argp2, char **);
         len = args_len(args);
@@ -323,11 +332,10 @@ start_process(const char *path, char *const *argv)
 #else
     {
         /* Not calling IO functions between fork and exec for safety */
-        FILE *f = fopen(ruby_null_device, "w");
-        int dev_null = fileno(f);
-        fclose(f);
+        int dev_null = rb_cloexec_open(ruby_null_device, O_WRONLY, 0);
 
         if ((pid = vfork()) == 0) {
+            umask(0077);
             if (mjit_opts.verbose == 0) {
                 /* CC can be started in a thread using a file which has been
                    already removed while MJIT is finishing.  Discard the
@@ -335,6 +343,7 @@ start_process(const char *path, char *const *argv)
                 dup2(dev_null, STDERR_FILENO);
                 dup2(dev_null, STDOUT_FILENO);
             }
+            (void)close(dev_null);
             pid = execvp(path, argv); /* Pid will be negative on an error */
             /* Even if we successfully found CC to compile PCH we still can
              fail with loading the CC in very rare cases for some reasons.
@@ -342,6 +351,7 @@ start_process(const char *path, char *const *argv)
             verbose(1, "MJIT: Error in execvp: %s\n", path);
             _exit(1);
         }
+        (void)close(dev_null);
     }
 #endif
     return pid;
@@ -549,45 +559,27 @@ free_list(struct rb_mjit_unit_list *list)
     }
 }
 
-/* XXX_COMMONN_ARGS define the command line arguments of XXX C
-   compiler used by MJIT.
+#include "mjit_config.h"
 
-   XXX_EMIT_PCH_ARGS define additional options to generate the
-   precomiled header.
+static const char *const CC_DEBUG_ARGS[] = {MJIT_DEBUGFLAGS NULL};
+static const char *const CC_OPTIMIZE_ARGS[] = {MJIT_OPTFLAGS NULL};
 
-   XXX_USE_PCH_ARAGS define additional options to use the precomiled
-   header.  */
-static const char *GCC_COMMON_ARGS_DEBUG[] = {"gcc", "-O0", "-g", "-Wfatal-errors", "-fPIC", "-shared", "-w", "-pipe", "-nostartfiles", "-nodefaultlibs", "-nostdlib", NULL};
-static const char *GCC_COMMON_ARGS[] = {"gcc", "-O2", "-Wfatal-errors", "-fPIC", "-shared", "-w", "-pipe", "-nostartfiles", "-nodefaultlibs", "-nostdlib", NULL};
-static const char *GCC_USE_PCH_ARGS[] = {"-I/tmp", NULL};
-static const char *GCC_EMIT_PCH_ARGS[] = {NULL};
-
-#ifdef __MACH__
-
-static const char *CLANG_COMMON_ARGS_DEBUG[] = {"clang", "-O0", "-g", "-dynamic", "-I/usr/local/include", "-L/usr/local/lib", "-w", "-bundle", NULL};
-static const char *CLANG_COMMON_ARGS[] = {"clang", "-O2", "-dynamic", "-I/usr/local/include", "-L/usr/local/lib", "-w", "-bundle", NULL};
-
+#if defined __GNUC__ && !defined __clang__
+#define GCC_PIC_FLAGS "-Wfatal-errors", "-fPIC", "-shared", "-w", \
+    "-pipe", "-nostartfiles", "-nodefaultlibs", "-nostdlib",
 #else
-
-static const char *CLANG_COMMON_ARGS_DEBUG[] = {"clang", "-O0", "-g", "-fPIC", "-shared", "-I/usr/local/include", "-L/usr/local/lib", "-w", "-bundle", NULL};
-static const char *CLANG_COMMON_ARGS[] = {"clang", "-O2", "-fPIC", "-shared", "-I/usr/local/include", "-L/usr/local/lib", "-w", "-bundle", NULL};
-
-#endif /* #if __MACH__ */
-
-#ifdef _MSC_VER
-static const char *VC_COMMON_ARGS_DEBUG[] = {"cl.exe", "-nologo", "-O0", "-Zi", "-MD", "-LD", NULL};
-static const char *VC_COMMON_ARGS[] = {"cl.exe", "-nologo",
-# if _MSC_VER < 1400
-    "-O2b2xg-",
-# else
-    "-O2sy-",
-# endif
-    "-MD", "-LD", NULL};
+#define GCC_PIC_FLAGS /* empty */
 #endif
 
-static const char *CLANG_USE_PCH_ARGS[] = {"-include-pch", NULL, "-Wl,-undefined", "-Wl,dynamic_lookup", NULL};
-static const char *CLANG_EMIT_PCH_ARGS[] = {"-emit-pch", NULL};
+static const char *const CC_COMMON_ARGS[] = {
+    MJIT_CC_COMMON MJIT_CFLAGS GCC_PIC_FLAGS
+    NULL
+};
 
+static const char *const CC_LDSHARED_ARGS[] = {MJIT_LDSHARED GCC_PIC_FLAGS NULL};
+static const char *const CC_DLDFLAGS_ARGS[] = {MJIT_DLDFLAGS NULL};
+
+#define CC_CODEFLAG_ARGS (mjit_opts.debug ? CC_DEBUG_ARGS : CC_OPTIMIZE_ARGS)
 /* Status of the the precompiled header creation.  The status is
    shared by the workers and the pch thread.  */
 static enum {PCH_NOT_READY, PCH_FAILED, PCH_SUCCESS} pch_status;
@@ -601,19 +593,20 @@ make_pch(void)
     /* XXX TODO */
     exit_code = 0;
 #else
-    static const char *input[] = {NULL, NULL};
-    static const char *output[] = {"-o",  NULL, NULL};
+    const char *rest_args[] = {
+# ifdef __clang__
+        "-emit-pch",
+# endif
+        "-o", NULL, NULL,
+        NULL,
+    };
     char **args;
+    int len = sizeof(rest_args) / sizeof(const char *);
 
+    rest_args[len - 2] = header_file;
+    rest_args[len - 3] = pch_file;
     verbose(2, "Creating precompiled header");
-    input[0] = header_file;
-    output[1] = pch_file;
-    if (mjit_opts.cc == MJIT_CC_CLANG)
-        args = form_args(4, (mjit_opts.debug ? CLANG_COMMON_ARGS_DEBUG : CLANG_COMMON_ARGS),
-                         CLANG_EMIT_PCH_ARGS, input, output);
-    else
-        args = form_args(4, (mjit_opts.debug ? GCC_COMMON_ARGS_DEBUG : GCC_COMMON_ARGS),
-                         GCC_EMIT_PCH_ARGS, input, output);
+    args = form_args(3, CC_COMMON_ARGS, CC_CODEFLAG_ARGS, rest_args);
     if (args == NULL) {
         if (mjit_opts.warnings || mjit_opts.verbose)
             fprintf(stderr, "MJIT warning: making precompiled header failed on forming args\n");
@@ -642,64 +635,66 @@ make_pch(void)
 
 #define append_str2(p, str, len) ((char *)memcpy((p), str, (len))+(len))
 #define append_str(p, str) append_str2(p, str, sizeof(str)-1)
+#define append_lit(p, str) append_str2(p, str, rb_strlen_lit(str))
 
 /* Compile C file to so. It returns 1 if it succeeds. */
 static int
 compile_c_to_so(const char *c_file, const char *so_file)
 {
     int exit_code;
-    static const char *input[] = {NULL, NULL};
-    static const char *output[] = {"-o", NULL, NULL};
+    const char *files[] = {
+#ifdef __clang__
+        "-include-pch", NULL,
+#endif
+#ifndef _MSC_VER
+        "-o",
+#endif
+        NULL, NULL, NULL};
     const char *libs[] = {
-#ifdef _MSC_VER
+#ifdef _WIN32
+# ifdef _MSC_VER
         LIBRUBYARG_SHARED,
         "-link",
         libruby_installed,
         libruby_build,
-#else
-# ifdef _WIN32
+# else
         /* Look for ruby.dll.a in build and install directories. */
         libruby_installed,
         libruby_build,
         /* Link to ruby.dll.a, because Windows DLLs don't allow unresolved symbols. */
         LIBRUBYARG_SHARED,
         "-lmsvcrt",
-#  ifdef __GNUC__
         "-lgcc",
-#  endif
 # endif
 #endif
         NULL};
     char **args;
-
-    input[0] = c_file;
 #ifdef _MSC_VER
-    {
-        char *p = (char *)output[0] = xmalloc(3 + strlen(so_file) + 1);
-        p = append_str(p, "-Fe");
-        p = append_str(p, so_file);
-        *p = '\0';
-    }
-    args = form_args(4, (mjit_opts.debug ? VC_COMMON_ARGS_DEBUG : VC_COMMON_ARGS),
-                     output, input, libs);
-    xfree(output[0]);
-#else
-    output[1] = so_file;
-    if (mjit_opts.cc == MJIT_CC_CLANG) {
-        CLANG_USE_PCH_ARGS[1] = pch_file;
-        args = form_args(5, (mjit_opts.debug ? CLANG_COMMON_ARGS_DEBUG : CLANG_COMMON_ARGS),
-                         CLANG_USE_PCH_ARGS, input, output, libs);
-    }
-    else {
-        args = form_args(5, (mjit_opts.debug ? GCC_COMMON_ARGS_DEBUG : GCC_COMMON_ARGS),
-                         GCC_USE_PCH_ARGS, input, output, libs);
-    }
+    char *p;
+    int solen;
 #endif
+
+    files[numberof(files)-2] = c_file;
+#ifdef _MSC_VER
+    solen = strlen(so_file);
+    files[0] = p = xmalloc(rb_strlen_lit("-Fe") + solen + 1);
+    p = append_lit(p, "-Fe");
+    p = append_str2(p, so_file, solen);
+    *p = '\0';
+#else
+    files[1] = pch_file;
+    files[numberof(files)-3] = so_file;
+#endif
+    args = form_args(5, CC_LDSHARED_ARGS, CC_CODEFLAG_ARGS,
+                     CC_DLDFLAGS_ARGS, files, libs);
     if (args == NULL)
         return FALSE;
 
     exit_code = exec_process(cc_path, args);
     xfree(args);
+#ifdef _MSC_VER
+    xfree((char *)files[0]);
+#endif
 
     if (exit_code != 0)
         verbose(2, "compile_c_to_so: compile error: %d", exit_code);
@@ -725,43 +720,94 @@ load_func_from_so(const char *so_file, const char *funcname, struct rb_mjit_unit
 
 #define MJIT_TMP_PREFIX "_ruby_mjit_"
 
+#ifndef __clang__
+static const char *
+header_name_end(const char *s)
+{
+    const char *e = s + strlen(s);
+#ifdef __GNUC__
+    static const char suffix[] = ".gch";
+
+    /* chomp .gch suffix */
+    if (e > s+sizeof(suffix)-1 && strcmp(e-sizeof(suffix)+1, suffix) == 0) {
+        e -= sizeof(suffix)-1;
+    }
+#endif
+    return e;
+}
+#endif
+
+static void
+print_jit_result(const char *result, const struct rb_mjit_unit *unit, const double duration, const char *c_file)
+{
+    verbose(1, "JIT %s (%.1fms): %s@%s:%d -> %s", result,
+            duration, RSTRING_PTR(unit->iseq->body->location.label),
+            RSTRING_PTR(rb_iseq_path(unit->iseq)), FIX2INT(unit->iseq->body->location.first_lineno), c_file);
+}
+
 /* Compile ISeq in UNIT and return function pointer of JIT-ed code.
    It may return NOT_COMPILABLE_JIT_ISEQ_FUNC if something went wrong. */
 static mjit_func_t
 convert_unit_to_func(struct rb_mjit_unit *unit)
 {
-    char c_file[70], so_file[70], funcname[35];
+    char c_file_buff[70], *c_file = c_file_buff, *so_file, funcname[35];
     int success;
+    int fd;
     FILE *f;
     void *func;
     double start_time, end_time;
+    int c_file_len = (int)sizeof(c_file_buff);
+    static const char c_ext[] = ".c";
+    static const char so_ext[] = DLEXT;
+    const int access_mode =
+#ifdef O_BINARY
+        O_BINARY|
+#endif
+        O_WRONLY|O_EXCL|O_CREAT;
 
-    sprint_uniq_filename(c_file, unit->id, MJIT_TMP_PREFIX, ".c");
-    sprint_uniq_filename(so_file, unit->id, MJIT_TMP_PREFIX, ".so");
+    c_file_len = sprint_uniq_filename(c_file_buff, c_file_len, unit->id, MJIT_TMP_PREFIX, c_ext);
+    if (c_file_len >= (int)sizeof(c_file_buff)) {
+        ++c_file_len;
+        c_file = alloca(c_file_len);
+        c_file_len = sprint_uniq_filename(c_file, c_file_len, unit->id, MJIT_TMP_PREFIX, c_ext);
+    }
+    ++c_file_len;
+    so_file = alloca(c_file_len - sizeof(c_ext) + sizeof(so_ext));
+    memcpy(so_file, c_file, c_file_len - sizeof(c_ext));
+    memcpy(&so_file[c_file_len - sizeof(c_ext)], so_ext, sizeof(so_ext));
     sprintf(funcname, "_mjit%d", unit->id);
 
-    f = fopen(c_file, "w");
-    if (f == NULL) {
-        verbose(1, "Failed to fopen '%s', giving up JIT for it (%s)", c_file, strerror(errno));
+    fd = rb_cloexec_open(c_file, access_mode, 0600);
+    if (fd < 0 || (f = fdopen(fd, "w")) == NULL) {
+        int e = errno;
+        if (fd >= 0) (void)close(fd);
+        verbose(1, "Failed to fopen '%s', giving up JIT for it (%s)", c_file, strerror(e));
         return (mjit_func_t)NOT_COMPILABLE_JIT_ISEQ_FUNC;
     }
 
+#ifdef __clang__
     /* -include-pch is used for Clang */
-    if (mjit_opts.cc == MJIT_CC_GCC) {
+#else
+    {
+# ifdef __GNUC__
         const char *s = pch_file;
+# else
+        const char *s = header_file;
+# endif
+        const char *e = header_name_end(s);
+
         fprintf(f, "#include \"");
         /* print pch_file except .gch */
-        for (; strcmp(s, ".gch") != 0; s++) {
+        for (; s < e; s++) {
             switch(*s) {
-              case '\\':
-                fprintf(f, "\\%c", *s);
-                break;
-              default:
-                fprintf(f, "%c", *s);
+              case '\\': case '"':
+                fputc('\\', f);
             }
+            fputc(*s, f);
         }
         fprintf(f, "\"\n");
     }
+#endif
 
 #ifdef _WIN32
     fprintf(f, "void _pei386_runtime_relocator(void){}\n");
@@ -794,6 +840,7 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
     if (!success) {
         if (!mjit_opts.save_temps)
             remove(c_file);
+        print_jit_result("failure", unit, 0, c_file);
         return (mjit_func_t)NOT_COMPILABLE_JIT_ISEQ_FUNC;
     }
 
@@ -817,8 +864,7 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
         CRITICAL_SECTION_START(3, "end of jit");
         add_to_list(node, &active_units);
         if (unit->iseq)
-            verbose(1, "JIT success (%.1fms): %s@%s:%d -> %s", end_time - start_time, RSTRING_PTR(unit->iseq->body->location.label),
-                    RSTRING_PTR(rb_iseq_path(unit->iseq)), FIX2INT(unit->iseq->body->location.first_lineno), c_file);
+            print_jit_result("success", unit, end_time - start_time, c_file);
         CRITICAL_SECTION_FINISH(3, "end of jit");
     }
     return (mjit_func_t)func;
@@ -1080,7 +1126,7 @@ mjit_get_iseq_func(const struct rb_iseq_constant_body *body)
     struct timeval tv;
     tv.tv_sec = 0;
     tv.tv_usec = 1000;
-    while ((enum rb_mjit_iseq_func)body->jit_func == NOT_READY_JIT_ISEQ_FUNC) {
+    while (body->jit_func == (mjit_func_t)NOT_READY_JIT_ISEQ_FUNC) {
         CRITICAL_SECTION_START(3, "in mjit_get_iseq_func for a client wakeup");
         rb_native_cond_broadcast(&mjit_worker_wakeup);
         CRITICAL_SECTION_FINISH(3, "in mjit_get_iseq_func for a client wakeup");
@@ -1090,60 +1136,62 @@ mjit_get_iseq_func(const struct rb_iseq_constant_body *body)
 }
 
 /* A name of the header file included in any C file generated by MJIT for iseqs.  */
-#define RUBY_MJIT_HEADER_FILE "rb_mjit_min_header-" RUBY_VERSION ".h"
+#define RUBY_MJIT_HEADER_NAME "rb_mjit_min_header-"
 /* GCC and CLANG executable paths.  TODO: The paths should absolute
    ones to prevent changing C compiler for security reasons.  */
-#define GCC_PATH "gcc"
-#define CLANG_PATH "clang"
-#ifdef _MSC_VER
-# define VC_PATH "cl.exe"
-#endif
+#define CC_PATH CC_COMMON_ARGS[0]
 
 static void
 init_header_filename(void)
 {
-    FILE *f;
+    int fd;
     /* Root path of the running ruby process. Equal to RbConfig::TOPDIR.  */
     VALUE basedir_val;
     char *basedir;
     size_t baselen;
+    size_t verlen;
     static const char header_name[] =
-        "/" MJIT_HEADER_INSTALL_DIR "/" RUBY_MJIT_HEADER_FILE;
+        "/" MJIT_HEADER_INSTALL_DIR "/" RUBY_MJIT_HEADER_NAME;
+    const size_t header_name_len = sizeof(header_name) - 1;
     char *p;
+#ifdef _WIN32
+    static const char libpathflag[] =
+# ifdef _MSC_VER
+        "-LIBPATH:"
+# else
+        "-L"
+# endif
+            ;
+    const size_t libpathflag_len = sizeof(libpathflag) - 1;
+#endif
 
     basedir_val = rb_const_get(rb_cObject, rb_intern_const("TMP_RUBY_PREFIX"));
     basedir = StringValuePtr(basedir_val);
     baselen = RSTRING_LEN(basedir_val);
+    verlen = strlen(ruby_version);
 
-    header_file = xmalloc(baselen + sizeof(header_name));
-    if (header_file == NULL)
-        return;
+    header_file = xmalloc(baselen + header_name_len + verlen + rb_strlen_lit(".h") + 1);
     p = append_str2(header_file, basedir, baselen);
-    p = append_str2(p, header_name, sizeof(header_name));
-    if ((f = fopen(header_file, "r")) == NULL) {
+    p = append_str2(p, header_name, header_name_len);
+    p = append_str2(p, ruby_version, verlen);
+    p = append_str2(p, ".h", rb_strlen_lit(".h") + 1);
+    if ((fd = rb_cloexec_open(header_file, O_RDONLY, 0)) < 0) {
+        verbose(2, "Cannot access header file %s\n", header_file);
         xfree(header_file);
         header_file = NULL;
         return;
     }
-    fclose(f);
+    (void)close(fd);
 
 #ifdef _WIN32
-# ifdef _MSC_VER
-    p = libruby_build = xmalloc(9 + baselen + 1);
-    p = append_str(p, "-LIBPATH:");
-#else
-    p = libruby_build = xmalloc(2 + baselen + 1);
-    p = append_str(p, "-L");
-#endif
+    p = libruby_build = xmalloc(libpathflag_len + baselen + 1);
+    p = append_str(p, libpathflag);
     p = append_str2(p, basedir, baselen);
     *p = '\0';
-# ifdef _MSC_VER
-    libruby_installed = xmalloc(9 + baselen + 4 + 1);
-#else
-    libruby_installed = xmalloc(2 + baselen + 4 + 1);
-#endif
+
+    libruby_installed = xmalloc(libpathflag_len + baselen + rb_strlen_lit("/lib") + 1);
     p = append_str2(libruby_installed, libruby_build, p - libruby_build);
-    p = append_str(p, "/lib");
+    p = append_lit(p, "/lib");
     *p = '\0';
 #endif
 }
@@ -1171,6 +1219,46 @@ valid_class_serials_add_i(ID key, VALUE v, void *unused)
     return ID_TABLE_CONTINUE;
 }
 
+#ifdef _WIN32
+UINT rb_w32_system_tmpdir(WCHAR *path, UINT len);
+#endif
+
+static char *
+system_tmpdir(void)
+{
+    char *tmpdir;
+    /* c.f. ext/etc/etc.c:etc_systmpdir() */
+#ifdef _WIN32
+    WCHAR tmppath[_MAX_PATH];
+    UINT len = rb_w32_system_tmpdir(tmppath, numberof(tmppath));
+    if (len) {
+        tmpdir = rb_w32_wstr_to_mbstr(CP_UTF8, tmppath, -1, NULL);
+        return get_string(tmpdir);
+    }
+#elif defined _CS_DARWIN_USER_TEMP_DIR
+    #ifndef MAXPATHLEN
+    #define MAXPATHLEN 1024
+    #endif
+    char path[MAXPATHLEN];
+    size_t len = confstr(_CS_DARWIN_USER_TEMP_DIR, path, sizeof(path));
+    if (len > 0) {
+        tmpdir = xmalloc(len);
+        if (len > sizeof(path)) {
+            confstr(_CS_DARWIN_USER_TEMP_DIR, tmpdir, len);
+        }
+        else {
+            memcpy(tmpdir, path, len);
+        }
+        return tmpdir;
+    }
+#endif
+    if (!(tmpdir = getenv("TMPDIR")) &&
+        !(tmpdir = getenv("TMP"))) {
+        return get_string("/tmp");
+    }
+    return get_string(tmpdir);
+}
+
 /* Default permitted number of units with a JIT code kept in
    memory.  */
 #define DEFAULT_CACHE_SIZE 1000
@@ -1196,38 +1284,13 @@ mjit_init(struct mjit_options *opts)
     if (mjit_opts.max_cache_size < MIN_CACHE_SIZE)
         mjit_opts.max_cache_size = MIN_CACHE_SIZE;
 
-    if (mjit_opts.cc == MJIT_CC_DEFAULT) {
-#if _MSC_VER
-        verbose(2, "MJIT: CC defaults to cl");
-#else
-# if defined(__clang__)
-        mjit_opts.cc = MJIT_CC_CLANG;
-        verbose(2, "MJIT: CC defaults to clang");
-# else
-        mjit_opts.cc = MJIT_CC_GCC;
-        verbose(2, "MJIT: CC defaults to gcc");
-# endif
-#endif
-    }
+    verbose(2, "MJIT: CC defaults to %s", CC_PATH);
 
     /* Initialize variables for compilation */
     pch_status = PCH_NOT_READY;
-#ifdef _MSC_VER
-    cc_path = VC_PATH;
-#else
-    if (mjit_opts.cc == MJIT_CC_CLANG) {
-        cc_path = CLANG_PATH;
-    } else {
-        cc_path = GCC_PATH;
-    }
-#endif
+    cc_path = CC_PATH;
 
-    if (getenv("TMP") != NULL) { /* For MinGW */
-        tmp_dir = get_string(getenv("TMP"));
-    }
-    else {
-        tmp_dir = get_string("/tmp");
-    }
+    tmp_dir = system_tmpdir();
 
     init_header_filename();
     pch_file = get_uniq_filename(0, MJIT_TMP_PREFIX "h", ".h.gch");
@@ -1347,9 +1410,9 @@ mjit_add_class_serial(rb_serial_t class_serial)
     if (!mjit_init_p)
         return;
 
-    CRITICAL_SECTION_START(3, "in mjit_add_class_serial");
+    /* Do not wrap CRITICAL_SECTION here. This function is only called in main thread
+       and guarded by GVL, and `rb_hash_aset` may cause GC and deadlock in it. */
     rb_hash_aset(valid_class_serials, LONG2FIX(class_serial), Qtrue);
-    CRITICAL_SECTION_FINISH(3, "in mjit_add_class_serial");
 }
 
 /* A hook to update valid_class_serials. This should NOT be used in MJIT worker. */

@@ -21,6 +21,11 @@
 %   'opt_call_c_function', # low priority
 % ]
 %
+% opt_send_without_block = RubyVM::Instructions.find { |i| i.name == 'opt_send_without_block' }
+% if opt_send_without_block.nil?
+%   raise 'opt_send_without_block not found'
+% end
+%
 % # Available variables and macros in JIT-ed function:
 % #   ec: the first argument of _mjitXXX
 % #   reg_cfp: the second argument of _mjitXXX
@@ -46,6 +51,8 @@ switch (insn) {
   case BIN(<%= insn.name %>):
 %   if %w[opt_send_without_block send].include?(insn.name)
 <%= render 'mjit_compile_send', locals: { insn: insn } -%>
+%   elsif %w[opt_aref].include?(insn.name) # experimental. TODO: increase insns and make the list automatically by finding DISPATCH_ORIGINAL_INSN
+<%= render 'mjit_compile_send', locals: { insn: opt_send_without_block } -%>
 %   end
 <%= render 'mjit_compile_insn', locals: { insn: insn, dispatched: false } -%>
     break;
@@ -53,10 +60,8 @@ switch (insn) {
 % # We don't support InstructionsUnifications yet because it's not used for now.
 % # We don't support TraceInstructions yet. There is no blocker for it but it's just not implemented.
   default:
-    if (mjit_opts.warnings || mjit_opts.verbose >= 3)
-        /* passing excessive arguments to suppress warning in insns_info.inc as workaround... */
-        fprintf(stderr, "MJIT warning: Failed to compile instruction: %s (%s: %d...)\n",
-                insn_name(insn), insn_op_types(insn), insn_len(insn) > 0 ? insn_op_type(insn, 0) : 0);
+    if (mjit_opts.warnings || mjit_opts.verbose)
+        fprintf(stderr, "MJIT warning: Skipped to compile unsupported instruction: %s\n", insn_name(insn));
     status->success = FALSE;
     break;
 }
