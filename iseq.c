@@ -116,10 +116,10 @@ rb_iseq_free(const rb_iseq_t *iseq)
 }
 
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
-static int
+static VALUE
 rb_vm_insn_addr2insn2(const void *addr)
 {
-    int insn;
+    VALUE insn;
     const void * const *table = rb_vm_get_insns_address_table();
 
     for (insn = 0; insn < VM_INSTRUCTION_SIZE; insn++) {
@@ -131,14 +131,14 @@ rb_vm_insn_addr2insn2(const void *addr)
 }
 #endif
 
-static int
+static VALUE
 rb_vm_insn_null_translator(const void *addr)
 {
-    return (int)addr;
+    return (VALUE)addr;
 }
 
 typedef VALUE iseq_value_itr_t(void *ctx, VALUE obj);
-typedef int rb_vm_insns_translator_t(const void *addr);
+typedef VALUE rb_vm_insns_translator_t(const void *addr);
 
 static int
 iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data, rb_vm_insns_translator_t * translator)
@@ -164,6 +164,17 @@ iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data
 		    }
 		    break;
 		}
+	    case TS_ISE:
+		{
+		    union iseq_inline_storage_entry *const is = (union iseq_inline_storage_entry *)code[pos + op_no + 1];
+		    if (is->once.value) {
+			VALUE nv = func(data, is->once.value);
+			if (is->once.value != nv) {
+			    is->once.value = nv;
+			}
+		    }
+		    break;
+		}
 	    default:
 		break;
 	}
@@ -176,7 +187,7 @@ static void
 rb_iseq_each_value(const rb_iseq_t *iseq, iseq_value_itr_t * func, void *data)
 {
     unsigned int size;
-    const VALUE *code;
+    VALUE *code;
     size_t n;
     rb_vm_insns_translator_t * translator;
 
@@ -204,23 +215,11 @@ update_each_insn_value(void *ctx, VALUE obj)
     return rb_gc_new_location(obj);
 }
 
-static VALUE
-mark_each_insn_value(void *ctx, VALUE obj)
-{
-    rb_gc_mark_no_pin(obj);
-    return obj;
-}
-
 void
 rb_iseq_update_references(const rb_iseq_t *iseq)
 {
     if (iseq->body) {
 	struct rb_iseq_constant_body *body = iseq->body;
-
-	if (RTEST(body->mark_ary)) {
-	    body->mark_ary = rb_gc_new_location(body->mark_ary);
-	    rb_iseq_each_value(iseq, update_each_insn_value, NULL);
-	}
 
 	body->location.label = rb_gc_new_location(body->location.label);
 	body->location.base_label = rb_gc_new_location(body->location.base_label);
@@ -230,6 +229,9 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
 	}
 	if (body->parent_iseq) {
 	    body->parent_iseq = rb_gc_new_location((VALUE)body->parent_iseq);
+	}
+	if(FL_TEST(iseq, ISEQ_MARKABLE_ISEQ)) {
+	    rb_iseq_each_value(iseq, update_each_insn_value, NULL);
 	}
 
 	if (body->catch_table) {
@@ -246,6 +248,13 @@ rb_iseq_update_references(const rb_iseq_t *iseq)
     }
 }
 
+static VALUE
+each_insn_value(void *ctx, VALUE obj)
+{
+    rb_gc_mark_no_pin(obj);
+    return obj;
+}
+
 void
 rb_iseq_mark(const rb_iseq_t *iseq)
 {
@@ -254,16 +263,14 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     if (iseq->body) {
 	const struct rb_iseq_constant_body *body = iseq->body;
 
-	if (RTEST(body->mark_ary)) {
-	    rb_gc_mark_no_pin(body->mark_ary);
-	    rb_gc_mark_values(RARRAY_LEN(body->mark_ary), RARRAY_CONST_PTR(body->mark_ary));
-	}
-	rb_iseq_each_value(iseq, mark_each_insn_value, NULL);
 	rb_gc_mark_no_pin(body->location.label);
 	rb_gc_mark_no_pin(body->location.base_label);
 	rb_gc_mark_no_pin(body->location.pathobj);
 	RUBY_MARK_NO_PIN_UNLESS_NULL(body->local_iseq);
 	RUBY_MARK_NO_PIN_UNLESS_NULL((VALUE)body->parent_iseq);
+	if(FL_TEST(iseq, ISEQ_MARKABLE_ISEQ)) {
+	    rb_iseq_each_value(iseq, each_insn_value, NULL);
+	}
 
 	if (body->catch_table) {
 	    const struct iseq_catch_table *table = body->catch_table;
@@ -454,13 +461,6 @@ set_relation(rb_iseq_t *iseq, const rb_iseq_t *piseq)
     }
 }
 
-void
-rb_iseq_add_mark_object(const rb_iseq_t *iseq, VALUE obj)
-{
-    /* TODO: check dedup */
-    rb_ary_push(ISEQ_MARK_ARY(iseq), obj);
-}
-
 static VALUE
 prepare_iseq_build(rb_iseq_t *iseq,
 		   VALUE name, VALUE path, VALUE realpath, VALUE first_lineno, const rb_code_location_t *code_location,
@@ -481,7 +481,9 @@ prepare_iseq_build(rb_iseq_t *iseq,
     if (iseq != iseq->body->local_iseq) {
 	RB_OBJ_WRITE(iseq, &iseq->body->location.base_label, iseq->body->local_iseq->body->location.label);
     }
-    RB_OBJ_WRITE(iseq, &iseq->body->mark_ary, iseq_mark_ary_create(0));
+    ISEQ_COVERAGE_SET(iseq, Qnil);
+    ISEQ_ORIGINAL_ISEQ_CLEAR(iseq);
+    iseq->body->variable.flip_count = 0;
 
     ISEQ_COMPILE_DATA_ALLOC(iseq);
     RB_OBJ_WRITE(iseq, &ISEQ_COMPILE_DATA(iseq)->err_info, err_info);
@@ -1767,6 +1769,7 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
 	break;
 
       case TS_IC:
+      case TS_ISE:
 	ret = rb_sprintf("<is:%"PRIdPTRDIFF">", (union iseq_inline_storage_entry *)op - iseq->body->is_entries);
 	break;
 
@@ -1964,6 +1967,7 @@ rb_iseq_disasm(const rb_iseq_t *iseq)
     rb_str_cat2(str, "== disasm: ");
 
     rb_str_concat(str, iseq_inspect(iseq));
+    rb_str_catf(str, " (catch: %s)", iseq->body->catch_except_p ? "TRUE" : "FALSE");
     if ((l = RSTRING_LEN(str)) < header_minlen) {
 	rb_str_resize(str, header_minlen);
 	memset(RSTRING_PTR(str) + l, '=', header_minlen - l);
@@ -2510,6 +2514,7 @@ iseq_data_to_ary(const rb_iseq_t *iseq)
 		}
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		{
 		    union iseq_inline_storage_entry *is = (union iseq_inline_storage_entry *)*seq;
 		    rb_ary_push(ary, INT2FIX(is - iseq->body->is_entries));
@@ -2803,12 +2808,12 @@ rb_iseq_defined_string(enum defined_type type)
 }
 
 
+#define TRACE_INSN_P(insn)      ((insn) >= VM_INSTRUCTION_SIZE/2)
+
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
 #define INSN_CODE(insn) ((VALUE)table[insn])
-#define TRACE_INSN_P(insn, insn_encoded)      ((VALUE)table[insn] != insn_encoded)
 #else
 #define INSN_CODE(insn) (insn)
-#define TRACE_INSN_P(insn, insn_encoded)      ((insn_encoded) >= VM_INSTRUCTION_SIZE/2)
 #endif
 
 void
@@ -2838,16 +2843,13 @@ rb_iseq_trace_set(const rb_iseq_t *iseq, rb_event_flag_t turnon_events)
 	    int insn = (int)code[i];
 	    rb_event_flag_t events = rb_iseq_event_flags(iseq, i);
 
-	    /* code represents before transformation */
-	    VM_ASSERT(insn < VM_INSTRUCTION_SIZE/2);
-
 	    if (events & turnon_events) {
-		if (!TRACE_INSN_P(insn, iseq_encoded[i])) {
+		if (!TRACE_INSN_P(insn)) {
 		    iseq_encoded[i] = INSN_CODE(insn + VM_INSTRUCTION_SIZE/2);
 		}
 	    }
-	    else if (TRACE_INSN_P(insn, iseq_encoded[i])) {
-		iseq_encoded[i] = INSN_CODE(insn);
+	    else if (TRACE_INSN_P(insn)) {
+		iseq_encoded[i] = INSN_CODE(insn - VM_INSTRUCTION_SIZE/2);
 	    }
 	    i += insn_len(insn);
 	}

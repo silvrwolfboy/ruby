@@ -17,7 +17,11 @@
 #include "vm_debug.h"
 #include "iseq.h"
 #include "eval_intern.h"
+#ifndef MJIT_HEADER
 #include "probes.h"
+#else
+#include "probes.dmyh"
+#endif
 #include "probes_helper.h"
 
 VALUE rb_str_concat_literals(size_t, const VALUE*);
@@ -1002,7 +1006,7 @@ invoke_block(rb_execution_context_t *ec, const rb_iseq_t *iseq, VALUE self, cons
 		  ec->cfp->sp + arg_size,
 		  iseq->body->local_table_size - arg_size,
 		  iseq->body->stack_max);
-    return vm_exec(ec);
+    return vm_exec(ec, TRUE);
 }
 
 static VALUE
@@ -1023,7 +1027,7 @@ invoke_bmethod(rb_execution_context_t *ec, const rb_iseq_t *iseq, VALUE self, co
     RUBY_DTRACE_METHOD_ENTRY_HOOK(ec, me->owner, me->def->original_id);
     EXEC_EVENT_HOOK(ec, RUBY_EVENT_CALL, self, me->def->original_id, me->called_id, me->owner, Qnil);
     VM_ENV_FLAGS_SET(ec->cfp->ep, VM_FRAME_FLAG_FINISH);
-    ret = vm_exec(ec);
+    ret = vm_exec(ec, TRUE);
     EXEC_EVENT_HOOK(ec, RUBY_EVENT_RETURN, self, me->def->original_id, me->called_id, me->owner, ret);
     RUBY_DTRACE_METHOD_RETURN_HOOK(ec, me->owner, me->def->original_id);
     return ret;
@@ -1725,10 +1729,10 @@ hook_before_rewind(rb_execution_context_t *ec, const rb_control_frame_t *cfp, in
     rb_iseq_t *iseq;            // cfp[2], iseq
     VALUE self;                 // cfp[3], self
     const VALUE *ep;            // cfp[4], env pointer
-    const void *block_code;     // cfp[5], blcok code
+    const void *block_code;     // cfp[5], block code
   };
 
-  struct rb_captured_blcok {
+  struct rb_captured_block {
     VALUE self;
     VALUE *ep;
     union code;
@@ -1784,32 +1788,55 @@ hook_before_rewind(rb_execution_context_t *ec, const rb_control_frame_t *cfp, in
     VALUE *ep;                       // ep
     void *code;                      //
   };
+
+  If mjit_exec is already called before calling vm_exec, `mjit_enable_p` should
+  be FALSE to avoid calling `mjit_exec` twice.
  */
 
+static inline VALUE
+vm_exce_handle_exception(rb_execution_context_t *ec, enum ruby_tag_type state,
+                         VALUE errinfo, VALUE *initial);
+
 MJIT_FUNC_EXPORTED VALUE
-vm_exec(rb_execution_context_t *ec)
+vm_exec(rb_execution_context_t *ec, int mjit_enable_p)
 {
     enum ruby_tag_type state;
-    VALUE result;
+    VALUE result = Qundef;
     VALUE initial = 0;
-    struct vm_throw_data *err;
 
     EC_PUSH_TAG(ec);
 
     _tag.retval = Qnil;
     if ((state = EC_EXEC_TAG()) == TAG_NONE) {
-        result = mjit_exec(ec);
-      vm_loop_start:
-        if (result == Qundef)
+        if (!mjit_enable_p || (result = mjit_exec(ec)) == Qundef) {
             result = vm_exec_core(ec, initial);
-	VM_ASSERT(ec->tag == &_tag);
-	if ((state = _tag.state) != TAG_NONE) {
-	    err = (struct vm_throw_data *)result;
-	    _tag.state = TAG_NONE;
-	    goto exception_handler;
-	}
+        }
+        goto vm_loop_start; /* fallback to the VM */
     }
     else {
+	result = ec->errinfo;
+        rb_ec_raised_reset(ec, RAISED_STACKOVERFLOW);
+        while ((result = vm_exce_handle_exception(ec, state, result, &initial)) == Qundef) {
+            /* caught a jump, exec the handler */
+            result = vm_exec_core(ec, initial);
+	  vm_loop_start:
+	    VM_ASSERT(ec->tag == &_tag);
+	    /* when caught `throw`, `tag.state` is set. */
+	    if ((state = _tag.state) == TAG_NONE) break;
+	    _tag.state = TAG_NONE;
+	}
+    }
+    EC_POP_TAG();
+    return result;
+}
+
+static inline VALUE
+vm_exce_handle_exception(rb_execution_context_t *ec, enum ruby_tag_type state,
+                         VALUE errinfo, VALUE *initial)
+{
+    struct vm_throw_data *err = (struct vm_throw_data *)errinfo;
+
+    for (;;) {
 	unsigned int i;
 	const struct iseq_catch_table_entry *entry;
 	const struct iseq_catch_table *ct;
@@ -1819,10 +1846,6 @@ vm_exec(rb_execution_context_t *ec)
 	VALUE type;
 	const rb_control_frame_t *escape_cfp;
 
-	err = (struct vm_throw_data *)ec->errinfo;
-	rb_ec_raised_reset(ec, RAISED_STACKOVERFLOW);
-
-      exception_handler:
 	cont_pc = cont_sp = 0;
 	catch_iseq = NULL;
 
@@ -1867,11 +1890,10 @@ vm_exec(rb_execution_context_t *ec)
 			}
 			if (catch_iseq == NULL) {
 			    ec->errinfo = Qnil;
-			    result = THROW_DATA_VAL(err);
 			    THROW_DATA_CATCH_FRAME_SET(err, cfp + 1);
 			    hook_before_rewind(ec, ec->cfp, TRUE, state, err);
 			    rb_vm_pop_frame(ec);
-			    goto finish_vme;
+			    return THROW_DATA_VAL(err);
 			}
 		    }
 		    /* through */
@@ -1879,13 +1901,12 @@ vm_exec(rb_execution_context_t *ec)
 		else {
 		    /* TAG_BREAK */
 #if OPT_STACK_CACHING
-		    initial = THROW_DATA_VAL(err);
+		    *initial = THROW_DATA_VAL(err);
 #else
 		    *ec->cfp->sp++ = THROW_DATA_VAL(err);
 #endif
 		    ec->errinfo = Qnil;
-                    result = Qundef;
-		    goto vm_loop_start;
+		    return Qundef;
 		}
 	    }
 	}
@@ -1924,8 +1945,7 @@ vm_exec(rb_execution_context_t *ec)
 			if (cfp == escape_cfp) {
 			    cfp->pc = cfp->iseq->body->iseq_encoded + entry->cont;
 			    ec->errinfo = Qnil;
-                            result = Qundef;
-			    goto vm_loop_start;
+			    return Qundef;
 			}
 		    }
 		}
@@ -1952,15 +1972,14 @@ vm_exec(rb_execution_context_t *ec)
 
 			if (state != TAG_REDO) {
 #if OPT_STACK_CACHING
-			    initial = THROW_DATA_VAL(err);
+			    *initial = THROW_DATA_VAL(err);
 #else
 			    *ec->cfp->sp++ = THROW_DATA_VAL(err);
 #endif
 			}
 			ec->errinfo = Qnil;
 			VM_ASSERT(ec->tag->state == TAG_NONE);
-                        result = Qundef;
-			goto vm_loop_start;
+			return Qundef;
 		    }
 		}
 	    }
@@ -2012,8 +2031,7 @@ vm_exec(rb_execution_context_t *ec)
 	    ec->tag->state = TAG_NONE;
 	    ec->errinfo = Qnil;
 
-            result = Qundef;
-	    goto vm_loop_start;
+	    return Qundef;
 	}
 	else {
 	    hook_before_rewind(ec, ec->cfp, FALSE, state, err);
@@ -2021,18 +2039,14 @@ vm_exec(rb_execution_context_t *ec)
 	    if (VM_FRAME_FINISHED_P(ec->cfp)) {
 		rb_vm_pop_frame(ec);
 		ec->errinfo = (VALUE)err;
-		EC_TMPPOP_TAG();
+		ec->tag = ec->tag->prev;
 		EC_JUMP_TAG(ec, state);
 	    }
 	    else {
 		rb_vm_pop_frame(ec);
-		goto exception_handler;
 	    }
 	}
     }
-  finish_vme:
-    EC_POP_TAG();
-    return result;
 }
 
 /* misc */
@@ -2043,7 +2057,7 @@ rb_iseq_eval(const rb_iseq_t *iseq)
     rb_execution_context_t *ec = GET_EC();
     VALUE val;
     vm_set_top_stack(ec, iseq);
-    val = vm_exec(ec);
+    val = vm_exec(ec, TRUE);
     return val;
 }
 
@@ -2054,7 +2068,7 @@ rb_iseq_eval_main(const rb_iseq_t *iseq)
     VALUE val;
 
     vm_set_main_stack(ec, iseq);
-    val = vm_exec(ec);
+    val = vm_exec(ec, TRUE);
     return val;
 }
 
@@ -2792,6 +2806,7 @@ core_hash_merge_kwd(int argc, VALUE *argv)
     return hash;
 }
 
+/* Returns true if JIT is enabled */
 static VALUE
 mjit_enabled_p(void)
 {

@@ -394,6 +394,12 @@ parent_redirect_close(int fd)
 #endif
 
 /*
+ * Document-module: Process
+ *
+ * Module to handle processes.
+ */
+
+/*
  *  call-seq:
  *     Process.pid   -> integer
  *
@@ -4091,8 +4097,9 @@ rb_f_system(int argc, VALUE *argv)
     if (pid < 0) {
         if (eargp->exception) {
             int err = errno;
-            rb_syserr_fail_str(err, eargp->invoke.sh.shell_script);
+            VALUE command = eargp->invoke.sh.shell_script;
             RB_GC_GUARD(execarg_obj);
+            rb_syserr_fail_str(err, command);
         }
         else {
             return Qnil;
@@ -4101,9 +4108,11 @@ rb_f_system(int argc, VALUE *argv)
     status = PST2INT(rb_last_status_get());
     if (status == EXIT_SUCCESS) return Qtrue;
     if (eargp->exception) {
+        VALUE command = eargp->invoke.sh.shell_script;
         VALUE str = rb_str_new_cstr("Command failed with");
         rb_str_cat_cstr(pst_message_status(str, status), ": ");
-        rb_str_append(str, eargp->invoke.sh.shell_script);
+        rb_str_append(str, command);
+        RB_GC_GUARD(execarg_obj);
         rb_exc_raise(rb_exc_new_str(rb_eRuntimeError, str));
     }
     else {
@@ -7662,6 +7671,7 @@ InitVM_process(void)
     rb_define_module_function(rb_mProcess, "waitall", proc_waitall, 0);
     rb_define_module_function(rb_mProcess, "detach", proc_detach, 1);
 
+    /* :nodoc: */
     rb_cWaiter = rb_define_class_under(rb_mProcess, "Waiter", rb_cThread);
     rb_undef_alloc_func(rb_cWaiter);
     rb_undef_method(CLASS_OF(rb_cWaiter), "new");
@@ -7973,8 +7983,11 @@ InitVM_process(void)
     rb_define_module_function(rb_mProcess, "clock_getres", rb_clock_getres, -1);
 
 #if defined(HAVE_TIMES) || defined(_WIN32)
+    /* Placeholder for rusage */
     rb_cProcessTms = rb_struct_define_under(rb_mProcess, "Tms", "utime", "stime", "cutime", "cstime", NULL);
-    rb_define_const(rb_cStruct, "Tms", rb_cProcessTms); /* for the backward compatibility */
+    /* An obsolete name of Process::Tms for the backward compatibility */
+    rb_define_const(rb_cStruct, "Tms", rb_cProcessTms);
+    rb_deprecate_constant(rb_cStruct, "Tms");
 #endif
 
     SAVED_USER_ID = geteuid();

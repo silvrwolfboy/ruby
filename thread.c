@@ -73,6 +73,7 @@
 #include "ruby/debug.h"
 #include "internal.h"
 #include "iseq.h"
+#include "vm_core.h"
 
 #ifndef USE_NATIVE_THREAD_PRIORITY
 #define USE_NATIVE_THREAD_PRIORITY 0
@@ -427,7 +428,7 @@ unblock_function_set(rb_thread_t *th, rb_unblock_function_t *func, void *arg, in
 	}
 
         rb_native_mutex_lock(&th->interrupt_lock);
-    } while (RUBY_VM_INTERRUPTED_ANY(th->ec) &&
+    } while (!th->ec->raised_flag && RUBY_VM_INTERRUPTED_ANY(th->ec) &&
              (rb_native_mutex_unlock(&th->interrupt_lock), TRUE));
 
     VM_ASSERT(th->unblock.func == NULL);
@@ -911,11 +912,11 @@ thread_join_sleep(VALUE arg)
 {
     struct join_arg *p = (struct join_arg *)arg;
     rb_thread_t *target_th = p->target, *th = p->waiting;
-    struct timespec to;
+    struct timespec end;
 
     if (p->limit) {
-        getclockofday(&to);
-        timespec_add(&to, p->limit);
+        getclockofday(&end);
+        timespec_add(&end, p->limit);
     }
 
     while (target_th->status != THREAD_KILLED) {
@@ -927,7 +928,7 @@ thread_join_sleep(VALUE arg)
 	    th->vm->sleeper--;
 	}
 	else {
-            if (timespec_update_expire(p->limit, &to)) {
+            if (timespec_update_expire(p->limit, &end)) {
 		thread_debug("thread_join: timeout (thid: %"PRI_THREAD_ID")\n",
 			     thread_id_str(target_th));
 		return Qfalse;
@@ -1003,7 +1004,7 @@ thread_join(rb_thread_t *target_th, struct timespec *ts)
     return target_th->self;
 }
 
-static struct timespec double2timespec(double);
+static struct timespec *double2timespec(struct timespec *, double);
 
 /*
  *  call-seq:
@@ -1061,12 +1062,13 @@ thread_join_m(int argc, VALUE *argv, VALUE self)
       case T_NIL: break;
       case T_FIXNUM:
         timespec.tv_sec = NUM2TIMET(limit);
+        if (timespec.tv_sec < 0)
+            timespec.tv_sec = 0;
         timespec.tv_nsec = 0;
         ts = &timespec;
         break;
       default:
-        timespec = double2timespec(rb_num2dbl(limit));
-        ts = &timespec;
+        ts = double2timespec(&timespec, rb_num2dbl(limit));
     }
 
     return thread_join(rb_thread_ptr(self), ts);
@@ -1108,31 +1110,28 @@ thread_value(VALUE self)
 #define TIMESPEC_SEC_MAX TIMET_MAX
 #define TIMESPEC_SEC_MIN TIMET_MIN
 
-static struct timespec
-double2timespec(double d)
+static struct timespec *
+double2timespec(struct timespec *ts, double d)
 {
     /* assume timespec.tv_sec has same signedness as time_t */
     const double TIMESPEC_SEC_MAX_PLUS_ONE = TIMET_MAX_PLUS_ONE;
 
-    struct timespec time;
-
     if (TIMESPEC_SEC_MAX_PLUS_ONE <= d) {
-        time.tv_sec = TIMESPEC_SEC_MAX;
-        time.tv_nsec = 999999999;
+        return NULL;
     }
-    else if (d <= TIMESPEC_SEC_MIN) {
-        time.tv_sec = TIMESPEC_SEC_MIN;
-        time.tv_nsec = 0;
+    else if (d <= 0) {
+        ts->tv_sec = 0;
+        ts->tv_nsec = 0;
     }
     else {
-        time.tv_sec = (time_t)d;
-        time.tv_nsec = (long)((d - (time_t)d) * 1e9);
-        if (time.tv_nsec < 0) {
-            time.tv_nsec += (long)1e9;
-            time.tv_sec -= 1;
+        ts->tv_sec = (time_t)d;
+        ts->tv_nsec = (long)((d - (time_t)d) * 1e9);
+        if (ts->tv_nsec < 0) {
+            ts->tv_nsec += (long)1e9;
+            ts->tv_sec -= 1;
         }
     }
-    return time;
+    return ts;
 }
 
 static void
@@ -1198,18 +1197,42 @@ timespec_sub(struct timespec *dst, const struct timespec *tv)
 }
 
 static int
-timespec_update_expire(struct timespec *ts, const struct timespec *to)
+timespec_cmp(const struct timespec *a, const struct timespec *b)
+{
+    if (a->tv_sec > b->tv_sec) {
+        return 1;
+    }
+    else if (a->tv_sec < b->tv_sec) {
+        return -1;
+    }
+    else {
+        if (a->tv_nsec > b->tv_nsec) {
+            return 1;
+        }
+        else if (a->tv_nsec < b->tv_nsec) {
+            return -1;
+        }
+        return 0;
+    }
+}
+
+/*
+ * @end is the absolute time when @ts is set to expire
+ * Returns true if @end has past
+ * Updates @ts and returns false otherwise
+ */
+static int
+timespec_update_expire(struct timespec *ts, const struct timespec *end)
 {
     struct timespec now;
 
     getclockofday(&now);
-    if (to->tv_sec < now.tv_sec) return 1;
-    if (to->tv_sec == now.tv_sec && to->tv_nsec <= now.tv_nsec) return 1;
+    if (timespec_cmp(&now, end) >= 0) return 1;
     thread_debug("timespec_update_expire: "
 		 "%"PRI_TIMET_PREFIX"d.%.6ld > %"PRI_TIMET_PREFIX"d.%.6ld\n",
-		 (time_t)to->tv_sec, (long)to->tv_nsec,
+		 (time_t)end->tv_sec, (long)end->tv_nsec,
 		 (time_t)now.tv_sec, (long)now.tv_nsec);
-    *ts = *to;
+    *ts = *end;
     timespec_sub(ts, &now);
     return 0;
 }
@@ -1217,17 +1240,17 @@ timespec_update_expire(struct timespec *ts, const struct timespec *to)
 static void
 sleep_timespec(rb_thread_t *th, struct timespec ts, int spurious_check)
 {
-    struct timespec to;
+    struct timespec end;
     enum rb_thread_status prev_status = th->status;
 
-    getclockofday(&to);
-    timespec_add(&to, &ts);
+    getclockofday(&end);
+    timespec_add(&end, &ts);
     th->status = THREAD_STOPPED;
     RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
     while (th->status == THREAD_STOPPED) {
 	native_sleep(th, &ts);
 	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
-	if (timespec_update_expire(&ts, &to))
+	if (timespec_update_expire(&ts, &end))
 	    break;
 	if (!spurious_check)
 	    break;
@@ -2221,10 +2244,6 @@ rb_threadptr_signal_exit(rb_thread_t *th)
     rb_threadptr_raise(th->vm->main_thread, 2, argv);
 }
 
-#if defined(POSIX_SIGNAL) && defined(SIGSEGV) && defined(HAVE_SIGALTSTACK)
-#define USE_SIGALTSTACK
-#endif
-
 int
 rb_ec_set_raised(rb_execution_context_t *ec)
 {
@@ -3163,6 +3182,19 @@ rb_thread_aref(VALUE thread, VALUE key)
     return rb_thread_local_aref(thread, id);
 }
 
+/*
+ *  call-seq:
+ *      thr.fetch(sym)           -> obj
+ *      thr.fetch(sym) { }       -> obj
+ *      thr.fetch(sym, default)  -> obj
+ *
+ *  Returns a fiber-local for the given key. If the key can't be
+ *  found, there are several options: With no other arguments, it will
+ *  raise a <code>KeyError</code> exception; if <i>default</i> is
+ *  given, then that will be returned; if the optional code block is
+ *  specified, then that will be run and its result returned.
+ *  See Thread#[] and Hash#fetch.
+ */
 static VALUE
 rb_thread_fetch(int argc, VALUE *argv, VALUE self)
 {
@@ -3760,17 +3792,10 @@ retryable(int e)
     ((fds1) ? rb_fd_dup(fds1, fds2) : (void)0)
 
 static inline int
-update_timespec(struct timespec *timeout, const struct timespec *to)
+update_timespec(struct timespec *timeout, const struct timespec *end)
 {
     if (timeout) {
-        struct timespec now;
-
-        getclockofday(&now);
-        *timeout = *to;
-        timespec_sub(timeout, &now);
-
-        if (timeout->tv_sec < 0)  timeout->tv_sec = 0;
-        if (timeout->tv_nsec < 0) timeout->tv_nsec = 0;
+        return !timespec_update_expire(timeout, end);
     }
     return TRUE;
 }
@@ -3784,7 +3809,8 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
     rb_fdset_t MAYBE_UNUSED(orig_read);
     rb_fdset_t MAYBE_UNUSED(orig_write);
     rb_fdset_t MAYBE_UNUSED(orig_except);
-    struct timespec to;
+    struct timespec end;
+    struct timespec *tsp = 0;
     struct timespec ts
 #if defined(__GNUC__) && (__GNUC__ == 7 || __GNUC__ == 8)
         = {0, 0}
@@ -3796,11 +3822,12 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
     (restore_fdset(readfds, &orig_read), \
      restore_fdset(writefds, &orig_write), \
      restore_fdset(exceptfds, &orig_except), \
-     update_timespec(&ts, &to))
+     update_timespec(tsp, &end))
 
     if (timeout) {
-        getclockofday(&to);
-        timespec_add(&to, timespec_for(&ts, timeout));
+        getclockofday(&end);
+        timespec_add(&end, timespec_for(&ts, timeout));
+        tsp = &ts;
     }
 
 #define fd_init_copy(f) \
@@ -3815,7 +3842,7 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
 
 	BLOCKING_REGION({
 	    result = native_fd_select(n, readfds, writefds, exceptfds,
-				      timeval_for(timeout, &ts), th);
+				      timeval_for(timeout, tsp), th);
 	    if (result < 0) lerrno = errno;
 	}, ubf_select, th, FALSE);
 
@@ -3934,13 +3961,13 @@ rb_wait_for_single_fd(int fd, int events, struct timeval *timeout)
     struct pollfd fds;
     int result = 0, lerrno;
     struct timespec ts;
-    struct timespec to;
+    struct timespec end;
     struct timespec *tsp = 0;
     rb_thread_t *th = GET_THREAD();
 
     if (timeout) {
-        getclockofday(&to);
-        timespec_add(&to, timespec_for(&ts, timeout));
+        getclockofday(&end);
+        timespec_add(&end, timespec_for(&ts, timeout));
         tsp = &ts;
     }
 
@@ -3957,7 +3984,7 @@ rb_wait_for_single_fd(int fd, int events, struct timeval *timeout)
 
         RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
     } while (result < 0 && retryable(errno = lerrno) &&
-            update_timespec(&ts, &to));
+            update_timespec(tsp, &end));
     if (result < 0) return -1;
 
     if (fds.revents & POLLNVAL) {
@@ -4209,6 +4236,7 @@ rb_thread_atfork(void)
     rb_thread_t *th = GET_THREAD();
     rb_thread_atfork_internal(th, terminate_atfork_i);
     th->join_list = NULL;
+    rb_mutex_cleanup_keeping_mutexes(th);
 
     /* We don't want reproduce CVE-2003-0900. */
     rb_reset_random_seed();

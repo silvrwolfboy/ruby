@@ -234,6 +234,13 @@ class TestThread < Test::Unit::TestCase
       t = Thread.new {}
       assert_same t, t.join(limit), "limit=#{limit.inspect}"
     end
+    t = Thread.new { sleep }
+    [ -1, -0.1, RbConfig::LIMITS['FIXNUM_MIN'], RbConfig::LIMITS['INT64_MIN'],
+      -Float::INFINITY
+    ].each do |limit|
+      assert_nil t.join(limit), "limit=#{limit.inspect}"
+    end
+    t.kill
   end
 
   def test_kill_main_thread
@@ -1196,6 +1203,17 @@ q.pop
     f.close
     assert_not_predicate(status, :signaled?, FailDesc[status, bug9751, output])
     assert_predicate(status, :success?, bug9751)
+  end if Process.respond_to?(:fork)
+
+  def test_fork_while_locked
+    m = Mutex.new
+    thrs = []
+    3.times do |i|
+      thrs << Thread.new { m.synchronize { Process.waitpid2(fork{})[1] } }
+    end
+    thrs.each do |t|
+      assert_predicate t.value, :success?, '[ruby-core:85940] [Bug #14578]'
+    end
   end if Process.respond_to?(:fork)
 
   def test_subclass_no_initialize

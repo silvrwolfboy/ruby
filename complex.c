@@ -32,14 +32,15 @@ static VALUE nucomp_abs(VALUE self);
 static VALUE nucomp_arg(VALUE self);
 
 static ID id_abs, id_arg,
-    id_denominator, id_expt, id_fdiv,
-    id_negate, id_numerator, id_quo,
-    id_real_p, id_to_f,
-    id_i_real, id_i_imag,
+    id_denominator, id_fdiv, id_numerator, id_quo,
+    id_real_p, id_i_real, id_i_imag,
     id_finite_p, id_infinite_p, id_rationalize,
     id_PI;
 #define id_to_i idTo_i
 #define id_to_r idTo_r
+#define id_negate idUMinus
+#define id_expt idPow
+#define id_to_f idTo_f
 
 #define f_boolcast(x) ((x) ? Qtrue : Qfalse)
 
@@ -64,31 +65,15 @@ f_##n(VALUE x, VALUE y)\
     return rb_funcall(x, id_##n, 1, y);\
 }
 
-#define math1(n) \
-inline static VALUE \
-m_##n(VALUE x)\
-{\
-    return rb_funcall(rb_mMath, id_##n, 1, x);\
-}
-
-#define math2(n) \
-inline static VALUE \
-m_##n(VALUE x, VALUE y)\
-{\
-    return rb_funcall(rb_mMath, id_##n, 2, x, y);\
-}
-
 #define PRESERVE_SIGNEDZERO
 
 inline static VALUE
 f_add(VALUE x, VALUE y)
 {
-#ifndef PRESERVE_SIGNEDZERO
-    if (FIXNUM_P(y) && FIXNUM_ZERO_P(y))
+    if (FIXNUM_ZERO_P(y))
 	return x;
-    else if (FIXNUM_P(x) && FIXNUM_ZERO_P(x))
+    if (FIXNUM_ZERO_P(x))
 	return y;
-#endif
     return rb_funcall(x, '+', 1, y);
 }
 
@@ -120,36 +105,20 @@ f_gt_p(VALUE x, VALUE y)
 inline static VALUE
 f_mul(VALUE x, VALUE y)
 {
-#ifndef PRESERVE_SIGNEDZERO
-    if (FIXNUM_P(y)) {
-	long iy = FIX2LONG(y);
-	if (iy == 0) {
-	    if (RB_INTEGER_TYPE_P(x))
-		return ZERO;
-	}
-	else if (iy == 1)
-	    return x;
-    }
-    else if (FIXNUM_P(x)) {
-	long ix = FIX2LONG(x);
-	if (ix == 0) {
-	    if (RB_INTEGER_TYPE_P(y))
-		return ZERO;
-	}
-	else if (ix == 1)
-	    return y;
-    }
-#endif
+    if (FIXNUM_ZERO_P(y) && RB_INTEGER_TYPE_P(x))
+	return ZERO;
+    if (FIXNUM_ZERO_P(x) && RB_INTEGER_TYPE_P(y))
+	return ZERO;
+    if (y == ONE) return x;
+    if (x == ONE) return y;
     return rb_funcall(x, '*', 1, y);
 }
 
 inline static VALUE
 f_sub(VALUE x, VALUE y)
 {
-#ifndef PRESERVE_SIGNEDZERO
-    if (FIXNUM_P(y) && FIXNUM_ZERO_P(y))
+    if (FIXNUM_ZERO_P(y))
 	return x;
-#endif
     return rb_funcall(x, '-', 1, y);
 }
 
@@ -312,30 +281,6 @@ nucomp_s_alloc(VALUE klass)
     return nucomp_s_new_internal(klass, ZERO, ZERO);
 }
 
-#if 0
-static VALUE
-nucomp_s_new_bang(int argc, VALUE *argv, VALUE klass)
-{
-    VALUE real, imag;
-
-    switch (rb_scan_args(argc, argv, "11", &real, &imag)) {
-      case 1:
-	if (!k_numeric_p(real))
-	    real = f_to_i(real);
-	imag = ZERO;
-	break;
-      default:
-	if (!k_numeric_p(real))
-	    real = f_to_i(real);
-	if (!k_numeric_p(imag))
-	    imag = f_to_i(imag);
-	break;
-    }
-
-    return nucomp_s_new_internal(klass, real, imag);
-}
-#endif
-
 inline static VALUE
 f_complex_new_bang1(VALUE klass, VALUE x)
 {
@@ -352,10 +297,6 @@ f_complex_new_bang2(VALUE klass, VALUE x, VALUE y)
 }
 
 #ifdef CANONICALIZATION_FOR_MATHN
-#define CANON
-#endif
-
-#ifdef CANON
 static int canonicalization = 0;
 
 RUBY_FUNC_EXPORTED void
@@ -381,26 +322,24 @@ nucomp_real_check(VALUE num)
 inline static VALUE
 nucomp_s_canonicalize_internal(VALUE klass, VALUE real, VALUE imag)
 {
-#ifdef CANON
-#define CL_CANON
-#ifdef CL_CANON
+    int complex_r, complex_i;
+#ifdef CANONICALIZATION_FOR_MATHN
     if (k_exact_zero_p(imag) && canonicalization)
 	return real;
-#else
-    if (f_zero_p(imag) && canonicalization)
-	return real;
 #endif
-#endif
-    if (f_real_p(real) && f_real_p(imag))
+    complex_r = RB_TYPE_P(real, T_COMPLEX);
+    complex_i = RB_TYPE_P(imag, T_COMPLEX);
+    if (!complex_r && !complex_i) {
 	return nucomp_s_new_internal(klass, real, imag);
-    else if (f_real_p(real)) {
+    }
+    else if (!complex_r) {
 	get_dat1(imag);
 
 	return nucomp_s_new_internal(klass,
 				     f_sub(real, dat->imag),
 				     f_add(ZERO, dat->real));
     }
-    else if (f_real_p(imag)) {
+    else if (!complex_i) {
 	get_dat1(real);
 
 	return nucomp_s_new_internal(klass,
@@ -515,7 +454,7 @@ imp1(sinh)
 static VALUE
 m_cos(VALUE x)
 {
-    if (f_real_p(x))
+    if (!RB_TYPE_P(x, T_COMPLEX))
 	return m_cos_bang(x);
     {
 	get_dat1(x);
@@ -530,7 +469,7 @@ m_cos(VALUE x)
 static VALUE
 m_sin(VALUE x)
 {
-    if (f_real_p(x))
+    if (!RB_TYPE_P(x, T_COMPLEX))
 	return m_sin_bang(x);
     {
 	get_dat1(x);
@@ -541,36 +480,6 @@ m_sin(VALUE x)
 				    m_sinh_bang(dat->imag)));
     }
 }
-
-#if 0
-imp1(sqrt)
-
-VALUE
-rb_complex_sqrt(VALUE x)
-{
-    int pos;
-    VALUE a, re, im;
-    get_dat1(x);
-
-    pos = f_positive_p(dat->imag);
-    a = f_abs(x);
-    re = m_sqrt_bang(f_div(f_add(a, dat->real), TWO));
-    im = m_sqrt_bang(f_div(f_sub(a, dat->real), TWO));
-    if (!pos) im = f_negate(im);
-    return f_complex_new2(rb_cComplex, re, im);
-}
-
-static VALUE
-m_sqrt(VALUE x)
-{
-    if (f_real_p(x)) {
-	if (f_positive_p(x))
-	    return m_sqrt_bang(x);
-	return f_complex_new2(rb_cComplex, ZERO, m_sqrt_bang(f_negate(x)));
-    }
-    return rb_complex_sqrt(x);
-}
-#endif
 
 static VALUE
 f_complex_polar(VALUE klass, VALUE x, VALUE y)
@@ -688,9 +597,9 @@ nucomp_imag(VALUE self)
 static VALUE
 nucomp_negate(VALUE self)
 {
-  get_dat1(self);
-  return f_complex_new2(CLASS_OF(self),
-			f_negate(dat->real), f_negate(dat->imag));
+    get_dat1(self);
+    return f_complex_new2(CLASS_OF(self),
+			  f_negate(dat->real), f_negate(dat->imag));
 }
 
 /*
@@ -1154,15 +1063,6 @@ nucomp_conj(VALUE self)
     return f_complex_new2(CLASS_OF(self), dat->real, f_negate(dat->imag));
 }
 
-#if 0
-/* :nodoc: */
-static VALUE
-nucomp_true(VALUE self)
-{
-    return Qtrue;
-}
-#endif
-
 /*
  * call-seq:
  *    cmp.real?  ->  false
@@ -1174,23 +1074,6 @@ nucomp_false(VALUE self)
 {
     return Qfalse;
 }
-
-#if 0
-/* :nodoc: */
-static VALUE
-nucomp_exact_p(VALUE self)
-{
-    get_dat1(self);
-    return f_boolcast(k_exact_p(dat->real) && k_exact_p(dat->imag));
-}
-
-/* :nodoc: */
-static VALUE
-nucomp_inexact_p(VALUE self)
-{
-    return f_boolcast(!nucomp_exact_p(self));
-}
-#endif
 
 /*
  * call-seq:
@@ -1958,15 +1841,12 @@ string_to_c(VALUE self)
 static VALUE
 nucomp_s_convert(int argc, VALUE *argv, VALUE klass)
 {
-    VALUE a1, a2, backref;
+    VALUE a1, a2;
 
     rb_scan_args(argc, argv, "11", &a1, &a2);
 
     if (NIL_P(a1) || (argc == 2 && NIL_P(a2)))
 	rb_raise(rb_eTypeError, "can't convert nil into Complex");
-
-    backref = rb_backref_get();
-    rb_match_busy(backref);
 
     if (RB_TYPE_P(a1, T_STRING)) {
 	a1 = string_to_c_strict(a1);
@@ -1975,8 +1855,6 @@ nucomp_s_convert(int argc, VALUE *argv, VALUE klass)
     if (RB_TYPE_P(a2, T_STRING)) {
 	a2 = string_to_c_strict(a2);
     }
-
-    rb_backref_set(backref);
 
     if (RB_TYPE_P(a1, T_COMPLEX)) {
 	{
@@ -2195,18 +2073,13 @@ Init_Complex(void)
 #undef rb_intern
 #define rb_intern(str) rb_intern_const(str)
 
-    assert(fprintf(stderr, "assert() is now active\n"));
-
     id_abs = rb_intern("abs");
     id_arg = rb_intern("arg");
     id_denominator = rb_intern("denominator");
-    id_expt = rb_intern("**");
     id_fdiv = rb_intern("fdiv");
-    id_negate = rb_intern("-@");
     id_numerator = rb_intern("numerator");
     id_quo = rb_intern("quo");
     id_real_p = rb_intern("real?");
-    id_to_f = rb_intern("to_f");
     id_i_real = rb_intern("@real");
     id_i_imag = rb_intern("@image"); /* @image, not @imag */
     id_finite_p = rb_intern("finite?");
@@ -2219,12 +2092,7 @@ Init_Complex(void)
     rb_define_alloc_func(rb_cComplex, nucomp_s_alloc);
     rb_undef_method(CLASS_OF(rb_cComplex), "allocate");
 
-#if 0
-    rb_define_private_method(CLASS_OF(rb_cComplex), "new!", nucomp_s_new_bang, -1);
-    rb_define_private_method(CLASS_OF(rb_cComplex), "new", nucomp_s_new, -1);
-#else
     rb_undef_method(CLASS_OF(rb_cComplex), "new");
-#endif
 
     rb_define_singleton_method(rb_cComplex, "rectangular", nucomp_s_new, -1);
     rb_define_singleton_method(rb_cComplex, "rect", nucomp_s_new, -1);
@@ -2273,16 +2141,8 @@ Init_Complex(void)
     rb_define_method(rb_cComplex, "polar", nucomp_polar, 0);
     rb_define_method(rb_cComplex, "conjugate", nucomp_conj, 0);
     rb_define_method(rb_cComplex, "conj", nucomp_conj, 0);
-#if 0
-    rb_define_method(rb_cComplex, "~", nucomp_conj, 0); /* gcc */
-#endif
 
     rb_define_method(rb_cComplex, "real?", nucomp_false, 0);
-#if 0
-    rb_define_method(rb_cComplex, "complex?", nucomp_true, 0);
-    rb_define_method(rb_cComplex, "exact?", nucomp_exact_p, 0);
-    rb_define_method(rb_cComplex, "inexact?", nucomp_inexact_p, 0);
-#endif
 
     rb_define_method(rb_cComplex, "numerator", nucomp_numerator, 0);
     rb_define_method(rb_cComplex, "denominator", nucomp_denominator, 0);
@@ -2300,7 +2160,8 @@ Init_Complex(void)
     rb_define_method(rb_cComplex, "infinite?", rb_complex_infinite_p, 0);
 
     rb_define_private_method(rb_cComplex, "marshal_dump", nucomp_marshal_dump, 0);
-    compat = rb_define_class_under(rb_cComplex, "compatible", rb_cObject); /* :nodoc: */
+    /* :nodoc: */
+    compat = rb_define_class_under(rb_cComplex, "compatible", rb_cObject);
     rb_define_private_method(compat, "marshal_load", nucomp_marshal_load, 1);
     rb_marshal_define_compat(rb_cComplex, compat, nucomp_dumper, nucomp_loader);
 

@@ -3,6 +3,7 @@ require 'test/unit'
 
 require 'tmpdir'
 require 'tempfile'
+require_relative '../lib/jit_support'
 
 class TestRubyOptions < Test::Unit::TestCase
   def write_file(filename, content)
@@ -96,6 +97,15 @@ class TestRubyOptions < Test::Unit::TestCase
     end
   private_constant :VERSION_PATTERN
 
+  VERSION_PATTERN_WITH_JIT =
+    case RUBY_ENGINE
+    when 'ruby'
+      /^ruby #{q[RUBY_VERSION]}(?:[p ]|dev|rc).*? \+JIT \[#{q[RUBY_PLATFORM]}\]$/
+    else
+      VERSION_PATTERN
+    end
+  private_constant :VERSION_PATTERN_WITH_JIT
+
   def test_verbose
     assert_in_out_err(["-vve", ""]) do |r, e|
       assert_match(VERSION_PATTERN, r[0])
@@ -155,8 +165,23 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_version
     assert_in_out_err(%w(--version)) do |r, e|
       assert_match(VERSION_PATTERN, r[0])
-      assert_equal(RUBY_DESCRIPTION, r[0])
+      if RubyVM::MJIT.enabled?
+        assert_equal(EnvUtil.invoke_ruby(['-e', 'print RUBY_DESCRIPTION'], '', true).first, r[0])
+      else
+        assert_equal(RUBY_DESCRIPTION, r[0])
+      end
       assert_equal([], e)
+    end
+    if JITSupport.supported?
+      assert_in_out_err(%w(--version --jit)) do |r, e|
+        assert_match(VERSION_PATTERN_WITH_JIT, r[0])
+        if RubyVM::MJIT.enabled?
+          assert_equal(RUBY_DESCRIPTION, r[0])
+        else
+          assert_equal(EnvUtil.invoke_ruby(['--jit', '-e', 'print RUBY_DESCRIPTION'], '', true).first, r[0])
+        end
+        assert_equal([], e)
+      end
     end
   end
 
@@ -383,7 +408,7 @@ class TestRubyOptions < Test::Unit::TestCase
       t.puts "  end"
       t.puts "end"
       t.flush
-      warning = ' warning: found = in conditional, should be =='
+      warning = ' warning: found `= literal\' in conditional, should be =='
       err = ["#{t.path}:1:#{warning}",
              "#{t.path}:4:#{warning}",
             ]

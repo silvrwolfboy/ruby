@@ -411,7 +411,11 @@ struct rb_iseq_constant_body {
 				      */
     struct rb_call_cache *cc_entries; /* size is ci_size = ci_kw_size */
 
-    VALUE mark_ary;     /* Array: includes operands which should be GC marked */
+    struct {
+      rb_snum_t flip_count;
+      VALUE coverage;
+      VALUE original_iseq;
+    } variable;
 
     unsigned int local_table_size;
     unsigned int is_size;
@@ -424,6 +428,7 @@ struct rb_iseq_constant_body {
                       struct rb_control_frame_struct *); /* function pointer for loaded native code */
     long unsigned total_calls; /* number of total calls with `mjit_exec()` */
     struct rb_mjit_unit *jit_unit;
+    char catch_except_p; /* If a frame of this ISeq may catch exception, set TRUE */
 };
 
 /* T_IMEMO/iseq */
@@ -1009,6 +1014,7 @@ enum vm_svar_index {
 
 /* inline cache */
 typedef struct iseq_inline_cache_entry *IC;
+typedef union iseq_inline_storage_entry *ISE;
 typedef struct rb_call_info *CALL_INFO;
 typedef struct rb_call_cache *CALL_CACHE;
 

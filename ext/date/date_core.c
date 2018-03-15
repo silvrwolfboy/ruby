@@ -51,18 +51,18 @@ static double positive_inf, negative_inf;
 #define f_add3(x,y,z) f_add(f_add(x, y), z)
 #define f_sub3(x,y,z) f_sub(f_sub(x, y), z)
 
-inline static VALUE
+inline static int
 f_cmp(VALUE x, VALUE y)
 {
     if (FIXNUM_P(x) && FIXNUM_P(y)) {
 	long c = FIX2LONG(x) - FIX2LONG(y);
 	if (c > 0)
-	    c = 1;
+	    return 1;
 	else if (c < 0)
-	    c = -1;
-	return INT2FIX(c);
+	    return -1;
+	return 0;
     }
-    return rb_funcall(x, id_cmp, 1, y);
+    return rb_cmpint(rb_funcallv(x, id_cmp, 1, &y), x, y);
 }
 
 inline static VALUE
@@ -2333,6 +2333,9 @@ VALUE date_zone_to_diff(VALUE);
 static int
 offset_to_sec(VALUE vof, int *rof)
 {
+    int try_rational = 1;
+
+  again:
     switch (TYPE(vof)) {
       case T_FIXNUM:
 	{
@@ -2359,10 +2362,11 @@ offset_to_sec(VALUE vof, int *rof)
       default:
 	expect_numeric(vof);
 	vof = f_to_r(vof);
-#ifdef CANONICALIZATION_FOR_MATHN
-	if (!k_rational_p(vof))
-	    return offset_to_sec(vof, rof);
-#endif
+	if (!k_rational_p(vof)) {
+	    if (!try_rational) Check_Type(vof, T_RATIONAL);
+	    try_rational = 0;
+	    goto again;
+	}
 	/* fall through */
       case T_RATIONAL:
 	{
@@ -2371,17 +2375,10 @@ offset_to_sec(VALUE vof, int *rof)
 
 	    vs = day_to_sec(vof);
 
-#ifdef CANONICALIZATION_FOR_MATHN
 	    if (!k_rational_p(vs)) {
-		if (!FIXNUM_P(vs))
-		    return 0;
-		n = FIX2LONG(vs);
-		if (n < -DAY_IN_SECONDS || n > DAY_IN_SECONDS)
-		    return 0;
-		*rof = (int)n;
-		return 1;
+		vn = vs;
+		goto rounded;
 	    }
-#endif
 	    vn = rb_rational_num(vs);
 	    vd = rb_rational_den(vs);
 
@@ -2391,6 +2388,7 @@ offset_to_sec(VALUE vof, int *rof)
 		vn = f_round(vs);
 		if (!f_eqeq_p(vn, vs))
 		    rb_warning("fraction of offset is ignored");
+	      rounded:
 		if (!FIXNUM_P(vn))
 		    return 0;
 		n = FIX2LONG(vn);
@@ -3679,9 +3677,11 @@ date_s_today(int argc, VALUE *argv, VALUE klass)
 #define ref_hash0(k) rb_hash_aref(hash, k)
 #define del_hash0(k) rb_hash_delete(hash, k)
 
-#define set_hash(k,v) rb_hash_aset(hash, ID2SYM(rb_intern(k)), v)
-#define ref_hash(k) rb_hash_aref(hash, ID2SYM(rb_intern(k)))
-#define del_hash(k) rb_hash_delete(hash, ID2SYM(rb_intern(k)))
+#define sym(x) ID2SYM(rb_intern(x""))
+
+#define set_hash(k,v) set_hash0(sym(k), v)
+#define ref_hash(k) ref_hash0(sym(k))
+#define del_hash(k) del_hash0(sym(k))
 
 static VALUE
 rt_rewrite_frags(VALUE hash)
@@ -3717,8 +3717,6 @@ rt_rewrite_frags(VALUE hash)
     }
     return hash;
 }
-
-#define sym(x) ID2SYM(rb_intern(x))
 
 static VALUE d_lite_year(VALUE);
 static VALUE d_lite_wday(VALUE);
@@ -5513,8 +5511,10 @@ d_lite_new_offset(int argc, VALUE *argv, VALUE self)
 static VALUE
 d_lite_plus(VALUE self, VALUE other)
 {
+    int try_rational = 1;
     get_d1(self);
 
+  again:
     switch (TYPE(other)) {
       case T_FIXNUM:
 	{
@@ -5724,18 +5724,21 @@ d_lite_plus(VALUE self, VALUE other)
       default:
 	expect_numeric(other);
 	other = f_to_r(other);
-#ifdef CANONICALIZATION_FOR_MATHN
-	if (!k_rational_p(other))
-	    return d_lite_plus(self, other);
-#endif
+	if (!k_rational_p(other)) {
+	    if (!try_rational) Check_Type(other, T_RATIONAL);
+	    try_rational = 0;
+	    goto again;
+	}
 	/* fall through */
       case T_RATIONAL:
 	{
 	    VALUE nth, sf, t;
 	    int jd, df, s;
 
-	    if (wholenum_p(other))
-		return d_lite_plus(self, rb_rational_num(other));
+	    if (wholenum_p(other)) {
+		other = rb_rational_num(other);
+		goto again;
+	    }
 
 	    if (f_positive_p(other))
 		s = +1;
@@ -6154,6 +6157,7 @@ static VALUE
 d_lite_step(int argc, VALUE *argv, VALUE self)
 {
     VALUE limit, step, date;
+    int c;
 
     rb_scan_args(argc, argv, "11", &limit, &step);
 
@@ -6168,25 +6172,22 @@ d_lite_step(int argc, VALUE *argv, VALUE self)
     RETURN_ENUMERATOR(self, argc, argv);
 
     date = self;
-    switch (FIX2INT(f_cmp(step, INT2FIX(0)))) {
-      case -1:
+    c = f_cmp(step, INT2FIX(0));
+    if (c < 0) {
 	while (FIX2INT(d_lite_cmp(date, limit)) >= 0) {
 	    rb_yield(date);
 	    date = d_lite_plus(date, step);
 	}
-	break;
-      case 0:
+    }
+    else if (c == 0) {
 	while (1)
 	    rb_yield(date);
-	break;
-      case 1:
+    }
+    else /* if (c > 0) */ {
 	while (FIX2INT(d_lite_cmp(date, limit)) <= 0) {
 	    rb_yield(date);
 	    date = d_lite_plus(date, step);
 	}
-	break;
-      default:
-	abort();
     }
     return self;
 }
@@ -6241,9 +6242,9 @@ cmp_gen(VALUE self, VALUE other)
     get_d1(self);
 
     if (k_numeric_p(other))
-	return f_cmp(m_ajd(dat), other);
+	return INT2FIX(f_cmp(m_ajd(dat), other));
     else if (k_date_p(other))
-	return f_cmp(m_ajd(dat), f_ajd(other));
+	return INT2FIX(f_cmp(m_ajd(dat), f_ajd(other)));
     return rb_num_coerce_cmp(self, other, rb_intern("<=>"));
 }
 
@@ -9015,8 +9016,6 @@ Init_date_core(void)
 {
 #undef rb_intern
 #define rb_intern(str) rb_intern_const(str)
-
-    assert(fprintf(stderr, "assert() is now active\n"));
 
     id_cmp = rb_intern("<=>");
     id_le_p = rb_intern("<=");

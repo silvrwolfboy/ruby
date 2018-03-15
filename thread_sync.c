@@ -415,6 +415,20 @@ rb_mutex_abandon_all(rb_mutex_t *mutexes)
 	list_head_init(&mutex->waitq);
     }
 }
+
+/*
+ * All other threads are dead in the a new child process, so waitqs
+ * contain references to dead threads which we need to clean up
+ */
+static void
+rb_mutex_cleanup_keeping_mutexes(const rb_thread_t *current_thread)
+{
+    rb_mutex_t *mutex = current_thread->keeping_mutexes;
+    while (mutex) {
+        list_head_init(&mutex->waitq);
+        mutex = mutex->next_mutex;
+    }
+}
 #endif
 
 static VALUE
@@ -648,6 +662,13 @@ queue_closed_p(VALUE self)
 {
     return FL_TEST_RAW(self, QUEUE_CLOSED) != 0;
 }
+
+/*
+ *  Document-class: ClosedQueueError
+ *
+ *  The exception class which will be raised when pushing into a close
+ *  Queue.  See Queue#close and SizedQueue#close.
+ */
 
 NORETURN(static void raise_closed_queue_error(VALUE self));
 
@@ -1160,6 +1181,15 @@ rb_szqueue_clear(VALUE self)
     wakeup_all(szqueue_pushq(sq));
     return self;
 }
+
+/*
+ * Document-method: SizedQueue#length
+ * call-seq:
+ *   length
+ *   size
+ *
+ * Returns the length of the queue.
+ */
 
 static VALUE
 rb_szqueue_length(VALUE self)

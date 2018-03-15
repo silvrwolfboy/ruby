@@ -10,12 +10,12 @@
 
 /* finish iseq array */
 #include "insns.inc"
+#ifndef MJIT_HEADER
 #include "insns_info.inc"
+#endif
 #include <math.h>
 #include "constant.h"
 #include "internal.h"
-#include "probes.h"
-#include "probes_helper.h"
 #include "ruby/config.h"
 #include "debug_counter.h"
 
@@ -1232,11 +1232,11 @@ vm_throw(const rb_execution_context_t *ec, rb_control_frame_t *reg_cfp,
 }
 
 static inline void
-vm_expandarray(rb_control_frame_t *cfp, VALUE ary, rb_num_t num, int flag)
+vm_expandarray(VALUE *sp, VALUE ary, rb_num_t num, int flag)
 {
     int is_splat = flag & 0x01;
     rb_num_t space_size = num + is_splat;
-    VALUE *base = cfp->sp - 1;
+    VALUE *base = sp - 1;
     const VALUE *ptr;
     rb_num_t len;
     const VALUE obj = ary;
@@ -1568,10 +1568,6 @@ static VALUE vm_call_method_each_type(rb_execution_context_t *ec, rb_control_fra
 static inline VALUE vm_call_method(rb_execution_context_t *ec, rb_control_frame_t *cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc);
 
 static vm_call_handler vm_call_iseq_setup_func(const struct rb_call_info *ci, const int param_size, const int local_size);
-
-extern rb_method_definition_t *method_definition_create(rb_method_type_t type, ID mid);
-extern void method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, void *opts);
-extern int rb_method_definition_eq(const rb_method_definition_t *d1, const rb_method_definition_t *d2);
 
 static const rb_iseq_t *
 def_iseq_ptr(rb_method_definition_t *def)
@@ -2034,9 +2030,10 @@ vm_call_opt_send(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
 
     if (!(ci->mid = rb_check_id(&sym))) {
 	if (rb_method_basic_definition_p(CLASS_OF(calling->recv), idMethodMissing)) {
-	    VALUE exc = make_no_method_exception(rb_eNoMethodError, 0, calling->recv,
-						 rb_long2int(calling->argc), &TOPN(i),
-						 ci->flag & (VM_CALL_FCALL|VM_CALL_VCALL));
+	    VALUE exc =
+		rb_make_no_method_exception(rb_eNoMethodError, 0, calling->recv,
+					    rb_long2int(calling->argc), &TOPN(i),
+					    ci->flag & (VM_CALL_FCALL|VM_CALL_VCALL));
 	    rb_exc_raise(exc);
 	}
 	TOPN(i) = rb_str_intern(sym);
@@ -2086,7 +2083,7 @@ vm_call_opt_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct
 static VALUE
 vm_call_opt_block_call(rb_execution_context_t *ec, rb_control_frame_t *reg_cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc)
 {
-    VALUE block_handler = VM_ENV_BLOCK_HANDLER(reg_cfp->ep);
+    VALUE block_handler = VM_ENV_BLOCK_HANDLER(VM_CF_LEP(reg_cfp));
 
     if (BASIC_OP_UNREDEFINED_P(BOP_CALL, PROC_REDEFINED_OP_FLAG)) {
 	return vm_invoke_block_opt_call(ec, reg_cfp, calling, ci, block_handler);
@@ -2215,9 +2212,9 @@ aliased_callable_method_entry(const rb_callable_method_entry_t *me)
 	    RB_OBJ_WRITE(me, &me->def->body.alias.original_me, cme);
 	}
 	else {
-	    method_definition_set((rb_method_entry_t *)me,
-				  method_definition_create(VM_METHOD_TYPE_ALIAS, me->def->original_id),
-				  (void *)cme);
+	    rb_method_definition_t *def =
+		rb_method_definition_create(VM_METHOD_TYPE_ALIAS, me->def->original_id);
+	    rb_method_definition_set((rb_method_entry_t *)me, def, (void *)cme);
 	}
     }
     else {
@@ -3285,11 +3282,10 @@ vm_ic_update(IC ic, VALUE val, const VALUE *reg_ep)
 }
 
 static VALUE
-vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, IC ic)
+vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, ISE is)
 {
     rb_thread_t *th = rb_ec_thread_ptr(ec);
     rb_thread_t *const RUNNING_THREAD_ONCE_DONE = (rb_thread_t *)(0x1);
-    union iseq_inline_storage_entry *const is = (union iseq_inline_storage_entry *)ic;
 
   again:
     if (is->once.running_thread == RUNNING_THREAD_ONCE_DONE) {
@@ -3298,10 +3294,10 @@ vm_once_dispatch(rb_execution_context_t *ec, ISEQ iseq, IC ic)
     else if (is->once.running_thread == NULL) {
 	VALUE val;
 	is->once.running_thread = th;
-	val = is->once.value = rb_ensure(vm_once_exec, (VALUE)iseq, vm_once_clear, (VALUE)is);
+	val = rb_ensure(vm_once_exec, (VALUE)iseq, vm_once_clear, (VALUE)is);
+	RB_OBJ_WRITE(ec->cfp->iseq, &is->once.value, val);
 	/* is->once.running_thread is cleared by vm_once_clear() */
 	is->once.running_thread = RUNNING_THREAD_ONCE_DONE; /* success */
-	rb_iseq_add_mark_object(ec->cfp->iseq, val);
 	return val;
     }
     else if (is->once.running_thread == th) {

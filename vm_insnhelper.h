@@ -127,10 +127,36 @@ enum vm_regan_acttype {
 /* deal with control flow 2: method/iterator              */
 /**********************************************************/
 
+#ifdef MJIT_HEADER
+/* When calling ISeq which may catch an exception from JIT-ed code, we should not call
+   mjit_exec directly to prevent the caller frame from being canceled. That's because
+   the caller frame may have stack values in the local variables and the cancelling
+   the caller frame will purge them. But directly calling mjit_exec is faster... */
+#define EXEC_EC_CFP(val) do { \
+    if (ec->cfp->iseq->body->catch_except_p) { \
+        VM_ENV_FLAGS_SET(ec->cfp->ep, VM_FRAME_FLAG_FINISH); \
+        val = vm_exec(ec, TRUE); \
+    } \
+    else if ((val = mjit_exec(ec)) == Qundef) { \
+        VM_ENV_FLAGS_SET(ec->cfp->ep, VM_FRAME_FLAG_FINISH); \
+        val = vm_exec(ec, FALSE); \
+    } \
+} while (0)
+#else
+/* When calling from VM, longjmp in the callee won't purge any JIT-ed caller frames.
+   So it's safe to directly call mjit_exec. */
+#define EXEC_EC_CFP(val) do { \
+    if ((val = mjit_exec(ec)) == Qundef) { \
+        RESTORE_REGS(); \
+        NEXT_INSN(); \
+    } \
+} while (0)
+#endif
+
 #define CALL_METHOD(calling, ci, cc) do { \
     VALUE v = (*(cc)->call)(ec, GET_CFP(), (calling), (ci), (cc)); \
-    if (v == Qundef && (v = mjit_exec(ec)) == Qundef) { \
-        EXEC_EC_CFP(); \
+    if (v == Qundef) { \
+        EXEC_EC_CFP(val); \
     } \
     else { \
 	val = v; \
@@ -184,8 +210,12 @@ enum vm_regan_acttype {
 #define GET_GLOBAL_CONSTANT_STATE() (ruby_vm_global_constant_state)
 #define INC_GLOBAL_CONSTANT_STATE() (++ruby_vm_global_constant_state)
 
-extern VALUE make_no_method_exception(VALUE exc, VALUE format, VALUE obj,
-				      int argc, const VALUE *argv, int priv);
+extern rb_method_definition_t *rb_method_definition_create(rb_method_type_t type, ID mid);
+extern void rb_method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, void *opts);
+extern int rb_method_definition_eq(const rb_method_definition_t *d1, const rb_method_definition_t *d2);
+
+extern VALUE rb_make_no_method_exception(VALUE exc, VALUE format, VALUE obj,
+					 int argc, const VALUE *argv, int priv);
 
 static inline struct vm_throw_data *
 THROW_DATA_NEW(VALUE val, const rb_control_frame_t *cf, VALUE st)

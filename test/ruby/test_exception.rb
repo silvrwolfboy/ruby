@@ -1200,6 +1200,28 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
     end;
   end
 
+  def test_blocking_backtrace
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      class Bug < RuntimeError
+        def backtrace
+          IO.readlines(IO::NULL)
+        end
+      end
+      bug = Bug.new '[ruby-core:85939] [Bug #14577]'
+      n = 10000
+      i = 0
+      n.times do
+        begin
+          raise bug
+        rescue Bug
+          i += 1
+        end
+      end
+      assert_equal(n, i)
+    end;
+  end
+
   def test_wrong_backtrace
     assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
     begin;
@@ -1232,5 +1254,20 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
 
     _, err2, status1 = EnvUtil.invoke_ruby(['-e', "#{test_method}; begin; foo; end"], '', true, true)
     assert_equal(err2, out1)
+
+    e = RuntimeError.new("a\n")
+    message = assert_nothing_raised(ArgumentError, proc {e.pretty_inspect}) do
+      e.full_message
+    end
+    assert_operator(message, :end_with?, "\n")
+    message = message.gsub(/\e\[[\d;]*m/, '')
+    assert_not_operator(message, :end_with?, "\n\n")
+    e = RuntimeError.new("a\n\nb\n\nc")
+    message = assert_nothing_raised(ArgumentError, proc {e.pretty_inspect}) do
+      e.full_message
+    end
+    assert_all?(message.lines) do |m|
+      /\e\[\d[;\d]*m[^\e]*\n/ !~ m
+    end
   end
 end

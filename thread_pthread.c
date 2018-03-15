@@ -180,9 +180,11 @@ gvl_destroy(rb_vm_t *vm)
 }
 
 #if defined(HAVE_WORKING_FORK)
+static void thread_cache_reset(void);
 static void
 gvl_atfork(rb_vm_t *vm)
 {
+    thread_cache_reset();
     gvl_init(vm);
     gvl_acquire(vm, GET_THREAD());
 }
@@ -365,33 +367,25 @@ native_cond_timedwait(rb_nativethread_cond_t *cond, pthread_mutex_t *mutex, cons
 static struct timespec
 native_cond_timeout(rb_nativethread_cond_t *cond, struct timespec timeout_rel)
 {
-    struct timespec timeout;
-    struct timespec now;
+    struct timespec abs;
 
 #if USE_MONOTONIC_COND
     if (cond->clockid == CLOCK_MONOTONIC) {
-	int ret = clock_gettime(cond->clockid, &now);
-	if (ret != 0)
-	    rb_sys_fail("clock_gettime()");
+	getclockofday(&abs);
 	goto out;
     }
 
     if (cond->clockid != CLOCK_REALTIME)
 	rb_bug("unsupported clockid %"PRIdVALUE, (SIGNED_VALUE)cond->clockid);
 #endif
-    rb_timespec_now(&now);
+    rb_timespec_now(&abs);
 
 #if USE_MONOTONIC_COND
   out:
 #endif
-    timeout.tv_sec = now.tv_sec;
-    timeout.tv_nsec = now.tv_nsec;
-    timespec_add(&timeout, &timeout_rel);
+    timespec_add(&abs, &timeout_rel);
 
-    if (timeout.tv_sec < now.tv_sec)
-	timeout.tv_sec = TIMET_MAX;
-
-    return timeout;
+    return abs;
 }
 
 #define native_cleanup_push pthread_cleanup_push
@@ -465,7 +459,7 @@ native_thread_destroy(rb_thread_t *th)
 #endif
 
 #if USE_THREAD_CACHE
-static rb_thread_t *register_cached_thread_and_wait(void);
+static rb_thread_t *register_cached_thread_and_wait(rb_nativethread_id_t);
 #endif
 
 #if defined HAVE_PTHREAD_GETATTR_NP || defined HAVE_PTHREAD_ATTR_GET_NP
@@ -845,11 +839,11 @@ native_thread_init_stack(rb_thread_t *th)
 static void *
 thread_start_func_1(void *th_ptr)
 {
+    rb_thread_t *th = th_ptr;
 #if USE_THREAD_CACHE
   thread_start:
 #endif
     {
-	rb_thread_t *th = th_ptr;
 #if !defined USE_NATIVE_THREAD_INIT
 	VALUE stack_start;
 #endif
@@ -869,10 +863,7 @@ thread_start_func_1(void *th_ptr)
 #if USE_THREAD_CACHE
     if (1) {
 	/* cache thread */
-	rb_thread_t *th;
-	if ((th = register_cached_thread_and_wait()) != 0) {
-	    th_ptr = (void *)th;
-	    th->thread_id = pthread_self();
+	if ((th = register_cached_thread_and_wait(th->thread_id)) != 0) {
 	    goto thread_start;
 	}
     }
@@ -881,86 +872,77 @@ thread_start_func_1(void *th_ptr)
 }
 
 struct cached_thread_entry {
-    volatile rb_thread_t **th_area;
-    rb_nativethread_cond_t *cond;
-    struct cached_thread_entry *next;
+    rb_nativethread_cond_t cond;
+    rb_nativethread_id_t thread_id;
+    rb_thread_t *th;
+    struct list_node node;
 };
-
 
 #if USE_THREAD_CACHE
 static rb_nativethread_lock_t thread_cache_lock = RB_NATIVETHREAD_LOCK_INIT;
-struct cached_thread_entry *cached_thread_root;
+static LIST_HEAD(cached_thread_head);
+
+#  if defined(HAVE_WORKING_FORK)
+static void
+thread_cache_reset(void)
+{
+    rb_native_mutex_initialize(&thread_cache_lock);
+    list_head_init(&cached_thread_head);
+}
+#  endif
 
 static rb_thread_t *
-register_cached_thread_and_wait(void)
+register_cached_thread_and_wait(rb_nativethread_id_t thread_self_id)
 {
-    rb_nativethread_cond_t cond = RB_NATIVETHREAD_COND_INIT;
-    volatile rb_thread_t *th_area = 0;
-    struct timespec ts;
-    struct cached_thread_entry *entry =
-      (struct cached_thread_entry *)malloc(sizeof(struct cached_thread_entry));
+    struct timespec end = { 60, 0 };
+    struct cached_thread_entry entry;
 
-    if (entry == 0) {
-	return 0; /* failed -> terminate thread immediately */
-    }
-
-    rb_timespec_now(&ts);
-    ts.tv_sec += 60;
+    rb_native_cond_initialize(&entry.cond, RB_CONDATTR_CLOCK_MONOTONIC);
+    entry.th = NULL;
+    entry.thread_id = thread_self_id;
+    end = native_cond_timeout(&entry.cond, end);
 
     rb_native_mutex_lock(&thread_cache_lock);
     {
-	entry->th_area = &th_area;
-	entry->cond = &cond;
-	entry->next = cached_thread_root;
-	cached_thread_root = entry;
+        list_add(&cached_thread_head, &entry.node);
 
-	native_cond_timedwait(&cond, &thread_cache_lock, &ts);
+        native_cond_timedwait(&entry.cond, &thread_cache_lock, &end);
 
-	{
-	    struct cached_thread_entry *e, **prev = &cached_thread_root;
-
-	    while ((e = *prev) != 0) {
-		if (e == entry) {
-		    *prev = e->next;
-		    break;
-		}
-		prev = &e->next;
-	    }
-	}
-
-	free(entry); /* ok */
-        rb_native_cond_destroy(&cond);
+        if (entry.th == NULL) { /* unused */
+            list_del(&entry.node);
+        }
     }
     rb_native_mutex_unlock(&thread_cache_lock);
 
-    return (rb_thread_t *)th_area;
+    rb_native_cond_destroy(&entry.cond);
+
+    return entry.th;
 }
+#else
+#  if defined(HAVE_WORKING_FORK)
+static void thread_cache_reset(void) { }
+#  endif
 #endif
 
 static int
 use_cached_thread(rb_thread_t *th)
 {
-    int result = 0;
 #if USE_THREAD_CACHE
     struct cached_thread_entry *entry;
 
-    if (cached_thread_root) {
-        rb_native_mutex_lock(&thread_cache_lock);
-	entry = cached_thread_root;
-	{
-	    if (cached_thread_root) {
-		cached_thread_root = entry->next;
-		*entry->th_area = th;
-		result = 1;
-	    }
-	}
-	if (result) {
-	    rb_native_cond_signal(entry->cond);
-	}
-	rb_native_mutex_unlock(&thread_cache_lock);
+    rb_native_mutex_lock(&thread_cache_lock);
+    entry = list_pop(&cached_thread_head, struct cached_thread_entry, node);
+    if (entry) {
+        entry->th = th;
+        /* th->thread_id must be set before signal for Thread#name= */
+        th->thread_id = entry->thread_id;
+        fill_thread_id_str(th);
+        rb_native_cond_signal(&entry->cond);
     }
+    rb_native_mutex_unlock(&thread_cache_lock);
+    return !!entry;
 #endif
-    return result;
+    return 0;
 }
 
 static int
@@ -973,7 +955,6 @@ native_thread_create(rb_thread_t *th)
     }
     else {
 	pthread_attr_t attr;
-	pthread_attr_t *const attrp = &attr;
 	const size_t stack_size = th->vm->default_params.thread_machine_stack_size;
 	const size_t space = space_size(stack_size);
 
@@ -995,7 +976,7 @@ native_thread_create(rb_thread_t *th)
 # endif
 	CHECK_ERR(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED));
 
-	err = pthread_create(&th->thread_id, attrp, thread_start_func_1, th);
+	err = pthread_create(&th->thread_id, &attr, thread_start_func_1, th);
 	thread_debug("create: %p (%d)\n", (void *)th, err);
 	/* should be done in the created thread */
 	fill_thread_id_str(th);
@@ -1231,7 +1212,7 @@ async_bug_fd(const char *mesg, int errno_arg, int fd)
     char buff[64];
     size_t n = strlcpy(buff, mesg, sizeof(buff));
     if (n < sizeof(buff)-3) {
-	ruby_snprintf(buff, sizeof(buff)-n, "(%d)", fd);
+	ruby_snprintf(buff+n, sizeof(buff)-n, "(%d)", fd);
     }
     rb_async_bug_errno(buff, errno_arg);
 }
@@ -1764,7 +1745,7 @@ mjit_worker(void *arg)
     void (*worker_func)(void) = (void(*)(void))arg;
 
     if (pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL) != 0) {
-        fprintf(stderr, "Cannot enable cancelation in MJIT worker\n");
+        fprintf(stderr, "Cannot enable cancellation in MJIT worker\n");
     }
 #ifdef SET_CURRENT_THREAD_NAME
     SET_CURRENT_THREAD_NAME("ruby-mjitworker"); /* 16 byte including NUL */
@@ -1779,18 +1760,20 @@ rb_thread_create_mjit_thread(void (*child_hook)(void), void (*worker_func)(void)
 {
     pthread_attr_t attr;
     pthread_t worker_pid;
+    int ret = FALSE;
 
     pthread_atfork(NULL, NULL, child_hook);
-    if (pthread_attr_init(&attr) == 0
+
+    if (pthread_attr_init(&attr) != 0) return ret;
+
+    /* jit_worker thread is not to be joined */
+    if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0
         && pthread_attr_setscope(&attr, PTHREAD_SCOPE_SYSTEM) == 0
         && pthread_create(&worker_pid, &attr, mjit_worker, (void *)worker_func) == 0) {
-        /* jit_worker thread is not to be joined */
-        pthread_detach(worker_pid);
-        return TRUE;
+        ret = TRUE;
     }
-    else {
-        return FALSE;
-    }
+    pthread_attr_destroy(&attr);
+    return ret;
 }
 
 #endif /* THREAD_SYSTEM_DEPENDENT_IMPLEMENTATION */

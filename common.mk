@@ -61,8 +61,6 @@ HTMLOUT       = $(EXTOUT)/html
 CAPIOUT       = doc/capi
 MJIT_HEADER   = rb_mjit_header.h
 MJIT_MIN_HEADER = $(MJIT_HEADER_BUILD_DIR)/rb_mjit_min_header-$(RUBY_PROGRAM_VERSION).h
-MJIT_CPPFLAGS = -DMJIT_HEADER_INSTALL_DIR=\""$(MJIT_HEADER_INSTALL_DIR)"\" \
-		-DLIBRUBYARG_SHARED=\""$(LIBRUBYARG_SHARED)"\"
 MJIT_HEADER_BUILD_DIR = $(EXTOUT)/include/$(arch)
 
 INITOBJS      = dmyext.$(OBJEXT) dmyenc.$(OBJEXT)
@@ -175,9 +173,6 @@ INSTRUBY_ARGS =	$(SCRIPT_ARGS) \
 		--mantype="$(MANTYPE)"
 INSTALL_PROG_MODE = 0755
 INSTALL_DATA_MODE = 0644
-
-PRE_LIBRUBY_UPDATE = $(MINIRUBY) -e 'ARGV[1] or File.unlink(ARGV[0]) rescue nil' -- \
-			$(LIBRUBY_EXTS) $(LIBRUBY_SO_UPDATE)
 
 TESTSDIR      = $(srcdir)/test
 TEST_EXCLUDES = --excludes-dir=$(TESTSDIR)/excludes --name=!/memory_leak/
@@ -325,7 +320,7 @@ $(PROGRAM) $(WPROGRAM): $(LIBRUBY) $(MAINOBJ) $(OBJS) $(EXTOBJS) $(SETUP) $(PREP
 
 $(LIBRUBY_A):	$(LIBRUBY_A_OBJS) $(MAINOBJ) $(INITOBJS) $(ARCHFILE)
 
-$(LIBRUBY_SO):	$(OBJS) $(DLDOBJS) $(LIBRUBY_A) $(PREP) $(LIBRUBY_SO_UPDATE) $(BUILTIN_ENCOBJS)
+$(LIBRUBY_SO):	$(OBJS) $(DLDOBJS) $(LIBRUBY_A) $(PREP) $(BUILTIN_ENCOBJS)
 
 $(LIBRUBY_EXTS):
 	@exit > $@
@@ -575,6 +570,7 @@ clean-local:: clean-runnable
 	$(Q)$(RM) $(MJIT_HEADER) $(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX:%=*).h
 	$(Q)$(RM) $(MJIT_MIN_HEADER) $(MJIT_MIN_HEADER:.h=)$(MJIT_HEADER_SUFFIX:%=*).h
 	$(Q)$(RM) $(MJIT_HEADER_INSTALL_DIR)/rb_mjit_min_header-*.h
+	$(Q)$(RM) $(TIMESTAMPDIR)/$(MJIT_HEADER:.h=)$(MJIT_HEADER_SUFFIX).time mjit_config.h
 	-$(Q) $(RMDIRS) $(MJIT_HEADER_INSTALL_DIR) 2> $(NULL) || exit 0
 	-$(Q) $(RMDIR) enc/jis enc/trans enc 2> $(NULL) || exit 0
 clean-runnable:: PHONY
@@ -928,7 +924,7 @@ $(srcs_vpath)vmtc.inc: $(srcdir)/tool/ruby_vm/views/vmtc.inc.erb
 $(srcs_vpath)vm.inc: $(srcdir)/tool/ruby_vm/views/vm.inc.erb
 $(srcs_vpath)mjit_compile.inc: $(srcdir)/tool/ruby_vm/views/mjit_compile.inc.erb \
   $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_send.erb \
-  $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn_body.erb
+  $(srcdir)/tool/ruby_vm/views/_mjit_compile_insn_body.erb $(srcdir)/tool/ruby_vm/views/_mjit_compile_pc_and_sp.erb
 
 common-srcs: $(srcs_vpath)parse.c $(srcs_vpath)lex.c $(srcs_vpath)enc/trans/newline.c $(srcs_vpath)id.c \
 	     srcs-lib srcs-ext incs
@@ -1542,6 +1538,7 @@ complex.$(OBJEXT): {$(VPATH)}defines.h
 complex.$(OBJEXT): {$(VPATH)}encoding.h
 complex.$(OBJEXT): {$(VPATH)}intern.h
 complex.$(OBJEXT): {$(VPATH)}internal.h
+complex.$(OBJEXT): {$(VPATH)}id.h
 complex.$(OBJEXT): {$(VPATH)}io.h
 complex.$(OBJEXT): {$(VPATH)}missing.h
 complex.$(OBJEXT): {$(VPATH)}onigmo.h
@@ -1636,6 +1633,7 @@ dir.$(OBJEXT): {$(VPATH)}encindex.h
 dir.$(OBJEXT): {$(VPATH)}encoding.h
 dir.$(OBJEXT): {$(VPATH)}intern.h
 dir.$(OBJEXT): {$(VPATH)}internal.h
+dir.$(OBJEXT): {$(VPATH)}id.h
 dir.$(OBJEXT): {$(VPATH)}io.h
 dir.$(OBJEXT): {$(VPATH)}missing.h
 dir.$(OBJEXT): {$(VPATH)}onigmo.h
@@ -2852,9 +2850,11 @@ version.$(OBJEXT): {$(VPATH)}config.h
 version.$(OBJEXT): {$(VPATH)}defines.h
 version.$(OBJEXT): {$(VPATH)}intern.h
 version.$(OBJEXT): {$(VPATH)}missing.h
+version.$(OBJEXT): {$(VPATH)}mjit.h
 version.$(OBJEXT): {$(VPATH)}st.h
 version.$(OBJEXT): {$(VPATH)}subst.h
 version.$(OBJEXT): {$(VPATH)}version.c
+version.$(OBJEXT): {$(VPATH)}vm_core.h
 vm.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 vm.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
 vm.$(OBJEXT): $(CCAN_DIR)/list/list.h

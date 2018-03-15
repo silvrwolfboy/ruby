@@ -75,7 +75,6 @@ AC_SUBST(TEENY)
 AC_SUBST(RUBY_PROGRAM_VERSION)
 AC_SUBST(RUBY_API_VERSION, '$(MAJOR).$(MINOR)')
 RUBY_PATCHLEVEL=`sed -n 's/^#define RUBY_PATCHLEVEL //p' $srcdir/version.h`
-AC_DEFINE(CANONICALIZATION_FOR_MATHN)
 dnl checks for alternative programs
 AC_CANONICAL_BUILD
 RUBY_RM_RECURSIVE
@@ -716,13 +715,16 @@ AS_CASE(["$target_os"],
 dnl Checks for libraries.
 AS_CASE(["$target_os"],[*bsd*|dragonfly*],[],[ac_cv_func_daemon=no])
 
+AS_UNSET(ORIG_LIBS)
 POSTLINK=:
 AC_SUBST(POSTLINK)
 AS_CASE(["$target_os"],
 [nextstep*], [	],
 [openstep*], [	],
 [rhapsody*], [	],
-[darwin*], [	RUBY_PREPEND_OPTION(LIBS, -lobjc)
+[darwin*], [
+		ORIG_LIBS="$LIBS"
+		RUBY_PREPEND_OPTION(LIBS, -lobjc)
 		RUBY_APPEND_OPTIONS(CPPFLAGS, -D_XOPEN_SOURCE -D_DARWIN_C_SOURCE -D_DARWIN_UNLIMITED_SELECT -D_REENTRANT)
 		AC_MSG_CHECKING(whether Mac OS X 10.5 or later)
 		AC_TRY_CPP([#include <AvailabilityMacros.h>
@@ -959,6 +961,7 @@ main()
 		ac_cv_func_round=no
 		],
 [	LIBS="-lm $LIBS"])
+: ${ORIG_LIBS=$LIBS}
 
 AC_CHECK_LIB(crypt, crypt)      # glibc (GNU/Linux, GNU/Hurd, GNU/kFreeBSD)
 AC_CHECK_LIB(dl, dlopen)	# Dynamic linking for SunOS/Solaris and SYSV
@@ -1166,7 +1169,12 @@ RUBY_REPLACE_TYPE(rlim_t, [int long "long long"], RLIM, [
 @%:@include <sys/resource.h>
 ])
 RUBY_REPLACE_TYPE(off_t, [], OFFT)
-RUBY_REPLACE_TYPE(clockid_t, [], CLOCKID)
+RUBY_REPLACE_TYPE(clockid_t, [], CLOCKID, [@%:@ifdef HAVE_TIME_H
+@%:@ include <time.h>
+@%:@endif
+@%:@ifdef HAVE_SYS_TIME_H
+@%:@ include <sys/time.h>
+@%:@endif])
 
 AC_CACHE_CHECK(for prototypes, rb_cv_have_prototypes,
   [AC_TRY_COMPILE([int foo(int x) { return 0; }], [return foo(10);],
@@ -1249,24 +1257,6 @@ int foo(int x, ...);
   rb_cv_va_args_macro=no)])
 AS_IF([test "$rb_cv_va_args_macro" = yes], [
   AC_DEFINE(HAVE_VA_ARGS_MACRO)
-])
-
-AC_CACHE_CHECK([appropriate way to simulate va_copy], rb_cv_va_copy, [dnl
-    RUBY_CHECK_VA_COPY([va_copy], [va_copy((dst),(src))])
-    RUBY_CHECK_VA_COPY([VA_COPY macro], [VA_COPY((dst),(src))])
-    RUBY_CHECK_VA_COPY([__va_copy], [__va_copy((dst),(src))])
-    RUBY_CHECK_VA_COPY([__builtin_va_copy], [__builtin_va_copy((dst),(src))])
-    RUBY_CHECK_VA_COPY([va_copy via struct assignment],
-        [do (dst) = (src); while (0)])
-    RUBY_CHECK_VA_COPY([va_copy via pointer assignment],
-        [do *(dst) = *(src); while (0)])
-    RUBY_CHECK_VA_COPY([va_copy via memcpy],
-        [memcpy(&(dst), &(src), sizeof(va_list))])
-])
-AS_IF([test "x$rb_cv_va_copy" = x], [
-    AC_ERROR([no way to simulate va_copy])
-], [
-    AC_DEFINE_UNQUOTED(AS_TR_CPP(HAVE_$rb_cv_va_copy))
 ])
 
 AC_CACHE_CHECK([for alignas() syntax], rb_cv_have_alignas, [
@@ -1410,6 +1400,12 @@ AS_IF([test "$rb_cv_func_exported" != no], [
 
 RUBY_APPEND_OPTION(XCFLAGS, -DRUBY_EXPORT)
 
+AC_ARG_ENABLE(mathn,
+    AS_HELP_STRING([--disable-mathn], [disable canonicalization for mathn]),
+    [mathn=$enableval], [mathn=yes])
+test "x$mathn" = xyes || mathn=
+AC_SUBST(MATHN, $mathn)
+
 AC_CACHE_CHECK(for function name string predefined identifier,
     rb_cv_function_name_string,
     [rb_cv_function_name_string=no
@@ -1534,13 +1530,6 @@ AC_CHECK_TYPES([struct timespec], [], [], [@%:@ifdef HAVE_TIME_H
 @%:@endif])
 
 AC_CHECK_TYPES([struct timezone], [], [], [@%:@ifdef HAVE_TIME_H
-@%:@ include <time.h>
-@%:@endif
-@%:@ifdef HAVE_SYS_TIME_H
-@%:@ include <sys/time.h>
-@%:@endif])
-
-AC_CHECK_TYPES([clockid_t], [], [], [@%:@ifdef HAVE_TIME_H
 @%:@ include <time.h>
 @%:@endif
 @%:@ifdef HAVE_SYS_TIME_H
@@ -2258,20 +2247,18 @@ AS_IF([test x"$enable_pthread" = xyes], [
     for pthread_lib in thr pthread pthreads c c_r root; do
 	AC_CHECK_LIB($pthread_lib, pthread_create,
 		     rb_with_pthread=yes, rb_with_pthread=no)
-	AS_IF([test "$rb_with_pthread" = "yes"], [ break; fi
+	AS_IF([test "$rb_with_pthread" = "yes"], [break])
     done
     AS_IF([test x"$rb_with_pthread" = xyes], [
 	AC_DEFINE(_REENTRANT)
 	AC_DEFINE(_THREAD_SAFE)
 	AC_DEFINE(HAVE_LIBPTHREAD)
 	AC_CHECK_HEADERS(pthread_np.h, [], [], [@%:@include <pthread.h>])
-	AS_CASE([$pthread_lib],
-	[c],    [],
-	[root], [],
-	[c_r],  [MAINLIBS="-pthread $MAINLIBS"],
-	        [AS_CASE(["$target_os"],
-		    [openbsd*|mirbsd*], [LIBS="-pthread $LIBS"],
-		    [LIBS="-l$pthread_lib $LIBS"])])
+	AS_CASE(["$pthread_lib:$target_os"],
+		[c:*], [],
+		[root:*], [],
+		[c_r:*|*:openbsd*|*:mirbsd*],  [LIBS="-pthread $LIBS"],
+		[LIBS="-l$pthread_lib $LIBS"])
     ], [
 	AC_MSG_WARN("Don't know how to find pthread library on your system -- thread support disabled")
     ])
@@ -2479,6 +2466,10 @@ AC_SUBST(DLDFLAGS)dnl
 AC_SUBST(ARCH_FLAG)dnl
 AC_SUBST(MJIT_HEADER_FLAGS)dnl
 AC_SUBST(MJIT_HEADER_INSTALL_DIR)dnl
+AC_SUBST(MJIT_CC, [${MJIT_CC-'$(CC)'}])dnl
+AC_SUBST(MJIT_OPTFLAGS, [${MJIT_OPTFLAGS-'$(optflags)'}])dnl
+AC_SUBST(MJIT_DEBUGFLAGS, [${MJIT_DEBUGFLAGS-'$(debugflags)'}])dnl
+AC_SUBST(MJIT_LDSHARED)dnl
 
 AC_SUBST(STATIC)dnl
 AC_SUBST(CCDLFLAGS)dnl
@@ -2947,12 +2938,12 @@ AC_SUBST(XRUBY)
 AC_SUBST(BOOTSTRAPRUBY)
 AC_SUBST(EXTOUT, [${EXTOUT=.ext}])
 
-])RSTMAKEFILE=""
+FIRSTMAKEFILE=""
 LIBRUBY_A='lib$(RUBY_SO_NAME)-static.a'
 LIBRUBY='$(LIBRUBY_A)'
 LIBRUBYARG_STATIC='-l$(RUBY_SO_NAME)-static'
 LIBRUBYARG='$(LIBRUBYARG_STATIC)'
-SOLIBS=
+SOLIBS='$(MAINLIBS)'
 
 AS_CASE(["$target_os"],
   [cygwin*|mingw*|haiku*|darwin*], [
@@ -3016,9 +3007,6 @@ AS_CASE("$enable_shared", [yes], [
   LIBRUBY_RELATIVE=no
   test -z "$CCDLFLAGS" || CFLAGS="$CFLAGS $CCDLFLAGS"
   ENABLE_SHARED=yes
-  AS_IF([test "$rb_cv_binary_elf" = yes], [
-    SOLIBS='$(LIBS)'
-  ])
 
   # libdir can be overridden in config.site file (on OpenSUSE at least).
   libdir_basename=lib
@@ -3053,7 +3041,6 @@ AS_CASE("$enable_shared", [yes], [
 	])
 	],
     [freebsd*|dragonfly*], [
-	SOLIBS='$(LIBS)'
 	LIBRUBY_SO='lib$(RUBY_SO_NAME).$(SOEXT).$(MAJOR)$(MINOR)'
 	LIBRUBY_SONAME='$(LIBRUBY_SO)'
 	AS_IF([test "$rb_cv_binary_elf" != "yes" ], [
@@ -3062,7 +3049,6 @@ AS_CASE("$enable_shared", [yes], [
 	])
 	],
     [netbsd*], [
-	SOLIBS='$(LIBS)'
 	LIBRUBY_SONAME='lib$(RUBY_SO_NAME).$(SOEXT).$(MAJOR)$(MINOR)'
 	LIBRUBY_SO="${LIBRUBY_SONAME}"'.$(TEENY)'
 	RUBY_APPEND_OPTIONS(LIBRUBY_DLDFLAGS, ['-Wl,-soname,$(LIBRUBY_SONAME)' "$LDFLAGS_OPTDIR"])
@@ -3073,11 +3059,9 @@ AS_CASE("$enable_shared", [yes], [
 	])
 	],
     [openbsd*|mirbsd*], [
-	SOLIBS='$(LIBS)'
 	LIBRUBY_SO='lib$(RUBY_SO_NAME).$(SOEXT).$(MAJOR).'`expr ${MINOR} \* 10 + ${TEENY}`
 	],
     [solaris*], [
-	SOLIBS='$(LIBS)'
 	LIBRUBY_SO='lib$(RUBY_SO_NAME).$(SOEXT).$(MAJOR)'
 	LIBRUBY_SONAME='lib$(RUBY_SO_NAME).$(SOEXT).$(RUBY_PROGRAM_VERSION)'
 	LIBRUBY_ALIASES='$(LIBRUBY_SONAME) lib$(RUBY_SO_NAME).$(SOEXT)'
@@ -3095,7 +3079,7 @@ AS_CASE("$enable_shared", [yes], [
     [aix*], [
 	RUBY_APPEND_OPTIONS(LIBRUBY_DLDFLAGS, ["${linker_flag}-bnoentry" "$XLDFLAGS" "$LDFLAGS_OPTDIR"])
 	LIBRUBYARG_SHARED='-L${libdir} -l${RUBY_SO_NAME}'
-	SOLIBS='-lm -lc'
+	LIBS="$LIBS -lm -lc"
 	],
     [darwin*], [
 	LIBRUBY_LDSHARED='$(CC) -dynamiclib'
@@ -3115,7 +3099,6 @@ AS_CASE("$enable_shared", [yes], [
 	LIBRUBY_SO='lib$(RUBY_SO_NAME).$(SOEXT)'
 	LIBRUBY_SONAME='lib$(RUBY_BASE_NAME).$(RUBY_API_VERSION).$(SOEXT)'
 	LIBRUBY_ALIASES='$(LIBRUBY_SONAME) lib$(RUBY_INSTALL_NAME).$(SOEXT)'
-	SOLIBS='$(LIBS)'
 	],
     [interix*], [
 	LIBRUBYARG_SHARED='-L. -L${libdir} -l$(RUBY_SO_NAME)'
@@ -3358,7 +3341,6 @@ AS_CASE(["$target_os"],
 	    ])
 	LIBRUBY_ALIASES=''
 	FIRSTMAKEFILE=GNUmakefile:cygwin/GNUmakefile.in
-	SOLIBS='$(LIBS)'
 	AS_IF([test x"$enable_shared" = xyes], [
 	    LIBRUBY='lib$(RUBY_SO_NAME).dll.a'
 	], [
@@ -3458,6 +3440,15 @@ AS_IF([test "${universal_binary-no}" = yes ], [
 		[rb_cv_architecture_available=yes], [rb_cv_architecture_available=no]))
 ])
 
+: ${MJIT_LDSHARED=`echo "$LDSHARED" | sed ['s|\$(LD)|'"${LD}"'|g;s|\$(CC)|$(MJIT_CC)|g']`}
+
+MAINLIBS="$LIBS"
+LIBS=$ORIG_LIBS
+AS_IF([test -n "${LIBS}"], [
+    libspat=`echo "${LIBS}" | sed 's/[[][|.*$^]]/\\&/g;s/^  */ /;s/^  *$/ /'`
+    MAINFLAGS=`echo " $MAINLIBS " | sed "s|$libspat"'||;s/^ *//;s/ *$//'`
+])
+LIBRUBYARG_STATIC="${LIBRUBYARG_STATIC} \$(MAINLIBS)"
 CPPFLAGS="$CPPFLAGS "'$(DEFS)'
 test -z "$CPPFLAGS" || CPPFLAGS="$CPPFLAGS "; CPPFLAGS="$CPPFLAGS"'${cppflags}'
 AS_IF([test -n "${cflags+set}"], [

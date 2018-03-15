@@ -286,27 +286,21 @@ args_len(char *const *args)
 static char **
 form_args(int num, ...)
 {
-    va_list argp, argp2;
-    size_t len, disp;
+    va_list argp;
+    size_t len, n;
     int i;
     char **args, **res;
 
     va_start(argp, num);
-    va_copy(argp2, argp);
+    res = NULL;
     for (i = len = 0; i < num; i++) {
         args = va_arg(argp, char **);
-        len += args_len(args);
+        n = args_len(args);
+        REALLOC_N(res, char *, len + n + 1);
+        MEMCPY(res + len, args, char *, n + 1);
+        len += n;
     }
     va_end(argp);
-    res = xmalloc((len + 1) * sizeof(char *));
-    for (i = disp = 0; i < num; i++) {
-        args = va_arg(argp2, char **);
-        len = args_len(args);
-        memmove(res + disp, args, len * sizeof(char *));
-        disp += len;
-    }
-    res[disp] = NULL;
-    va_end(argp2);
     return res;
 }
 
@@ -566,7 +560,7 @@ static const char *const CC_OPTIMIZE_ARGS[] = {MJIT_OPTFLAGS NULL};
 
 #if defined __GNUC__ && !defined __clang__
 #define GCC_PIC_FLAGS "-Wfatal-errors", "-fPIC", "-shared", "-w", \
-    "-pipe", "-nostartfiles", "-nodefaultlibs", "-nostdlib",
+    "-pipe",
 #else
 #define GCC_PIC_FLAGS /* empty */
 #endif
@@ -577,10 +571,19 @@ static const char *const CC_COMMON_ARGS[] = {
 };
 
 static const char *const CC_LDSHARED_ARGS[] = {MJIT_LDSHARED GCC_PIC_FLAGS NULL};
-static const char *const CC_DLDFLAGS_ARGS[] = {MJIT_DLDFLAGS NULL};
+static const char *const CC_DLDFLAGS_ARGS[] = {
+    MJIT_DLDFLAGS
+#if defined __GNUC__ && !defined __clang__
+    "-nostartfiles",
+# ifndef _WIN32
+    "-nodefaultlibs", "-nostdlib",
+# endif
+#endif
+    NULL
+};
 
 #define CC_CODEFLAG_ARGS (mjit_opts.debug ? CC_DEBUG_ARGS : CC_OPTIMIZE_ARGS)
-/* Status of the the precompiled header creation.  The status is
+/* Status of the precompiled header creation.  The status is
    shared by the workers and the pch thread.  */
 static enum {PCH_NOT_READY, PCH_FAILED, PCH_SUCCESS} pch_status;
 
@@ -653,7 +656,7 @@ compile_c_to_so(const char *c_file, const char *so_file)
     const char *libs[] = {
 #ifdef _WIN32
 # ifdef _MSC_VER
-        LIBRUBYARG_SHARED,
+        MJIT_LIBS
         "-link",
         libruby_installed,
         libruby_build,
@@ -661,8 +664,7 @@ compile_c_to_so(const char *c_file, const char *so_file)
         /* Look for ruby.dll.a in build and install directories. */
         libruby_installed,
         libruby_build,
-        /* Link to ruby.dll.a, because Windows DLLs don't allow unresolved symbols. */
-        LIBRUBYARG_SHARED,
+        MJIT_LIBS
         "-lmsvcrt",
         "-lgcc",
 # endif
@@ -682,11 +684,13 @@ compile_c_to_so(const char *c_file, const char *so_file)
     p = append_str2(p, so_file, solen);
     *p = '\0';
 #else
+# ifdef __clang__
     files[1] = pch_file;
+# endif
     files[numberof(files)-3] = so_file;
 #endif
     args = form_args(5, CC_LDSHARED_ARGS, CC_CODEFLAG_ARGS,
-                     CC_DLDFLAGS_ARGS, files, libs);
+                     files, libs, CC_DLDFLAGS_ARGS);
     if (args == NULL)
         return FALSE;
 
@@ -823,10 +827,14 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
     in_jit = TRUE;
     CRITICAL_SECTION_FINISH(3, "before mjit_compile to wait GC finish");
 
-    verbose(2, "start compile: %s@%s:%d -> %s", RSTRING_PTR(unit->iseq->body->location.label),
-            RSTRING_PTR(rb_iseq_path(unit->iseq)), FIX2INT(unit->iseq->body->location.first_lineno), c_file);
-    fprintf(f, "/* %s@%s:%d */\n\n", RSTRING_PTR(unit->iseq->body->location.label),
-            RSTRING_PTR(rb_iseq_path(unit->iseq)), FIX2INT(unit->iseq->body->location.first_lineno));
+    {
+        VALUE s = rb_iseq_path(unit->iseq);
+        const char *label = RSTRING_PTR(unit->iseq->body->location.label);
+        const char *path = RSTRING_PTR(s);
+        int lineno = FIX2INT(unit->iseq->body->location.first_lineno);
+        verbose(2, "start compile: %s@%s:%d -> %s", label, path, lineno, c_file);
+        fprintf(f, "/* %s@%s:%d */\n\n", label, path, lineno);
+    }
     success = mjit_compile(f, unit->iseq->body, funcname);
 
     /* release blocking mjit_gc_start_hook */
@@ -918,9 +926,8 @@ worker(void)
         }
     }
 
-    CRITICAL_SECTION_START(3, "in the end of worker to update worker_finished");
+    /* To keep mutex unlocked when it is destroyed by mjit_finish, don't wrap CRITICAL_SECTION here. */
     worker_finished = TRUE;
-    CRITICAL_SECTION_FINISH(3, "in the end of worker to update worker_finished");
 }
 
 /* MJIT info related to an existing continutaion.  */
@@ -1224,16 +1231,18 @@ UINT rb_w32_system_tmpdir(WCHAR *path, UINT len);
 #endif
 
 static char *
-system_tmpdir(void)
+system_default_tmpdir(void)
 {
-    char *tmpdir;
     /* c.f. ext/etc/etc.c:etc_systmpdir() */
 #ifdef _WIN32
     WCHAR tmppath[_MAX_PATH];
     UINT len = rb_w32_system_tmpdir(tmppath, numberof(tmppath));
     if (len) {
-        tmpdir = rb_w32_wstr_to_mbstr(CP_UTF8, tmppath, -1, NULL);
-        return get_string(tmpdir);
+        int blen = WideCharToMultiByte(CP_UTF8, 0, tmppath, len, NULL, 0, NULL, NULL);
+        char *tmpdir = xmalloc(blen + 1);
+        WideCharToMultiByte(CP_UTF8, 0, tmppath, len, tmpdir, blen, NULL, NULL);
+        tmpdir[blen] = '\0';
+        return tmpdir;
     }
 #elif defined _CS_DARWIN_USER_TEMP_DIR
     #ifndef MAXPATHLEN
@@ -1242,7 +1251,7 @@ system_tmpdir(void)
     char path[MAXPATHLEN];
     size_t len = confstr(_CS_DARWIN_USER_TEMP_DIR, path, sizeof(path));
     if (len > 0) {
-        tmpdir = xmalloc(len);
+        char *tmpdir = xmalloc(len);
         if (len > sizeof(path)) {
             confstr(_CS_DARWIN_USER_TEMP_DIR, tmpdir, len);
         }
@@ -1252,11 +1261,48 @@ system_tmpdir(void)
         return tmpdir;
     }
 #endif
-    if (!(tmpdir = getenv("TMPDIR")) &&
-        !(tmpdir = getenv("TMP"))) {
-        return get_string("/tmp");
+    return 0;
+}
+
+static int
+check_tmpdir(const char *dir)
+{
+    struct stat st;
+
+    if (!dir) return FALSE;
+    if (stat(dir, &st)) return FALSE;
+#ifndef S_ISDIR
+#   define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+    if (!S_ISDIR(st.st_mode)) return FALSE;
+#ifndef _WIN32
+# ifndef S_IWOTH
+#   define S_IWOTH 002
+# endif
+    if (st.st_mode & S_IWOTH) {
+# ifdef S_ISVTX
+        if (!(st.st_mode & S_ISVTX)) return FALSE;
+# else
+        return FALSE;
+# endif
     }
-    return get_string(tmpdir);
+    if (access(dir, W_OK)) return FALSE;
+#endif
+    return TRUE;
+}
+
+static char *
+system_tmpdir(void)
+{
+    char *tmpdir;
+# define RETURN_ENV(name) \
+    if (check_tmpdir(tmpdir = getenv(name))) return get_string(tmpdir)
+    RETURN_ENV("TMPDIR");
+    RETURN_ENV("TMP");
+    tmpdir = system_default_tmpdir();
+    if (check_tmpdir(tmpdir)) return tmpdir;
+    return get_string("/tmp");
+# undef RETURN_ENV
 }
 
 /* Default permitted number of units with a JIT code kept in
@@ -1267,12 +1313,16 @@ system_tmpdir(void)
 /* Minimum value for JIT cache size.  */
 #define MIN_CACHE_SIZE 10
 
+extern const char ruby_description_with_jit[];
+
 /* Initialize MJIT.  Start a thread creating the precompiled header and
    processing ISeqs.  The function should be called first for using MJIT.
    If everything is successfull, MJIT_INIT_P will be TRUE.  */
 void
 mjit_init(struct mjit_options *opts)
 {
+    VALUE rb_description;
+
     mjit_opts = *opts;
     mjit_init_p = TRUE;
 
@@ -1291,6 +1341,7 @@ mjit_init(struct mjit_options *opts)
     cc_path = CC_PATH;
 
     tmp_dir = system_tmpdir();
+    verbose(2, "MJIT: tmp_dir is %s", tmp_dir);
 
     init_header_filename();
     pch_file = get_uniq_filename(0, MJIT_TMP_PREFIX "h", ".h.gch");
@@ -1317,6 +1368,11 @@ mjit_init(struct mjit_options *opts)
     if (RCLASS_CONST_TBL(rb_cObject)) {
         rb_id_table_foreach(RCLASS_CONST_TBL(rb_cObject), valid_class_serials_add_i, NULL);
     }
+
+    /* Overwrites RUBY_DESCRIPTION constant */
+    rb_const_remove(rb_cObject, rb_intern("RUBY_DESCRIPTION"));
+    rb_description = rb_usascii_str_new_static(ruby_description_with_jit, strlen(ruby_description_with_jit));
+    rb_define_global_const("RUBY_DESCRIPTION", rb_obj_freeze(rb_description));
 
     /* Initialize worker thread */
     finish_worker_p = FALSE;
@@ -1396,7 +1452,14 @@ mjit_mark(void)
     CRITICAL_SECTION_START(4, "mjit_mark");
     for (node = unit_queue.head; node != NULL; node = node->next) {
         if (node->unit->iseq) { /* ISeq is still not GCed */
-            rb_gc_mark((VALUE)node->unit->iseq);
+            VALUE iseq = (VALUE)node->unit->iseq;
+            CRITICAL_SECTION_FINISH(4, "mjit_mark rb_gc_mark");
+
+            /* Don't wrap critical section with this. This may trigger GC,
+               and in that case mjit_gc_start_hook causes deadlock. */
+            rb_gc_mark(iseq);
+
+            CRITICAL_SECTION_START(4, "mjit_mark rb_gc_mark");
         }
     }
     CRITICAL_SECTION_FINISH(4, "mjit_mark");

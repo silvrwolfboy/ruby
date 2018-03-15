@@ -238,10 +238,10 @@ typedef char ruby_check_sizeof_voidp[SIZEOF_VOIDP == sizeof(void*) ? 1 : -1];
 #define RB_LONG2FIX(i) RB_INT2FIX(i)
 #define LONG2FIX(i) RB_INT2FIX(i)
 #define rb_fix_new(v) RB_INT2FIX(v)
-VALUE rb_int2inum(SIGNED_VALUE);
+VALUE rb_int2inum(intptr_t);
 
 #define rb_int_new(v) rb_int2inum(v)
-VALUE rb_uint2inum(VALUE);
+VALUE rb_uint2inum(uintptr_t);
 
 #define rb_uint_new(v) rb_uint2inum(v)
 
@@ -749,8 +749,8 @@ rb_num2ll_inline(VALUE x)
 double rb_num2dbl(VALUE);
 #define NUM2DBL(x) rb_num2dbl((VALUE)(x))
 
-VALUE rb_uint2big(VALUE);
-VALUE rb_int2big(SIGNED_VALUE);
+VALUE rb_uint2big(uintptr_t);
+VALUE rb_int2big(intptr_t);
 
 VALUE rb_newobj(void);
 VALUE rb_newobj_of(VALUE, VALUE);

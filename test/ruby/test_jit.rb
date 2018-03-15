@@ -1,48 +1,15 @@
 # frozen_string_literal: true
 require 'test/unit'
-
-module TestJITSupport
-  JIT_TIMEOUT = 600 # 10min for each...
-  JIT_SUCCESS_PREFIX = 'JIT success \(\d+\.\dms\)'
-  SUPPORTED_COMPILERS = [
-    'gcc',
-    'clang',
-  ]
-
-  module_function
-  def eval_with_jit(script, verbose: 0, min_calls: 5, timeout: JIT_TIMEOUT)
-    EnvUtil.invoke_ruby(
-      ['--disable-gems', '--jit-wait', "--jit-verbose=#{verbose}", "--jit-min-calls=#{min_calls}", '-e', script],
-      '', true, true, timeout: timeout,
-    )
-  end
-
-  def supported?
-    # Experimental. If you want to ensure JIT is working with this test, please set this for now.
-    if ENV.key?('RUBY_FORCE_TEST_JIT')
-      return true
-    end
-
-    # Very pessimistic check. With this check, we can't ensure JIT is working.
-    begin
-      _, err = TestJITSupport.eval_with_jit('proc {}.call', verbose: 1, min_calls: 1, timeout: 10)
-    rescue Timeout::Error
-      $stderr.puts "TestJIT: #jit_supported? check timed out"
-      false
-    else
-      err.match?(JIT_SUCCESS_PREFIX)
-    end
-  end
-end
+require_relative '../lib/jit_support'
 
 # Test for --jit option
 class TestJIT < Test::Unit::TestCase
-  include TestJITSupport
+  include JITSupport
   # Ensure all supported insns can be compiled. Only basic tests are included.
   # TODO: ensure --dump=insns includes the expected insn
 
   def setup
-    unless TestJITSupport.supported?
+    unless JITSupport.supported?
       skip 'JIT seems not supported on this platform'
     end
   end
@@ -164,7 +131,15 @@ class TestJIT < Test::Unit::TestCase
     assert_compile_once('/#{true}/ =~ "true"', result_inspect: '0')
   end
 
-  def test_compile_insn_intern_newarray_duparray
+  def test_compile_insn_newarray
+    assert_compile_once("#{<<~"begin;"}\n#{<<~"end;"}", result_inspect: '[1, 2, 3]')
+    begin;
+      a, b, c = 1, 2, 3
+      [a, b, c]
+    end;
+  end
+
+  def test_compile_insn_intern_duparray
     assert_compile_once('[:"#{0}"] + [1,2,3]', result_inspect: '[:"0", 1, 2, 3]')
   end
 
@@ -495,6 +470,65 @@ class TestJIT < Test::Unit::TestCase
     assert_match(/^Successful MJIT finish$/, err)
   end
 
+  def test_local_stack_on_exception
+    assert_eval_with_jit("#{<<~"begin;"}\n#{<<~"end;"}", stdout: '3', success_count: 2)
+    begin;
+      def b
+        raise
+      rescue
+        2
+      end
+
+      def a
+        # Calling #b should be vm_exec, not direct mjit_exec.
+        # Otherwise `1` on local variable would be purged.
+        1 + b
+      end
+
+      print a
+    end;
+  end
+
+  def test_local_stack_with_sp_motion_by_blockargs
+    assert_eval_with_jit("#{<<~"begin;"}\n#{<<~"end;"}", stdout: '1', success_count: 2)
+    begin;
+      def b(base)
+        1
+      end
+
+      # This method is simple enough to have false in catch_except_p.
+      # So local_stack_p would be true in JIT compiler.
+      def a
+        m = method(:b)
+
+        # ci->flag has VM_CALL_ARGS_BLOCKARG and cfp->sp is moved in vm_caller_setup_arg_block.
+        # So, for this send insn, JIT-ed code should use cfp->sp instead of local variables for stack.
+        Module.module_eval(&m)
+      end
+
+      print a
+    end;
+  end
+
+  def test_catching_deep_exception
+    assert_eval_with_jit("#{<<~"begin;"}\n#{<<~"end;"}", stdout: '1', success_count: 4)
+    begin;
+      def catch_true(paths, prefixes) # catch_except_p: TRUE
+        prefixes.each do |prefix| # catch_except_p: TRUE
+          paths.each do |path| # catch_except_p: FALSE
+            return path
+          end
+        end
+      end
+
+      def wrapper(paths, prefixes)
+        catch_true(paths, prefixes)
+      end
+
+      print wrapper(['1'], ['2'])
+    end;
+  end
+
   private
 
   # The shortest way to test one proc
@@ -511,6 +545,13 @@ class TestJIT < Test::Unit::TestCase
   def assert_eval_with_jit(script, stdout: nil, success_count:, min_calls: 1)
     out, err = eval_with_jit(script, verbose: 1, min_calls: min_calls)
     actual = err.scan(/^#{JIT_SUCCESS_PREFIX}:/).size
+
+    # Debugging on CI
+    if err.include?("gcc: error trying to exec 'cc1': execvp: No such file or directory")
+      $stderr.puts "test/ruby/test_jit.rb: ENV content:"
+      PP.pp(ENV, $stderr)
+    end
+
     assert_equal(
       success_count, actual,
       "Expected #{success_count} times of JIT success, but succeeded #{actual} times.\n\n"\

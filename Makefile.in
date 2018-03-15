@@ -69,12 +69,17 @@ optflags = @optflags@
 debugflags = @debugflags@
 warnflags = @warnflags@ @strict_warnflags@
 cppflags = @cppflags@
-XCFLAGS = @XCFLAGS@ $(MJIT_CPPFLAGS)
+MATHN = @MATHN@
+XCFLAGS = @XCFLAGS@ $(MATHN:yes=-DCANONICALIZATION_FOR_MATHN)
 CPPFLAGS = @CPPFLAGS@ $(INCFLAGS)
 MJIT_HEADER_FLAGS = @MJIT_HEADER_FLAGS@
 MJIT_HEADER_SUFFIX =
 MJIT_HEADER_ARCH =
 MJIT_HEADER_INSTALL_DIR = @MJIT_HEADER_INSTALL_DIR@
+MJIT_CC = @MJIT_CC@
+MJIT_OPTFLAGS = @MJIT_OPTFLAGS@
+MJIT_DEBUGFLAGS = @MJIT_DEBUGFLAGS@
+MJIT_LDSHARED = @MJIT_LDSHARED@
 LDFLAGS = @STATIC@ $(CFLAGS) @LDFLAGS@
 EXTLDFLAGS = @EXTLDFLAGS@
 XLDFLAGS = @XLDFLAGS@ $(EXTLDFLAGS)
@@ -241,11 +246,14 @@ $(PROGRAM):
 		$(Q) $(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(MAINLIBS) $(LIBS) $(EXTLIBS) $(OUTFLAG)$@
 		$(Q) $(POSTLINK)
 
+PRE_LIBRUBY_UPDATE = [ -n "$(LIBRUBY_SO_UPDATE)" ] || $(exec) $(RM) $(LIBRUBY_EXTS)
+
 # We must `rm' the library each time this rule is invoked because "updating" a
 # MAB library on Apple/NeXT (see --enable-fat-binary in configure) is not
 # supported.
 $(LIBRUBY_A):
 		@$(RM) $@
+		@-[ -z "$(EXTSTATIC)" ] || $(PRE_LIBRUBY_UPDATE)
 		$(ECHO) linking static-library $@
 		$(Q) $(AR) $(ARFLAGS) $@ $(LIBRUBY_A_OBJS) $(INITOBJS)
 		@-$(RANLIB) $@ 2> /dev/null || true
@@ -256,7 +264,7 @@ verify-static-library: $(LIBRUBY_A)
 		@$(RMALL) conftest$(EXEEXT) conftest.c conftest.dSYM
 
 $(LIBRUBY_SO):
-		@-$(PRE_LIBRUBY_UPDATE)
+		@-[ -n "$(EXTSTATIC)" ] || $(PRE_LIBRUBY_UPDATE)
 		$(ECHO) linking shared-library $@
 		$(Q) $(LDSHARED) $(DLDFLAGS) $(OBJS) $(DLDOBJS) $(SOLIBS) $(EXTSOLIBS) $(OUTFLAG)$@
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)ruby_static_id_*' \
@@ -266,7 +274,11 @@ $(LIBRUBY_SO):
 						  File.symlink "$(LIBRUBY_SO)", link}' \
 				$(LIBRUBY_ALIASES) || true
 
+LIBRUBY_WITH_EXT = @LIBRUBY_WITH_EXT@
+$(LIBRUBY_$(LIBRUBY_WITH_EXT)): $(LIBRUBY_SO_UPDATE)
+
 ruby_pc = @ruby_pc@
+ruby.pc: $(ruby_pc)
 $(ruby_pc):
 		@./config.status --file=$@:$(srcdir)/template/ruby.pc.in
 
@@ -538,33 +550,25 @@ un-runnable:
 mjit_config.h:
 	$(ECHO) making $@
 	@{ \
+	quote() { \
+	    printf "#define $$1"; shift; \
+	    $${1+printf} $${1+' "%s"'$$sep} $${1+"$$@"}; \
+	    echo; \
+	}; \
 	test "$(Q)" = @ || set -x; \
 	echo '#ifndef RUBY_MJIT_CONFIG_H'; \
 	echo '#define RUBY_MJIT_CONFIG_H 1'; \
-	\
-	printf '#define MJIT_CC_COMMON ' && \
-	if test -n "$(CC)"; then printf ' "%s",' $(CC); fi && \
 	echo; \
-	\
-	printf '#define MJIT_CFLAGS ' && \
-	printf ' "%s",' -w $(ARCH_FLAG) && \
+	sep=; \
+	quote MJIT_HEADER_INSTALL_DIR "$(MJIT_HEADER_INSTALL_DIR)"; \
+	sep=,; \
+	quote "MJIT_CC_COMMON  " $(MJIT_CC); \
+	quote "MJIT_CFLAGS     " -w $(ARCH_FLAG); \
+	quote "MJIT_OPTFLAGS   " $(MJIT_OPTFLAGS); \
+	quote "MJIT_DEBUGFLAGS " $(MJIT_DEBUGFLAGS); \
+	quote "MJIT_LDSHARED   " $(MJIT_LDSHARED); \
+	quote "MJIT_DLDFLAGS   " @DLDFLAGS@; \
+	quote "MJIT_LIBS       " $(LIBRUBYARG_SHARED); \
 	echo; \
-	\
-	printf '#define MJIT_OPTFLAGS ' && \
-	if test -n "$(optflags)"; then printf ' "%s",' $(optflags); fi && \
-	echo; \
-	\
-	printf '#define MJIT_DEBUGFLAGS ' && \
-	if test -n "$(debugflags)"; then printf ' "%s",' $(debugflags); fi && \
-	echo; \
-	\
-	printf '#define MJIT_LDSHARED ' && \
-	if test -n "@LDSHARED@"; then printf ' "%s",' @LDSHARED@; fi && \
-	echo; \
-	\
-	printf '#define MJIT_DLDFLAGS ' && \
-	if test -n "@DLDFLAGS@"; then printf ' "%s",' @DLDFLAGS@; fi && \
-	echo; \
-	\
 	echo '#endif /* RUBY_MJIT_CONFIG_H */'; \
 	} > $@

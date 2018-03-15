@@ -50,6 +50,7 @@ VALUE rb_cFalseClass; /*!< FalseClass class */
 #define id_init_clone       idInitialize_clone
 #define id_init_dup         idInitialize_dup
 #define id_const_missing    idConst_missing
+#define id_to_f             idTo_f
 
 #define CLASS_OR_MODULE_P(obj) \
     (!SPECIAL_CONST_P(obj) && \
@@ -3034,17 +3035,18 @@ rb_check_convert_type_with_id(VALUE val, int type, const char *tname, ID method)
     return v;
 }
 
+#define try_to_int(val, mid, raise) \
+    convert_type_with_id(val, "Integer", mid, raise, -1)
 
 static VALUE
-rb_to_integer(VALUE val, const char *method)
+rb_to_integer(VALUE val, const char *method, ID mid)
 {
     VALUE v;
 
-    if (FIXNUM_P(val)) return val;
-    if (RB_TYPE_P(val, T_BIGNUM)) return val;
-    v = convert_type(val, "Integer", method, TRUE);
-    if (!rb_obj_is_kind_of(v, rb_cInteger)) {
-	conversion_mismatch(val, "Integer", method, v);
+    if (RB_INTEGER_TYPE_P(val)) return val;
+    v = try_to_int(val, mid, TRUE);
+    if (!RB_INTEGER_TYPE_P(v)) {
+        conversion_mismatch(val, "Integer", method, v);
     }
     return v;
 }
@@ -3067,8 +3069,8 @@ rb_check_to_integer(VALUE val, const char *method)
     if (FIXNUM_P(val)) return val;
     if (RB_TYPE_P(val, T_BIGNUM)) return val;
     v = convert_type(val, "Integer", method, FALSE);
-    if (!rb_obj_is_kind_of(v, rb_cInteger)) {
-	return Qnil;
+    if (!RB_INTEGER_TYPE_P(v)) {
+        return Qnil;
     }
     return v;
 }
@@ -3084,7 +3086,7 @@ rb_check_to_integer(VALUE val, const char *method)
 VALUE
 rb_to_int(VALUE val)
 {
-    return rb_to_integer(val, "to_int");
+    return rb_to_integer(val, "to_int", idTo_int);
 }
 
 /**
@@ -3099,7 +3101,10 @@ rb_to_int(VALUE val)
 VALUE
 rb_check_to_int(VALUE val)
 {
-    return rb_check_to_integer(val, "to_int");
+    if (RB_INTEGER_TYPE_P(val)) return val;
+    val = try_to_int(val, idTo_int, FALSE);
+    if (RB_INTEGER_TYPE_P(val)) return val;
+    return Qnil;
 }
 
 static VALUE
@@ -3131,9 +3136,9 @@ rb_convert_to_integer(VALUE val, int base)
       arg_error:
 	rb_raise(rb_eArgError, "base specified for non string value");
     }
-    tmp = convert_type(val, "Integer", "to_int", FALSE);
-    if (NIL_P(tmp)) {
-	return rb_to_integer(val, "to_i");
+    tmp = convert_type_with_id(val, "Integer", idTo_int, FALSE, -1);
+    if (!RB_INTEGER_TYPE_P(tmp)) {
+	return rb_to_integer(val, "to_i", idTo_i);
     }
     return tmp;
 
@@ -3404,10 +3409,10 @@ rb_Float(VALUE val)
       case T_STRING:
 	return DBL2NUM(rb_str_to_dbl(val, TRUE));
     }
-    return rb_convert_type(val, T_FLOAT, "Float", "to_f");
+    return rb_convert_type_with_id(val, T_FLOAT, "Float", id_to_f);
 }
 
-FUNC_MINIMIZED(static VALUE rb_f_float(VALUE obj, VALUE arg)); /*!< \private */
+static VALUE FUNC_MINIMIZED(rb_f_float(VALUE obj, VALUE arg)); /*!< \private */
 
 /*
  *  call-seq:
@@ -3437,7 +3442,7 @@ numeric_to_float(VALUE val)
 	rb_raise(rb_eTypeError, "can't convert %"PRIsVALUE" into Float",
 		 rb_obj_class(val));
     }
-    return rb_convert_type(val, T_FLOAT, "Float", "to_f");
+    return rb_convert_type_with_id(val, T_FLOAT, "Float", id_to_f);
 }
 
 /*!
@@ -3469,10 +3474,8 @@ rb_check_to_float(VALUE val)
     if (!rb_obj_is_kind_of(val, rb_cNumeric)) {
 	return Qnil;
     }
-    return rb_check_convert_type(val, T_FLOAT, "Float", "to_f");
+    return rb_check_convert_type_with_id(val, T_FLOAT, "Float", id_to_f);
 }
-
-static ID id_to_f;
 
 static inline int
 basic_to_f_p(VALUE klass)
@@ -3547,7 +3550,7 @@ rb_num2dbl(VALUE val)
 	    rb_raise(rb_eTypeError, "no implicit conversion to float from string");
 	}
     }
-    val = rb_convert_type(val, T_FLOAT, "Float", "to_f");
+    val = rb_convert_type_with_id(val, T_FLOAT, "Float", id_to_f);
     return RFLOAT_VALUE(val);
 }
 
@@ -4118,7 +4121,6 @@ InitVM_Object(void)
 void
 Init_Object(void)
 {
-    id_to_f = rb_intern_const("to_f");
     id_dig = rb_intern_const("dig");
     InitVM(Object);
 }

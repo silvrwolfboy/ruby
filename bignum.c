@@ -3144,7 +3144,7 @@ rb_big_norm(VALUE x)
 }
 
 VALUE
-rb_uint2big(VALUE n)
+rb_uint2big(uintptr_t n)
 {
     long i;
     VALUE big = bignew(bdigit_roomof(SIZEOF_VALUE), 1);
@@ -3166,7 +3166,7 @@ rb_uint2big(VALUE n)
 }
 
 VALUE
-rb_int2big(SIGNED_VALUE n)
+rb_int2big(intptr_t n)
 {
     long neg = 0;
     VALUE u;
@@ -3187,14 +3187,14 @@ rb_int2big(SIGNED_VALUE n)
 }
 
 VALUE
-rb_uint2inum(VALUE n)
+rb_uint2inum(uintptr_t n)
 {
     if (POSFIXABLE(n)) return LONG2FIX(n);
     return rb_uint2big(n);
 }
 
 VALUE
-rb_int2inum(SIGNED_VALUE n)
+rb_int2inum(intptr_t n)
 {
     if (FIXABLE(n)) return LONG2FIX(n);
     return rb_int2big(n);
@@ -5933,7 +5933,7 @@ bigdivrem(VALUE x, VALUE y, volatile VALUE *divp, volatile VALUE *modp)
 	zds = BDIGITS(z);
         dd = bigdivrem_single(zds, xds, xn, dd);
 	if (modp) {
-	    *modp = rb_uint2big((VALUE)dd);
+	    *modp = rb_uint2big((uintptr_t)dd);
 	    BIGNUM_SET_SIGN(*modp, BIGNUM_SIGN(x));
 	}
 	if (divp) *divp = z;
@@ -7051,7 +7051,7 @@ rb_int_powm(int const argc, VALUE * const argv, VALUE const num)
     rb_check_arity(argc, 1, 2);
 
     if (argc == 1) {
-        return rb_funcall(num, rb_intern("**"), 1, argv[0]);
+        return rb_int_pow(num, argv[0]);
     }
     else {
         VALUE const a = num;
@@ -7115,6 +7115,7 @@ Init_Bignum(void)
 #ifndef RUBY_INTEGER_UNIFICATION
     rb_cBignum = rb_cInteger;
 #endif
+    /* An obsolete class, use Integer */
     rb_define_const(rb_cObject, "Bignum", rb_cInteger);
     rb_deprecate_constant(rb_cObject, "Bignum");
 

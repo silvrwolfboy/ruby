@@ -4868,11 +4868,14 @@ rb_ary_shuffle(int argc, VALUE *argv, VALUE ary)
  *  If the array is empty the first form returns +nil+ and the second form
  *  returns an empty array.
  *
- *  The optional +rng+ argument will be used as the random number generator.
- *
  *     a = [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
  *     a.sample         #=> 7
  *     a.sample(4)      #=> [6, 4, 2, 5]
+ *
+ *  The optional +rng+ argument will be used as the random number generator.
+ *
+ *     a.sample(random: Random.new(1))     #=> 6
+ *     a.sample(4, random: Random.new(1))  #=> [6, 10, 9, 2]
  */
 
 
@@ -6295,6 +6298,8 @@ Init_Array(void)
     rb_define_method(rb_cArray, "map!", rb_ary_collect_bang, 0);
     rb_define_method(rb_cArray, "select", rb_ary_select, 0);
     rb_define_method(rb_cArray, "select!", rb_ary_select_bang, 0);
+    rb_define_method(rb_cArray, "filter", rb_ary_select, 0);
+    rb_define_method(rb_cArray, "filter!", rb_ary_select_bang, 0);
     rb_define_method(rb_cArray, "keep_if", rb_ary_keep_if, 0);
     rb_define_method(rb_cArray, "values_at", rb_ary_values_at, -1);
     rb_define_method(rb_cArray, "delete", rb_ary_delete, 1);

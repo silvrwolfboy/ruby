@@ -1,6 +1,6 @@
 # -*- encoding: binary -*-
 
-require File.expand_path('../../spec_helper', __FILE__)
+require_relative '../spec_helper'
 
 # TODO: rewrite these horrid specs. it "are..." seriously?!
 
@@ -40,6 +40,15 @@ describe "Ruby character strings" do
     "#@ip?".should == 'xxx?'
     "#@ip!".should == 'xxx!'
     "#@ip#@ip".should == 'xxxxxx'
+  end
+
+  it "don't get confused by partial interpolation character sequences" do
+    "#@".should == '#@'
+    "#@ ".should == '#@ '
+    "#@@".should == '#@@'
+    "#@@ ".should == '#@@ '
+    "#$ ".should == '#$ '
+    "#\$".should == '#$'
   end
 
   it "taints the result of interpolation when an interpolated value is tainted" do

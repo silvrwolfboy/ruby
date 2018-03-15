@@ -1246,6 +1246,62 @@ new_child_iseq_ifunc(rb_iseq_t *iseq, const struct vm_ifunc *ifunc,
     return ret_iseq;
 }
 
+static void
+set_catch_except_p(struct rb_iseq_constant_body *body)
+{
+    body->catch_except_p = TRUE;
+    if (body->parent_iseq != NULL) {
+        set_catch_except_p(body->parent_iseq->body);
+    }
+}
+
+/* Set body->catch_except_p to TRUE if the ISeq may catch an exception. If it is FALSE,
+   JIT-ed code may be optimized.  If we are extremely conservative, we should set TRUE
+   if catch table exists.  But we want to optimize while loop, which always has catch
+   table entries for break/next/redo.
+
+   So this function sets TRUE for limited ISeqs with break/next/redo catch table entries
+   whose child ISeq would really raise an exception. */
+static void
+update_catch_except_flags(struct rb_iseq_constant_body *body)
+{
+    unsigned int pos;
+    size_t i;
+    int insn;
+    const struct iseq_catch_table *ct = body->catch_table;
+
+    /* This assumes that a block has parent_iseq which may catch an exception from the block, and that
+       BREAK/NEXT/REDO catch table entries are used only when `throw` insn is used in the block. */
+    if (body->parent_iseq != NULL) {
+        pos = 0;
+        while (pos < body->iseq_size) {
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+            insn = rb_vm_insn_addr2insn((void *)body->iseq_encoded[pos]);
+#else
+            insn = (int)body->iseq_encoded[pos];
+#endif
+            if (insn == BIN(throw)) {
+                struct rb_iseq_constant_body *parent_body = body->parent_iseq->body;
+                set_catch_except_p(parent_body);
+            }
+            pos += insn_len(insn);
+        }
+    }
+
+    if (ct == NULL)
+        return;
+
+    for (i = 0; i < ct->size; i++) {
+        const struct iseq_catch_table_entry *entry = &ct->entries[i];
+        if (entry->type != CATCH_TYPE_BREAK
+            && entry->type != CATCH_TYPE_NEXT
+            && entry->type != CATCH_TYPE_REDO) {
+            body->catch_except_p = TRUE;
+            break;
+        }
+    }
+}
+
 static int
 iseq_setup(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 {
@@ -1290,6 +1346,8 @@ iseq_setup(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 
     debugs("[compile step 5 (iseq_translate_threaded_code)] \n");
     if (!rb_iseq_translate_threaded_code(iseq)) return COMPILE_NG;
+
+    update_catch_except_flags(iseq->body);
 
     if (compile_debug > 1) {
 	VALUE str = rb_iseq_disasm(iseq);
@@ -2018,6 +2076,7 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			    rb_hash_rehash(map);
 			    freeze_hide_obj(map);
 			    generated_iseq[code_index + 1 + j] = map;
+			    FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
 			    break;
 			}
 		      case TS_LINDEX:
@@ -2028,6 +2087,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			{
 			    VALUE v = operands[j];
 			    generated_iseq[code_index + 1 + j] = v;
+			    if (!SPECIAL_CONST_P(v)) {
+				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    }
 			    break;
 			}
 		      case TS_VALUE:	/* VALUE */
@@ -2035,6 +2097,9 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 			    VALUE v = operands[j];
 			    generated_iseq[code_index + 1 + j] = v;
 			    /* to mark ruby object */
+			    if (!SPECIAL_CONST_P(v)) {
+				FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
+			    }
 			    break;
 			}
 		      case TS_IC: /* inline cache */
@@ -2045,6 +2110,17 @@ iseq_set_sequence(rb_iseq_t *iseq, LINK_ANCHOR *const anchor)
 				rb_bug("iseq_set_sequence: ic_index overflow: index: %d, size: %d", ic_index, iseq->body->is_size);
 			    }
 			    generated_iseq[code_index + 1 + j] = (VALUE)ic;
+			    break;
+			}
+		      case TS_ISE: /* inline storage entry */
+			{
+			    unsigned int ic_index = FIX2UINT(operands[j]);
+			    IC ic = (IC)&iseq->body->is_entries[ic_index];
+			    if (UNLIKELY(ic_index >= iseq->body->is_size)) {
+				rb_bug("iseq_set_sequence: ic_index overflow: index: %d, size: %d", ic_index, iseq->body->is_size);
+			    }
+			    generated_iseq[code_index + 1 + j] = (VALUE)ic;
+			    FL_SET(iseq, ISEQ_MARKABLE_ISEQ);
 			    break;
 			}
 		      case TS_CALLINFO: /* call info */
@@ -7290,6 +7366,7 @@ insn_data_to_s_detail(INSN *iobj)
 		    break;
 		}
 	      case TS_IC:	/* inline cache */
+	      case TS_ISE:	/* inline storage entry */
 		rb_str_catf(str, "<ic:%d>", FIX2INT(OPERAND_AT(iobj, j)));
 		break;
 	      case TS_CALLINFO: /* call info */
@@ -7675,6 +7752,7 @@ iseq_build_from_ary_body(rb_iseq_t *iseq, LINK_ANCHOR *const anchor,
 			argv[j] = (VALUE)rb_global_entry(SYM2ID(op));
 			break;
 		      case TS_IC:
+		      case TS_ISE:
 			argv[j] = op;
 			if (NUM2UINT(op) >= iseq->body->is_size) {
 			    iseq->body->is_size = NUM2INT(op) + 1;
@@ -8280,6 +8358,7 @@ ibf_dump_code(struct ibf_dump *dump, const rb_iseq_t *iseq)
 		code[code_index] = (VALUE)ibf_dump_iseq(dump, (const rb_iseq_t *)op);
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		{
 		    unsigned int i;
 		    for (i=0; i<iseq->body->is_size; i++) {
@@ -8345,6 +8424,7 @@ ibf_load_code(const struct ibf_load *load, const rb_iseq_t *iseq, const struct r
 		code[code_index] = (VALUE)ibf_load_iseq(load, (const rb_iseq_t *)op);
 		break;
 	      case TS_IC:
+	      case TS_ISE:
 		code[code_index] = (VALUE)&is_entries[(int)op];
 		break;
 	      case TS_CALLINFO:
@@ -8645,7 +8725,8 @@ ibf_dump_iseq_each(struct ibf_dump *dump, const rb_iseq_t *iseq)
     dump_body.is_entries =           NULL;
     dump_body.ci_entries =           ibf_dump_ci_entries(dump, iseq);
     dump_body.cc_entries =           NULL;
-    dump_body.mark_ary =             ISEQ_FLIP_CNT(iseq);
+    dump_body.variable.coverage      = Qnil;
+    dump_body.variable.original_iseq = Qnil;
 
     return ibf_dump_write(dump, &dump_body, sizeof(dump_body));
 }
@@ -8677,7 +8758,9 @@ ibf_load_iseq_each(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t of
     load_body->ci_kw_size = body->ci_kw_size;
     load_body->insns_info.size = body->insns_info.size;
 
-    RB_OBJ_WRITE(iseq, &load_body->mark_ary, iseq_mark_ary_create((int)body->mark_ary));
+    ISEQ_COVERAGE_SET(iseq, Qnil);
+    ISEQ_ORIGINAL_ISEQ_CLEAR(iseq);
+    iseq->body->variable.flip_count = body->variable.flip_count;
 
     {
 	VALUE realpath = Qnil, path = ibf_load_object(load, body->location.pathobj);
@@ -8690,7 +8773,8 @@ ibf_load_iseq_each(const struct ibf_load *load, rb_iseq_t *iseq, ibf_offset_t of
 		rb_raise(rb_eRuntimeError, "path object size mismatch");
 	    }
 	    path = rb_fstring(RARRAY_AREF(pathobj, 0));
-	    realpath = rb_fstring(RARRAY_AREF(pathobj, 1));
+	    realpath = RARRAY_AREF(pathobj, 1);
+	    if (!NIL_P(realpath)) realpath = rb_fstring(realpath);
 	}
 	else {
 	    rb_raise(rb_eRuntimeError, "unexpected path object");
@@ -8861,7 +8945,7 @@ ibf_dump_object_unsupported(struct ibf_dump *dump, VALUE obj)
 static VALUE
 ibf_load_object_unsupported(const struct ibf_load *load, const struct ibf_object_header *header, ibf_offset_t offset)
 {
-    rb_bug("unsupported");
+    rb_raise(rb_eArgError, "unsupported");
     return Qnil;
 }
 
@@ -8901,7 +8985,7 @@ ibf_load_object_class(const struct ibf_load *load, const struct ibf_object_heade
 	return rb_eStandardError;
     }
 
-    rb_bug("ibf_load_object_class: unknown class (%d)", (int)cindex);
+    rb_raise(rb_eArgError, "ibf_load_object_class: unknown class (%d)", (int)cindex);
 }
 
 
@@ -8960,9 +9044,9 @@ static void
 ibf_dump_object_regexp(struct ibf_dump *dump, VALUE obj)
 {
     struct ibf_object_regexp regexp;
-    regexp.srcstr = RREGEXP_SRC(obj);
+    VALUE srcstr = RREGEXP_SRC(obj);
     regexp.option = (char)rb_reg_options(obj);
-    regexp.srcstr = (long)ibf_dump_object(dump, regexp.srcstr);
+    regexp.srcstr = (long)ibf_dump_object(dump, srcstr);
     IBF_WV(regexp);
 }
 
@@ -9315,23 +9399,21 @@ ibf_load_object(const struct ibf_load *load, VALUE object_index)
 static void
 ibf_dump_object_list(struct ibf_dump *dump, struct ibf_header *header)
 {
-    VALUE listv;
-    ibf_offset_t *list = ALLOCV_N(ibf_offset_t, listv, RARRAY_LEN(dump->obj_list));
+    VALUE list = rb_ary_tmp_new(RARRAY_LEN(dump->obj_list));
     int i, size;
 
     for (i=0; i<RARRAY_LEN(dump->obj_list); i++) {
 	VALUE obj = RARRAY_AREF(dump->obj_list, i);
 	ibf_offset_t offset = lbf_dump_object_object(dump, obj);
-	list[i] = offset;
+	rb_ary_push(list, UINT2NUM(offset));
     }
     size = i;
     header->object_list_offset = ibf_dump_pos(dump);
 
     for (i=0; i<size; i++) {
-	ibf_offset_t offset = list[i];
+	ibf_offset_t offset = NUM2UINT(RARRAY_AREF(list, i));
 	IBF_WV(offset);
     }
-    ALLOCV_END(listv);
 
     header->object_list_size = size;
 }

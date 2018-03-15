@@ -20,7 +20,7 @@ static inline VALUE vm_yield_with_cref(rb_execution_context_t *ec, int argc, con
 static inline VALUE vm_yield(rb_execution_context_t *ec, int argc, const VALUE *argv);
 static inline VALUE vm_yield_with_block(rb_execution_context_t *ec, int argc, const VALUE *argv, VALUE block_handler);
 static inline VALUE vm_yield_force_blockarg(rb_execution_context_t *ec, VALUE args);
-VALUE vm_exec(rb_execution_context_t *ec);
+VALUE vm_exec(rb_execution_context_t *ec, int mjit_enable_p);
 static void vm_set_eval_stack(rb_execution_context_t * th, const rb_iseq_t *iseq, const rb_cref_t *cref, const struct rb_block *base_block);
 static int vm_collect_local_variables_in_heap(const VALUE *dfp, const struct local_var_list *vars);
 
@@ -126,7 +126,7 @@ vm_call0_body(rb_execution_context_t *ec, struct rb_calling_info *calling, const
 
 	    vm_call_iseq_setup(ec, reg_cfp, calling, ci, cc);
 	    VM_ENV_FLAGS_SET(ec->cfp->ep, VM_FRAME_FLAG_FINISH);
-	    return vm_exec(ec); /* CHECK_INTS in this function */
+	    return vm_exec(ec, TRUE); /* CHECK_INTS in this function */
 	}
       case VM_METHOD_TYPE_NOTIMPLEMENTED:
       case VM_METHOD_TYPE_CFUNC:
@@ -640,8 +640,8 @@ rb_method_missing(int argc, const VALUE *argv, VALUE obj)
 }
 
 MJIT_FUNC_EXPORTED VALUE
-make_no_method_exception(VALUE exc, VALUE format, VALUE obj,
-			 int argc, const VALUE *argv, int priv)
+rb_make_no_method_exception(VALUE exc, VALUE format, VALUE obj,
+			    int argc, const VALUE *argv, int priv)
 {
     int n = 0;
     enum {
@@ -700,8 +700,8 @@ raise_method_missing(rb_execution_context_t *ec, int argc, const VALUE *argv, VA
     }
 
     {
-	exc = make_no_method_exception(exc, format, obj, argc, argv,
-				       last_call_status & (MISSING_FCALL|MISSING_VCALL));
+	exc = rb_make_no_method_exception(exc, format, obj, argc, argv,
+					  last_call_status & (MISSING_FCALL|MISSING_VCALL));
 	if (!(last_call_status & MISSING_MISSING)) {
 	    rb_vm_pop_cfunc_frame();
 	}
@@ -891,9 +891,9 @@ send_internal(int argc, const VALUE *argv, VALUE recv, call_type scope)
     id = rb_check_id(&vid);
     if (!id) {
 	if (rb_method_basic_definition_p(CLASS_OF(recv), idMethodMissing)) {
-	    VALUE exc = make_no_method_exception(rb_eNoMethodError, 0,
-						 recv, argc, argv,
-						 scope != CALL_PUBLIC);
+	    VALUE exc = rb_make_no_method_exception(rb_eNoMethodError, 0,
+						    recv, argc, argv,
+						    scope != CALL_PUBLIC);
 	    rb_exc_raise(exc);
 	}
 	if (!SYMBOL_P(*argv)) {
@@ -1327,7 +1327,7 @@ eval_string_with_cref(VALUE self, VALUE src, rb_cref_t *cref, VALUE file, int li
     vm_set_eval_stack(ec, iseq, cref, &block);
 
     /* kick */
-    return vm_exec(ec);
+    return vm_exec(ec, TRUE);
 }
 
 static VALUE
@@ -1348,7 +1348,7 @@ eval_string_with_scope(VALUE scope, VALUE src, VALUE file, int line)
     }
 
     /* kick */
-    return vm_exec(ec);
+    return vm_exec(ec, TRUE);
 }
 
 /*

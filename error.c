@@ -298,6 +298,7 @@ end_with_asciichar(VALUE str, int c)
 	rb_str_end_with_asciichar(str, c);
 }
 
+/* :nodoc: */
 static VALUE
 warning_write(int argc, VALUE *argv, VALUE buf)
 {
@@ -882,7 +883,7 @@ VALUE rb_eSystemCallError;
 VALUE rb_mErrno;
 static VALUE rb_eNOERROR;
 
-static ID id_new, id_cause, id_message, id_backtrace;
+static ID id_cause, id_message, id_backtrace;
 static ID id_name, id_key, id_args, id_Errno, id_errno, id_i_path;
 static ID id_receiver, id_iseq, id_local_variables;
 static ID id_private_call_p;
@@ -895,7 +896,8 @@ static ID id_private_call_p;
 VALUE
 rb_exc_new(VALUE etype, const char *ptr, long len)
 {
-    return rb_funcall(etype, id_new, 1, rb_str_new(ptr, len));
+    VALUE mesg = rb_str_new(ptr, len);
+    return rb_class_new_instance(1, &mesg, etype);
 }
 
 VALUE
@@ -908,7 +910,7 @@ VALUE
 rb_exc_new_str(VALUE etype, VALUE str)
 {
     StringValue(str);
-    return rb_funcall(etype, id_new, 1, str);
+    return rb_class_new_instance(1, &str, etype);
 }
 
 /*
@@ -975,7 +977,7 @@ exc_to_s(VALUE exc)
 }
 
 /* FIXME: Include eval_error.c */
-void rb_error_write(VALUE errinfo, VALUE errat, VALUE str);
+void rb_error_write(VALUE errinfo, VALUE errat, VALUE str, VALUE highlight, VALUE reverse);
 
 /*
  * call-seq:
@@ -992,7 +994,7 @@ exc_full_message(VALUE exc)
 {
     VALUE str = rb_str_new2("");
     VALUE errat = rb_get_backtrace(exc);
-    rb_error_write(exc, errat, str);
+    rb_error_write(exc, errat, str, Qnil, Qnil);
     return str;
 }
 
@@ -1649,6 +1651,13 @@ nometh_err_args(VALUE self)
 {
     return rb_attr_get(self, id_args);
 }
+
+/*
+ * call-seq:
+ *   no_method_error.private_call?  -> true or false
+ *
+ * Return true if the caused method was called as private.
+ */
 
 static VALUE
 nometh_err_private_call_p(VALUE self)
@@ -2320,6 +2329,7 @@ syserr_eqq(VALUE self, VALUE exc)
  *      * FloatDomainError
  *    * RegexpError
  *    * RuntimeError -- default for +raise+
+ *      * FrozenError
  *    * SystemCallError
  *      * Errno::*
  *    * ThreadError
@@ -2410,12 +2420,12 @@ Init_Exception(void)
     rb_define_method(rb_mWarning, "warn", rb_warning_s_warn, 1);
     rb_extend_object(rb_mWarning, rb_mWarning);
 
+    /* :nodoc: */
     rb_cWarningBuffer = rb_define_class_under(rb_mWarning, "buffer", rb_cString);
     rb_define_method(rb_cWarningBuffer, "write", warning_write, -1);
 
     rb_define_global_function("warn", rb_warn_m, -1);
 
-    id_new = rb_intern_const("new");
     id_cause = rb_intern_const("cause");
     id_message = rb_intern_const("message");
     id_backtrace = rb_intern_const("backtrace");

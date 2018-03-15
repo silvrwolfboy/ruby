@@ -110,12 +110,42 @@ class Rational_Test < Test::Unit::TestCase
     assert_equal(Rational(3),Rational('3'))
     assert_equal(Rational(1),Rational('3.0','3.0'))
     assert_equal(Rational(1),Rational('3/3','3/3'))
+    assert_equal(Rational(111, 1), Rational('1.11e+2'))
+    assert_equal(Rational(111, 10), Rational('1.11e+1'))
+    assert_equal(Rational(111, 10), Rational('1.11e1'))
+    assert_equal(Rational(111, 100), Rational('1.11e0'))
+    assert_equal(Rational(111, 1000), Rational('1.11e-1'))
     assert_raise(TypeError){Rational(nil)}
     assert_raise(ArgumentError){Rational('')}
     assert_raise_with_message(ArgumentError, /\u{221a 2668}/) {
       Rational("\u{221a 2668}")
     }
+
     assert_raise(TypeError){Rational(Object.new)}
+    assert_raise(TypeError){Rational(Object.new, Object.new)}
+    assert_raise(TypeError){Rational(1, Object.new)}
+
+    o = Object.new
+    def o.to_r; 1/42r; end
+    assert_equal(1/42r, Rational(o))
+    assert_equal(1/84r, Rational(o, 2))
+    assert_equal(42, Rational(1, o))
+    assert_equal(1, Rational(o, o))
+
+    o = Object.new
+    def o.to_r; nil; end
+    assert_raise(TypeError) { Rational(o) }
+    assert_raise(TypeError) { Rational(o, 2) }
+    assert_raise(TypeError) { Rational(1, o) }
+    assert_raise(TypeError) { Rational(o, o) }
+
+    o = Object.new
+    def o.to_r; raise; end
+    assert_raise(RuntimeError) { Rational(o) }
+    assert_raise(RuntimeError) { Rational(o, 2) }
+    assert_raise(RuntimeError) { Rational(1, o) }
+    assert_raise(RuntimeError) { Rational(o, o) }
+
     assert_raise(ArgumentError){Rational()}
     assert_raise(ArgumentError){Rational(1,2,3)}
 

@@ -836,7 +836,13 @@ static void token_info_pop(struct parser_params*, const char *token, const rb_co
 %type <id>   f_kwrest f_label f_arg_asgn call_op call_op2 reswords relop dot_or_colon
 %token END_OF_INPUT 0	"end-of-input"
 %token <id> '.'
+/* escaped chars, should be ignored otherwise */
 %token <id> '\\'	"backslash"
+%token tSP		"escaped space"
+%token <id> '\t' 	"escaped horizontal tab"
+%token <id> '\f'	"escaped form feed"
+%token <id> '\r'	"escaped carriage return"
+%token <id> '\13'	"escaped vertical tab"
 %token tUPLUS		RUBY_TOKEN(UPLUS)  "unary+"
 %token tUMINUS		RUBY_TOKEN(UMINUS) "unary-"
 %token tPOW		RUBY_TOKEN(POW)    "**"
@@ -2159,14 +2165,12 @@ command_args	:   {
 			    lookahead = 1;
 			}
 			if (lookahead) CMDARG_POP();
-			$<val>$ = p->cmdarg_stack;
 			CMDARG_PUSH(1);
 			if (lookahead) CMDARG_PUSH(0);
 		    }
 		  call_args
 		    {
-			/* CMDARG_POP() */
-			CMDARG_SET($<val>1);
+			CMDARG_POP();
 			$$ = $2;
 		    }
 		;
@@ -2287,18 +2291,12 @@ primary		: literal
 		    /*% %*/
 		    /*% ripper: paren!(0) %*/
 		    }
-		| tLPAREN_ARG
+		| tLPAREN_ARG stmt {SET_LEX_STATE(EXPR_ENDARG);} rparen
 		    {
-			$<val>1 = p->cmdarg_stack;
-			CMDARG_SET(0);
-		    }
-		  stmt {SET_LEX_STATE(EXPR_ENDARG);} rparen
-		    {
-			CMDARG_SET($<val>1);
 		    /*%%%*/
-			$$ = $3;
+			$$ = $2;
 		    /*% %*/
-		    /*% ripper: paren!($3) %*/
+		    /*% ripper: paren!($2) %*/
 		    }
 		| tLPAREN compstmt ')'
 		    {
@@ -3034,13 +3032,11 @@ lambda		:   {
 		    }
 		  f_larglist
 		    {
-			$<val>$ = p->cmdarg_stack;
-			CMDARG_SET(0);
+			CMDARG_PUSH(0);
 		    }
 		  lambda_body
 		    {
 			p->lex.lpar_beg = $<num>2;
-			CMDARG_SET($<val>4);
 			CMDARG_POP();
 		    /*%%%*/
 			$$ = NEW_LAMBDA($3, $5, &@$);
@@ -3217,14 +3213,12 @@ brace_block	: '{' brace_body '}'
 		;
 
 brace_body	: {$<vars>$ = dyna_push(p);}
-		  {$<val>$ = p->cmdarg_stack >> 1; CMDARG_SET(0);}
 		  opt_block_param compstmt
 		    {
 		    /*%%%*/
-			$$ = NEW_ITER($3, $4, &@$);
+			$$ = NEW_ITER($2, $3, &@$);
 		    /*% %*/
-		    /*% ripper: brace_block!(escape_Qundef($3), $4) %*/
-			CMDARG_SET($<val>2);
+		    /*% ripper: brace_block!(escape_Qundef($2), $3) %*/
 			dyna_pop(p, $<vars>1);
 		    }
 		;
@@ -3649,7 +3643,7 @@ string_dvar	: tGVAR
 
 symbol		: tSYMBEG sym
 		    {
-			SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+			SET_LEX_STATE(EXPR_END);
 		    /*%%%*/
 			$$ = $2;
 		    /*% %*/
@@ -3665,7 +3659,7 @@ sym		: fname
 
 dsym		: tSYMBEG xstring_contents tSTRING_END
 		    {
-			SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+			SET_LEX_STATE(EXPR_END);
 		    /*%%%*/
 			$$ = dsym_node(p, $2, &@$);
 		    /*% %*/
@@ -5792,7 +5786,7 @@ parser_string_term(struct parser_params *p, int func)
     if (func & STR_FUNC_REGEXP) {
 	set_yylval_num(regx_options(p));
 	dispatch_scan_event(p, tREGEXP_END);
-	SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+	SET_LEX_STATE(EXPR_END);
 	return tREGEXP_END;
     }
     if ((func & STR_FUNC_LABEL) && IS_LABEL_SUFFIX(0)) {
@@ -5800,7 +5794,7 @@ parser_string_term(struct parser_params *p, int func)
 	SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
 	return tLABEL_END;
     }
-    SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+    SET_LEX_STATE(EXPR_END);
     return tSTRING_END;
 }
 
@@ -5816,7 +5810,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
 
     if (func & STR_FUNC_TERM) {
 	if (func & STR_FUNC_QWORDS) nextc(p); /* delayed term */
-	SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+	SET_LEX_STATE(EXPR_END);
 	p->lex.strterm = 0;
 	return func & STR_FUNC_REGEXP ? tREGEXP_END : tSTRING_END;
     }
@@ -6023,7 +6017,6 @@ static NODE *
 heredoc_dedent(struct parser_params *p, NODE *root)
 {
     NODE *node, *str_node, *prev_node;
-    int bol = TRUE;
     int indent = p->heredoc_indent;
     VALUE prev_lit = 0;
 
@@ -6036,8 +6029,9 @@ heredoc_dedent(struct parser_params *p, NODE *root)
 
     while (str_node) {
 	VALUE lit = str_node->nd_lit;
-	if (bol) dedent_string(lit, indent);
-	bol = TRUE;
+	if (str_node->flags & NODE_FL_NEWLINE) {
+	    dedent_string(lit, indent);
+	}
 	if (!prev_lit) {
 	    prev_lit = lit;
 	}
@@ -6061,7 +6055,6 @@ heredoc_dedent(struct parser_params *p, NODE *root)
 	    if ((str_node = node->nd_head) != 0) {
 		enum node_type type = nd_type(str_node);
 		if (type == NODE_STR || type == NODE_DSTR) break;
-		bol = FALSE;
 		prev_lit = 0;
 		str_node = 0;
 	    }
@@ -6081,6 +6074,13 @@ heredoc_dedent(struct parser_params *p, VALUE array)
     return array;
 }
 
+/*
+ *  call-seq:
+ *    Ripper.dedent_string(input, width)   -> string
+ *
+ *  Strips leading +width+ whitespaces from +input+, and returns
+ *  stripped column width.
+ */
 static VALUE
 parser_dedent_string(VALUE self, VALUE input, VALUE width)
 {
@@ -6163,7 +6163,7 @@ set_number_literal(struct parser_params *p, VALUE v,
     }
     set_yylval_literal(v);
     add_mark_object(p, v);
-    SET_LEX_STATE(EXPR_END|EXPR_ENDARG);
+    SET_LEX_STATE(EXPR_END);
     return type;
 }
 
@@ -6203,6 +6203,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     long len;
     VALUE str = 0;
     rb_encoding *enc = p->enc;
+    int bol;
 
     eos = RSTRING_PTR(here->term);
     len = RSTRING_LEN(here->term) - 2; /* here->term includes term_len and func */
@@ -6241,7 +6242,8 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 	p->lex.strterm = 0;
 	return 0;
     }
-    if (was_bol(p) && whole_match_p(p, eos, len, indent)) {
+    bol = was_bol(p);
+    if (bol && whole_match_p(p, eos, len, indent)) {
 	dispatch_heredoc_end(p);
 	heredoc_restore(p, &p->lex.strterm->u.heredoc);
 	p->lex.strterm = 0;
@@ -6279,10 +6281,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 	    if (ptr_end < p->lex.pend) rb_str_cat(str, "\n", 1);
 	    lex_goto_eol(p);
 	    if (p->heredoc_indent > 0) {
-		set_yylval_str(str);
-		add_mark_object(p, str);
-		flush_string_content(p, enc);
-		return tSTRING_CONTENT;
+		goto flush_str;
 	    }
 	    if (nextc(p) == -1) {
 		if (str) {
@@ -6314,10 +6313,14 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 		goto restore;
 	    }
 	    if (c != '\n') {
-		VALUE lit;
 	      flush:
-		add_mark_object(p, lit = STR_NEW3(tok(p), toklen(p), enc, func));
-		set_yylval_str(lit);
+		str = STR_NEW3(tok(p), toklen(p), enc, func);
+	      flush_str:
+		set_yylval_str(str);
+		add_mark_object(p, str);
+#ifndef RIPPER
+		if (bol) yylval.node->flags |= NODE_FL_NEWLINE;
+#endif
 		flush_string_content(p, enc);
 		return tSTRING_CONTENT;
 	    }
@@ -6340,6 +6343,9 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     p->lex.strterm = NEW_STRTERM(func | STR_FUNC_TERM, 0, 0);
     set_yylval_str(str);
     add_mark_object(p, str);
+#ifndef RIPPER
+    if (bol) yylval.node->flags |= NODE_FL_NEWLINE;
+#endif
     return tSTRING_CONTENT;
 }
 
@@ -7434,8 +7440,6 @@ parse_ident(struct parser_params *p, int c, int cmd_state)
 		if (COND_P()) return keyword_do_cond;
 		if (CMDARG_P() && !IS_lex_state_for(state, EXPR_CMDARG))
 		    return keyword_do_block;
-		if (IS_lex_state_for(state, (EXPR_BEG | EXPR_ENDARG)))
-		    return keyword_do_block;
 		return keyword_do;
 	    }
 	    if (IS_lex_state_for(state, (EXPR_BEG | EXPR_LABELED)))
@@ -8102,6 +8106,8 @@ parser_yylex(struct parser_params *p)
 	    dispatch_scan_event(p, tSP);
 	    goto retry; /* skip \\n */
 	}
+	if (c == ' ') return tSP;
+	if (ISSPACE(c)) return c;
 	pushback(p, c);
 	return '\\';
 
@@ -9592,7 +9598,7 @@ assign_in_cond(struct parser_params *p, NODE *node)
     if (!node->nd_value) return 1;
     if (is_static_content(node->nd_value)) {
 	/* reports always */
-	parser_warn(p, node->nd_value, "found = in conditional, should be ==");
+	parser_warn(p, node->nd_value, "found `= literal' in conditional, should be ==");
     }
     return 1;
 }
@@ -11323,6 +11329,12 @@ ripper_value(VALUE self, VALUE obj)
 }
 #endif
 
+/*
+ *  call-seq:
+ *    Ripper.lex_state_name(integer)   -> string
+ *
+ *  Returns a string representation of lex_state.
+ */
 static VALUE
 ripper_lex_state_name(VALUE self, VALUE state)
 {
