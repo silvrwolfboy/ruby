@@ -216,7 +216,7 @@ update_each_insn_value(void *ctx, VALUE obj)
 }
 
 void
-rb_iseq_update_references(const rb_iseq_t *iseq)
+rb_iseq_update_references(rb_iseq_t *iseq)
 {
     if (iseq->body) {
 	struct rb_iseq_constant_body *body = iseq->body;

@@ -848,8 +848,9 @@ VALUE rb_mGC;
 int ruby_disable_gc = 0;
 
 void rb_iseq_mark(const rb_iseq_t *iseq);
-void rb_iseq_update_references(const rb_iseq_t *iseq);
+void rb_iseq_update_references(rb_iseq_t *iseq);
 void rb_iseq_free(const rb_iseq_t *iseq);
+void rb_vm_update_references(void *ptr);
 
 void rb_gcdebug_print_obj_condition(VALUE obj);
 
