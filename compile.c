@@ -9611,9 +9611,6 @@ ibf_load_iseq(const struct ibf_load *load, const rb_iseq_t *index_iseq)
 	    fprintf(stderr, "ibf_load_iseq: iseq=%p loaded %p\n",
 		    iseq, load->iseq);
 #endif
-	    if (load->iseq) {
-		iseq_add_mark_object(load->iseq, (VALUE)iseq);
-	    }
 	    return iseq;
 	}
     }

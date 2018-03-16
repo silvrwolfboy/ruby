@@ -221,6 +221,10 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	    rb_iseq_each_value(iseq, each_insn_value, NULL);
 	}
 
+	if (body->param.flags.has_kw) {
+	    rb_gc_mark_values(body->param.keyword->num, body->param.keyword->default_values);
+	}
+
 	rb_gc_mark(body->variable.coverage);
 	rb_gc_mark(body->variable.original_iseq);
 	rb_gc_mark(body->location.label);
