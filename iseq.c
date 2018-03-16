@@ -221,16 +221,25 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	    rb_iseq_each_value(iseq, each_insn_value, NULL);
 	}
 
-	if (body->param.flags.has_kw) {
-	    rb_gc_mark_values(body->param.keyword->num, body->param.keyword->default_values);
-	}
-
 	rb_gc_mark(body->variable.coverage);
 	rb_gc_mark(body->variable.original_iseq);
 	rb_gc_mark(body->location.label);
 	rb_gc_mark(body->location.base_label);
 	rb_gc_mark(body->location.pathobj);
 	RUBY_MARK_UNLESS_NULL((VALUE)body->parent_iseq);
+
+	if (body->param.flags.has_kw) {
+	    int i, j;
+
+	    i = iseq->body->param.keyword->required_num;
+
+	    for (j = 0; i < iseq->body->param.keyword->num; i++, j++) {
+		VALUE obj = iseq->body->param.keyword->default_values[j];
+		if (obj != Qundef && !SPECIAL_CONST_P(obj)) {
+		    rb_gc_mark(obj);
+		}
+	    }
+	}
 
 	if (body->catch_table) {
 	    const struct iseq_catch_table *table = body->catch_table;
