@@ -228,14 +228,14 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	rb_gc_mark(body->location.pathobj);
 	RUBY_MARK_UNLESS_NULL((VALUE)body->parent_iseq);
 
-	if (body->param.flags.has_kw) {
+	if (body->param.flags.has_kw && ISEQ_COMPILE_DATA(iseq) == NULL) {
 	    int i, j;
 
-	    i = iseq->body->param.keyword->required_num;
+	    i = body->param.keyword->required_num;
 
-	    for (j = 0; i < iseq->body->param.keyword->num; i++, j++) {
-		VALUE obj = iseq->body->param.keyword->default_values[j];
-		if (obj != Qundef && !SPECIAL_CONST_P(obj)) {
+	    for (j = 0; i < body->param.keyword->num; i++, j++) {
+		VALUE obj = body->param.keyword->default_values[j];
+		if (obj != Qundef) {
 		    rb_gc_mark(obj);
 		}
 	    }
