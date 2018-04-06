@@ -7442,6 +7442,15 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	    }
 	case T_DATA:
 	    /* Don't need to do anything */
+	    {
+		void *const ptr = DATA_PTR(obj);
+		if (ptr) {
+		    if (RTYPEDDATA_P(obj)) {
+			RUBY_DATA_FUNC compact_func = any->as.typeddata.type->function.dcompact;
+			if (compact_func) (*compact_func)(ptr);
+		    }
+		}
+	    }
 	    break;
 
 	case T_OBJECT:

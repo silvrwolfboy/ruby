@@ -1870,11 +1870,19 @@ struct autoload_data_i {
 };
 
 static void
+autoload_i_compact(void *ptr)
+{
+    struct autoload_data_i *p = ptr;
+    p->feature = rb_gc_new_location(p->feature);
+    p->value = rb_gc_new_location(p->value);
+}
+
+static void
 autoload_i_mark(void *ptr)
 {
     struct autoload_data_i *p = ptr;
-    rb_gc_mark(p->feature);
-    rb_gc_mark(p->value);
+    rb_gc_mark_no_pin(p->feature);
+    rb_gc_mark_no_pin(p->value);
 }
 
 static size_t
@@ -1885,7 +1893,7 @@ autoload_i_memsize(const void *ptr)
 
 static const rb_data_type_t autoload_data_i_type = {
     "autoload_i",
-    {autoload_i_mark, RUBY_TYPED_DEFAULT_FREE, autoload_i_memsize,},
+    {autoload_i_mark, RUBY_TYPED_DEFAULT_FREE, autoload_i_memsize,autoload_i_compact},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
