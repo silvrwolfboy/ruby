@@ -18,6 +18,8 @@ with all sufficient information, see the ChangeLog file or Redmine
 
 * refinements take place at block passing.  [Feature #14223]
 
+* `else` without `rescue` is now causes a syntax error.  [EXPERIMENTAL]
+
 === Core classes updates (outstanding ones only)
 
 * Array
@@ -58,6 +60,10 @@ with all sufficient information, see the ChangeLog file or Redmine
   * Aliased methods:
 
     * Enumerator::Lazy#filter is a new alias for Enumerator::Lazy#select [Feature #13784]
+
+* Exception
+
+  * Exception#full_message takes :highlight and :order options [Bug #14324]
 
 * Hash
 
@@ -137,6 +143,12 @@ with all sufficient information, see the ChangeLog file or Redmine
   * Add URI::File to handle file URI scheme [Feature #14035]
 
 === Compatibility issues (excluding feature bug fixes)
+
+* File
+
+  * File.read, File.binread, File.write, File.binwrite, File.foreach,
+    and File.readlines do not invoke external commands even if the path
+    starts with the pipe character |.  [Feature #14245]
 
 === Stdlib compatibility issues (excluding feature bug fixes)
 

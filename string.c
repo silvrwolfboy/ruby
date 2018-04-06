@@ -7633,15 +7633,16 @@ split_string(VALUE result, VALUE str, long beg, long len, long empty_count)
 
 /*
  *  call-seq:
- *     str.split(pattern=nil, [limit])   -> an_array
+ *     str.split(pattern=nil, [limit])                -> an_array
+ *     str.split(pattern=nil, [limit]) {|sub| block } -> str
  *
  *  Divides <i>str</i> into substrings based on a delimiter, returning an array
  *  of these substrings.
  *
  *  If <i>pattern</i> is a <code>String</code>, then its contents are used as
  *  the delimiter when splitting <i>str</i>. If <i>pattern</i> is a single
- *  space, <i>str</i> is split on whitespace, with leading whitespace and runs
- *  of contiguous whitespace characters ignored.
+ *  space, <i>str</i> is split on whitespace, with leading and trailing
+ *  whitespace and runs of contiguous whitespace characters ignored.
  *
  *  If <i>pattern</i> is a <code>Regexp</code>, <i>str</i> is divided where the
  *  pattern matches. Whenever the pattern matches a zero-length string,
@@ -7664,8 +7665,8 @@ split_string(VALUE result, VALUE str, long beg, long len, long empty_count)
  *  When the input +str+ is empty an empty Array is returned as the string is
  *  considered to have no fields to split.
  *
- *     " now's  the time".split        #=> ["now's", "the", "time"]
- *     " now's  the time".split(' ')   #=> ["now's", "the", "time"]
+ *     " now's  the time ".split       #=> ["now's", "the", "time"]
+ *     " now's  the time ".split(' ')  #=> ["now's", "the", "time"]
  *     " now's  the time".split(/ /)   #=> ["", "now's", "", "the", "time"]
  *     "1, 2.34,56, 7".split(%r{,\s*}) #=> ["1", "2.34", "56", "7"]
  *     "hello".split(//)               #=> ["h", "e", "l", "l", "o"]
@@ -7680,6 +7681,9 @@ split_string(VALUE result, VALUE str, long beg, long len, long empty_count)
  *     "1:2:3".split(/(:)()()/, 2)     #=> ["1", ":", "", "", "2:3"]
  *
  *     "".split(',', -1)               #=> []
+ *
+ *  If a block is given, invoke the block with each split substrings.
+ *
  */
 
 static VALUE
@@ -8351,20 +8355,12 @@ rb_str_codepoints(VALUE str)
     return rb_str_enumerate_codepoints(str, ary);
 }
 
-static VALUE
-rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
+static regex_t *
+get_reg_grapheme_cluster(rb_encoding *enc)
 {
-    VALUE orig = str;
+    int encidx = rb_enc_to_index(enc);
     regex_t *reg_grapheme_cluster = NULL;
     static regex_t *reg_grapheme_cluster_utf8 = NULL;
-    int encidx = ENCODING_GET(str);
-    rb_encoding *enc = rb_enc_from_index(encidx);
-    int unicode_p = rb_enc_unicode_p(enc);
-    const char *ptr, *end;
-
-    if (!unicode_p || single_byte_optimizable(str)) {
-	return rb_str_enumerate_chars(str, ary);
-    }
 
     /* synchronize */
     if (encidx == rb_utf8_encindex() && reg_grapheme_cluster_utf8) {
@@ -8381,8 +8377,22 @@ rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
 	    reg_grapheme_cluster_utf8 = reg_grapheme_cluster;
 	}
     }
+    return reg_grapheme_cluster;
+}
 
-    if (!ary) str = rb_str_new_frozen(str);
+static VALUE
+rb_str_each_grapheme_cluster_size(VALUE str, VALUE args, VALUE eobj)
+{
+    size_t grapheme_cluster_count = 0;
+    regex_t *reg_grapheme_cluster = NULL;
+    rb_encoding *enc = rb_enc_from_index(ENCODING_GET(str));
+    const char *ptr, *end;
+
+    if (!rb_enc_unicode_p(enc) || single_byte_optimizable(str)) {
+	return rb_str_length(str);
+    }
+
+    reg_grapheme_cluster = get_reg_grapheme_cluster(enc);
     ptr = RSTRING_PTR(str);
     end = RSTRING_END(str);
 
@@ -8390,10 +8400,36 @@ rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
 	OnigPosition len = onig_match(reg_grapheme_cluster,
 				      (const OnigUChar *)ptr, (const OnigUChar *)end,
 				      (const OnigUChar *)ptr, NULL, 0);
-	if (len == 0) break;
-	if (len < 0) {
-	    break;
-	}
+	if (len <= 0) break;
+	grapheme_cluster_count++;
+	ptr += len;
+    }
+
+    return SIZET2NUM(grapheme_cluster_count);
+}
+
+static VALUE
+rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
+{
+    VALUE orig = str;
+    regex_t *reg_grapheme_cluster = NULL;
+    rb_encoding *enc = rb_enc_from_index(ENCODING_GET(str));
+    const char *ptr, *end;
+
+    if (!rb_enc_unicode_p(enc) || single_byte_optimizable(str)) {
+	return rb_str_enumerate_chars(str, ary);
+    }
+
+    if (!ary) str = rb_str_new_frozen(str);
+    reg_grapheme_cluster = get_reg_grapheme_cluster(enc);
+    ptr = RSTRING_PTR(str);
+    end = RSTRING_END(str);
+
+    while (ptr < end) {
+	OnigPosition len = onig_match(reg_grapheme_cluster,
+				      (const OnigUChar *)ptr, (const OnigUChar *)end,
+				      (const OnigUChar *)ptr, NULL, 0);
+	if (len <= 0) break;
 	ENUM_ELEM(ary, rb_enc_str_new(ptr, len, enc));
 	ptr += len;
     }
@@ -8422,7 +8458,7 @@ rb_str_enumerate_grapheme_clusters(VALUE str, VALUE ary)
 static VALUE
 rb_str_each_grapheme_cluster(VALUE str)
 {
-    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_char_size);
+    RETURN_SIZED_ENUMERATOR(str, 0, 0, rb_str_each_grapheme_cluster_size);
     return rb_str_enumerate_grapheme_clusters(str, 0);
 }
 

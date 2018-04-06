@@ -408,6 +408,7 @@ static NODE *new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs,
 static NODE *new_ary_op_assign(struct parser_params *p, NODE *ary, NODE *args, ID op, NODE *rhs, const YYLTYPE *args_loc, const YYLTYPE *loc);
 static NODE *new_attr_op_assign(struct parser_params *p, NODE *lhs, ID atype, ID attr, ID op, NODE *rhs, const YYLTYPE *loc);
 static NODE *new_const_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, const YYLTYPE *loc);
+static NODE *new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_else, NODE *ensure, const YYLTYPE *loc);
 
 static NODE *const_decl(struct parser_params *p, NODE* path, const YYLTYPE *loc);
 
@@ -738,6 +739,7 @@ PRINTF_ARGS(static void parser_compile_error(struct parser_params*, const char *
 
 static void token_info_push(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_pop(struct parser_params*, const char *token, const rb_code_location_t *loc);
+static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, const rb_code_location_t *loc);
 %}
 
 %pure-parser
@@ -990,24 +992,23 @@ begin_block	: '{' top_compstmt '}'
 
 bodystmt	: compstmt
 		  opt_rescue
-		  opt_else
+		  k_else {if (!$2) {yyerror1(&@3, "else without rescue is useless");}}
+		  compstmt
 		  opt_ensure
 		    {
 		    /*%%%*/
-			$$ = $1;
-			if ($2) {
-			    $$ = NEW_RESCUE($1, $2, $3, &@$);
-			}
-			else if ($3) {
-			    rb_warn0("else without rescue is useless");
-			    $$ = block_append(p, $$, $3);
-			}
-			if ($4) {
-			    $$ = NEW_ENSURE($$, $4, &@$);
-			}
-			fixpos($$, $1);
+			$$ = new_bodystmt(p, $1, $2, $5, $6, &@$);
 		    /*% %*/
-		    /*% ripper: bodystmt!(escape_Qundef($1), escape_Qundef($2), escape_Qundef($3), escape_Qundef($4)) %*/
+		    /*% ripper: bodystmt!(escape_Qundef($1), escape_Qundef($2), escape_Qundef($5), escape_Qundef($6)) %*/
+		    }
+		| compstmt
+		  opt_rescue
+		  opt_ensure
+		    {
+		    /*%%%*/
+			$$ = new_bodystmt(p, $1, $2, 0, $3, &@$);
+		    /*% %*/
+		    /*% ripper: bodystmt!(escape_Qundef($1), escape_Qundef($2), Qnil, escape_Qundef($3)) %*/
 		    }
 		;
 
@@ -2718,6 +2719,48 @@ k_def		: keyword_def
 		    }
 		;
 
+k_do		: keyword_do
+		    {
+			token_info_push(p, "do", &@$);
+		    }
+		;
+
+k_do_block	: keyword_do_block
+		    {
+			token_info_push(p, "do", &@$);
+		    }
+		;
+
+k_rescue	: keyword_rescue
+		    {
+			token_info_warn(p, "rescue", p->token_info, &@$);
+		    }
+		;
+
+k_ensure	: keyword_ensure
+		    {
+			token_info_warn(p, "ensure", p->token_info, &@$);
+		    }
+		;
+
+k_when		: keyword_when
+		    {
+			token_info_warn(p, "when", p->token_info, &@$);
+		    }
+		;
+
+k_else		: keyword_else
+		    {
+			token_info_warn(p, "else", p->token_info, &@$);
+		    }
+		;
+
+k_elsif 	: keyword_elsif
+		    {
+			token_info_warn(p, "elsif", p->token_info, &@$);
+		    }
+		;
+
 k_end		: keyword_end
 		    {
 			token_info_pop(p, "end", &@$);
@@ -2741,7 +2784,7 @@ do		: term
 		;
 
 if_tail		: opt_else
-		| keyword_elsif expr_value then
+		| k_elsif expr_value then
 		  compstmt
 		  if_tail
 		    {
@@ -2754,7 +2797,7 @@ if_tail		: opt_else
 		;
 
 opt_else	: none
-		| keyword_else compstmt
+		| k_else compstmt
 		    {
 		    /*%%%*/
 			$$ = $2;
@@ -3072,7 +3115,7 @@ lambda_body	: tLAMBEG compstmt '}'
 		    }
 		;
 
-do_block	: keyword_do_block do_body keyword_end
+do_block	: k_do_block do_body k_end
 		    {
 			$$ = $2;
 		    /*%%%*/
@@ -3202,7 +3245,7 @@ brace_block	: '{' brace_body '}'
 			nd_set_line($$, @1.end_pos.lineno);
 		    /*% %*/
 		    }
-		| keyword_do do_body keyword_end
+		| k_do do_body k_end
 		    {
 			$$ = $2;
 		    /*%%%*/
@@ -3236,7 +3279,7 @@ do_body 	: {$<vars>$ = dyna_push(p);}
 		    }
 		;
 
-case_body	: keyword_when args then
+case_body	: k_when args then
 		  compstmt
 		  cases
 		    {
@@ -3252,7 +3295,7 @@ cases		: opt_else
 		| case_body
 		;
 
-opt_rescue	: keyword_rescue exc_list exc_var then
+opt_rescue	: k_rescue exc_list exc_var then
 		  compstmt
 		  opt_rescue
 		    {
@@ -3291,7 +3334,7 @@ exc_var		: tASSOC lhs
 		| none
 		;
 
-opt_ensure	: keyword_ensure compstmt
+opt_ensure	: k_ensure compstmt
 		    {
 		    /*%%%*/
 			$$ = $2;
@@ -4053,7 +4096,7 @@ kwrest_mark	: tPOW
 
 f_kwrest	: kwrest_mark tIDENTIFIER
 		    {
-			shadowing_lvar(p, get_id($2));
+			arg_var(p, shadowing_lvar(p, get_id($2)));
 		    /*%%%*/
 			$$ = $2;
 		    /*% %*/
@@ -4488,22 +4531,29 @@ token_info_push(struct parser_params *p, const char *token, const rb_code_locati
 static void
 token_info_pop(struct parser_params *p, const char *token, const rb_code_location_t *loc)
 {
-    token_info *ptinfo_beg = p->token_info, ptinfo_end_body, *ptinfo_end = &ptinfo_end_body;
-    setup_token_info(ptinfo_end, p->lex.pbeg, loc);
+    token_info *ptinfo_beg = p->token_info;
 
     if (!ptinfo_beg) return;
     p->token_info = ptinfo_beg->next;
 
     /* indentation check of matched keywords (begin..end, if..end, etc.) */
-    if (!p->token_info_enabled) goto ok; /* the check is off */
-    if (ptinfo_beg->linenum == ptinfo_end->linenum) goto ok; /* ignore one-line block */
-    if (ptinfo_beg->nonspc || ptinfo_end->nonspc) goto ok; /* ignore keyword in the middle of a line */
-    if (ptinfo_beg->column == ptinfo_end->column) goto ok; /* the indents are matched */
+    token_info_warn(p, token, ptinfo_beg, loc);
+    xfree(ptinfo_beg);
+}
+
+static void
+token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, const rb_code_location_t *loc)
+{
+    token_info ptinfo_end_body, *ptinfo_end = &ptinfo_end_body;
+    if (!p->token_info_enabled) return;
+    if (!ptinfo_beg) return;
+    setup_token_info(ptinfo_end, p->lex.pbeg, loc);
+    if (ptinfo_beg->linenum == ptinfo_end->linenum) return; /* ignore one-line block */
+    if (ptinfo_beg->nonspc || ptinfo_end->nonspc) return; /* ignore keyword in the middle of a line */
+    if (ptinfo_beg->column == ptinfo_end->column) return; /* the indents are matched */
     rb_warn3L(ptinfo_end->linenum,
 	      "mismatched indentations at '%s' with '%s' at %d",
 	      WARN_S(token), WARN_S(ptinfo_beg->token), WARN_I(ptinfo_beg->linenum));
-ok:
-    xfree(ptinfo_beg);
 }
 
 static int
@@ -4839,7 +4889,7 @@ yycompile(VALUE vparser, struct parser_params *p, VALUE fname, int line)
 {
     rb_ast_t *ast;
     p->ruby_sourcefile_string = rb_str_new_frozen(fname);
-    p->ruby_sourcefile = RSTRING_PTR(fname);
+    p->ruby_sourcefile = StringValueCStr(fname);
     p->ruby_sourceline = line - 1;
 
     p->ast = ast = rb_ast_new();
@@ -5592,7 +5642,14 @@ tokadd_string(struct parser_params *p,
 	    switch (c) {
 	      case '\n':
 		if (func & STR_FUNC_QWORDS) break;
-		if (func & STR_FUNC_EXPAND) continue;
+		if (func & STR_FUNC_EXPAND) {
+		    if (!(func & STR_FUNC_INDENT) || (p->heredoc_indent < 0))
+			continue;
+		    if (c == term) {
+			c = '\\';
+			goto terminate;
+		    }
+		}
 		tokadd(p, '\\');
 		break;
 
@@ -5673,6 +5730,7 @@ tokadd_string(struct parser_params *p,
         }
 	tokadd(p, c);
     }
+  terminate:
     if (enc) *encp = enc;
     return c;
 }
@@ -6243,7 +6301,13 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 	return 0;
     }
     bol = was_bol(p);
-    if (bol && whole_match_p(p, eos, len, indent)) {
+    /* `heredoc_line_indent == -1` means
+     * - "after an interpolation in the same line", or
+     * - "in a continuing line"
+     */
+    if (bol &&
+	(p->heredoc_line_indent != -1 || (p->heredoc_line_indent = 0)) &&
+	whole_match_p(p, eos, len, indent)) {
 	dispatch_heredoc_end(p);
 	heredoc_restore(p, &p->lex.strterm->u.heredoc);
 	p->lex.strterm = 0;
@@ -6313,6 +6377,7 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
 		goto restore;
 	    }
 	    if (c != '\n') {
+		if (c == '\\') p->heredoc_line_indent = -1;
 	      flush:
 		str = STR_NEW3(tok(p), toklen(p), enc, func);
 	      flush_str:
@@ -9898,34 +9963,28 @@ new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, 
 	 * #=> <reorder>
 	 * variable order: kr1, k1, k2, internal_id, krest, &b
 	 */
-	ID kw_bits;
+	ID kw_bits = internal_id(p), *required_kw_vars, *kw_vars;
+	struct vtable *vtargs = p->lvtbl->args;
 	NODE *kwn = kw_args;
-	struct vtable *required_kw_vars = vtable_alloc(NULL);
-	struct vtable *kw_vars = vtable_alloc(NULL);
-	int i;
 
+	vtable_pop(vtargs, !!block + !!kw_rest_arg);
+	required_kw_vars = kw_vars = &vtargs->tbl[vtargs->pos];
 	while (kwn) {
-	    NODE *val_node = kwn->nd_body->nd_value;
-	    ID vid = kwn->nd_body->nd_vid;
-
-	    if (val_node == NODE_SPECIAL_REQUIRED_KEYWORD) {
-		vtable_add(required_kw_vars, vid);
-	    }
-	    else {
-		vtable_add(kw_vars, vid);
-	    }
-
+	    if (!NODE_REQUIRED_KEYWORD_P(kwn->nd_body))
+		--kw_vars;
+	    --required_kw_vars;
 	    kwn = kwn->nd_next;
 	}
 
-	kw_bits = internal_id(p);
-	if (kw_rest_arg && is_junk_id(kw_rest_arg)) vtable_pop(p->lvtbl->args, 1);
-	vtable_pop(p->lvtbl->args, vtable_size(required_kw_vars) + vtable_size(kw_vars) + (block != 0));
-
-	for (i=0; i<vtable_size(required_kw_vars); i++) arg_var(p, required_kw_vars->tbl[i]);
-	for (i=0; i<vtable_size(kw_vars); i++) arg_var(p, kw_vars->tbl[i]);
-	vtable_free(required_kw_vars);
-	vtable_free(kw_vars);
+	for (kwn = kw_args; kwn; kwn = kwn->nd_next) {
+	    ID vid = kwn->nd_body->nd_vid;
+	    if (NODE_REQUIRED_KEYWORD_P(kwn->nd_body)) {
+		*required_kw_vars++ = vid;
+	    }
+	    else {
+		*kw_vars++ = vid;
+	    }
+	}
 
 	arg_var(p, kw_bits);
 	if (kw_rest_arg) arg_var(p, kw_rest_arg);
@@ -9935,9 +9994,6 @@ new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, 
 	args->kw_rest_arg->nd_cflag = kw_bits;
     }
     else if (kw_rest_arg) {
-	if (block) vtable_pop(p->lvtbl->args, 1); /* reorder */
-	arg_var(p, kw_rest_arg);
-	if (block) arg_var(p, block);
 	args->kw_rest_arg = NEW_DVAR(kw_rest_arg, loc);
     }
 
@@ -10142,6 +10198,25 @@ static VALUE
 var_field(struct parser_params *p, VALUE a)
 {
     return ripper_new_yylval(p, get_id(a), dispatch1(var_field, a), 0);
+}
+#endif
+
+#ifndef RIPPER
+static NODE *
+new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_else, NODE *ensure, const YYLTYPE *loc)
+{
+    NODE *result = head;
+    if (rescue) {
+        result = NEW_RESCUE(head, rescue, rescue_else, loc);
+    }
+    else if (rescue_else) {
+        result = block_append(p, result, rescue_else);
+    }
+    if (ensure) {
+        result = NEW_ENSURE(result, ensure, loc);
+    }
+    fixpos(result, head);
+    return result;
 }
 #endif
 

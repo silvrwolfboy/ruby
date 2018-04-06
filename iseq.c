@@ -234,6 +234,19 @@ rb_iseq_update_references(rb_iseq_t *iseq)
 	    rb_iseq_each_value(iseq, update_each_insn_value, NULL);
 	}
 
+	if (body->param.flags.has_kw && ISEQ_COMPILE_DATA(iseq) == NULL) {
+	    int i, j;
+
+	    i = body->param.keyword->required_num;
+
+	    for (j = 0; i < body->param.keyword->num; i++, j++) {
+		VALUE obj = body->param.keyword->default_values[j];
+		if (obj != Qundef) {
+		    body->param.keyword->default_values[j] = rb_gc_new_location(obj);
+		}
+	    }
+	}
+
 	if (body->catch_table) {
 	    const struct iseq_catch_table *table = body->catch_table;
 	    unsigned int i;
@@ -263,13 +276,28 @@ rb_iseq_mark(const rb_iseq_t *iseq)
     if (iseq->body) {
 	const struct rb_iseq_constant_body *body = iseq->body;
 
+	if (FL_TEST(iseq, ISEQ_MARKABLE_ISEQ)) {
+	    rb_iseq_each_value(iseq, each_insn_value, NULL);
+	}
+
+	rb_gc_mark_no_pin(body->variable.coverage);
+	rb_gc_mark_no_pin(body->variable.original_iseq);
 	rb_gc_mark_no_pin(body->location.label);
 	rb_gc_mark_no_pin(body->location.base_label);
 	rb_gc_mark_no_pin(body->location.pathobj);
-	RUBY_MARK_NO_PIN_UNLESS_NULL(body->local_iseq);
 	RUBY_MARK_NO_PIN_UNLESS_NULL((VALUE)body->parent_iseq);
-	if(FL_TEST(iseq, ISEQ_MARKABLE_ISEQ)) {
-	    rb_iseq_each_value(iseq, each_insn_value, NULL);
+
+	if (body->param.flags.has_kw && ISEQ_COMPILE_DATA(iseq) == NULL) {
+	    int i, j;
+
+	    i = body->param.keyword->required_num;
+
+	    for (j = 0; i < body->param.keyword->num; i++, j++) {
+		VALUE obj = body->param.keyword->default_values[j];
+		if (obj != Qundef) {
+		    rb_gc_mark_no_pin(obj);
+		}
+	    }
 	}
 
 	if (body->catch_table) {
@@ -516,7 +544,7 @@ prepare_iseq_build(rb_iseq_t *iseq,
 }
 
 #if VM_CHECK_MODE > 0 && VM_INSN_INFO_TABLE_IMPL > 0
-static void validate_get_insn_info(rb_iseq_t *iseq);
+static void validate_get_insn_info(const rb_iseq_t *iseq);
 #endif
 
 void
@@ -1613,7 +1641,7 @@ get_insn_info(const rb_iseq_t *iseq, size_t pos)
 
 #if VM_CHECK_MODE > 0 && VM_INSN_INFO_TABLE_IMPL > 0
 static void
-validate_get_insn_info(rb_iseq_t *iseq)
+validate_get_insn_info(const rb_iseq_t *iseq)
 {
     size_t i;
     for (i = 0; i < iseq->body->iseq_size; i++) {
@@ -1655,18 +1683,24 @@ local_var_name(const rb_iseq_t *diseq, VALUE level, VALUE op)
     VALUE i;
     VALUE name;
     ID lid;
+    int idx;
 
     for (i = 0; i < level; i++) {
 	diseq = diseq->body->parent_iseq;
     }
-    lid = diseq->body->local_table[diseq->body->local_table_size - op - 1];
+    idx = diseq->body->local_table_size - (int)op - 1;
+    lid = diseq->body->local_table[idx];
     name = rb_id2str(lid);
     if (!name) {
-	name = rb_sprintf("?%d", diseq->body->local_table_size - (int)op);
+	name = rb_str_new_cstr("?");
     }
     else if (!rb_str_symname_p(name)) {
 	name = rb_str_inspect(name);
     }
+    else {
+	name = rb_str_dup(name);
+    }
+    rb_str_catf(name, "@%d", idx);
     return name;
 }
 
@@ -2028,11 +2062,12 @@ rb_iseq_disasm(const rb_iseq_t *iseq)
 		}
 	    }
 
-	    snprintf(argi, sizeof(argi), "%s%s%s%s%s",	/* arg, opts, rest, post  block */
+	    snprintf(argi, sizeof(argi), "%s%s%s%s%s%s",	/* arg, opts, rest, post, kwrest, block */
 		     iseq->body->param.lead_num > li ? "Arg" : "",
 		     opti,
 		     (iseq->body->param.flags.has_rest && iseq->body->param.rest_start == li) ? "Rest" : "",
 		     (iseq->body->param.flags.has_post && iseq->body->param.post_start <= li && li < iseq->body->param.post_start + iseq->body->param.post_num) ? "Post" : "",
+		     (iseq->body->param.flags.has_kwrest && iseq->body->param.keyword->rest_start == li) ? "Kwrest" : "",
 		     (iseq->body->param.flags.has_block && iseq->body->param.block_start == li) ? "Block" : "");
 
 	    rb_str_catf(str, "[%2d] ", i + 1);

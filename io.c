@@ -7113,12 +7113,7 @@ rb_io_open_generic(VALUE klass, VALUE filename, int oflags, int fmode,
 		   const convconfig_t *convconfig, mode_t perm)
 {
     VALUE cmd;
-    const int warn = klass == rb_cFile;
-    if ((warn || klass == rb_cIO) && !NIL_P(cmd = check_pipe_command(filename))) {
-	if (warn) {
-	    rb_warn("IO.%"PRIsVALUE" called on File to invoke external command",
-		    rb_id2str(rb_frame_this_func()));
-	}
+    if (klass == rb_cIO && !NIL_P(cmd = check_pipe_command(filename))) {
 	return pipe_open_s(cmd, rb_io_oflags_modestr(oflags), fmode, convconfig);
     }
     else {
@@ -7225,12 +7220,13 @@ rb_freopen(VALUE fname, const char *mode, FILE *fp)
 
 /*
  *  call-seq:
- *     ios.reopen(other_IO)         -> ios
- *     ios.reopen(path, mode_str)   -> ios
+ *     ios.reopen(other_IO)             -> ios
+ *     ios.reopen(path, mode [, opt])   -> ios
  *
  *  Reassociates <em>ios</em> with the I/O stream given in
  *  <i>other_IO</i> or to a new stream opened on <i>path</i>. This may
  *  dynamically change the actual class of this stream.
+ *  The +mode+ and +opt+ parameters accept the same values as IO.open.
  *
  *     f1 = File.new("testfile")
  *     f2 = File.new("testfile")
