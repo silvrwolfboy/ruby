@@ -7321,7 +7321,7 @@ check_id_table_move(ID id, VALUE value, void *data)
 VALUE
 rb_gc_new_location(VALUE value)
 {
-    if(BUILTIN_TYPE(value) == T_MOVED) {
+    if(!SPECIAL_CONST_P((void *)value) && BUILTIN_TYPE(value) == T_MOVED) {
 	return (VALUE)RMOVED(value)->destination;
     } else {
 	return value;

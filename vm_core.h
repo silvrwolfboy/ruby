@@ -378,7 +378,7 @@ struct rb_iseq_constant_body {
 	    int bits_start;
 	    int rest_start;
 	    const ID *table;
-	    const VALUE *default_values;
+	    VALUE *default_values;
 	} *keyword;
     } param;
 
