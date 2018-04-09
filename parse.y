@@ -123,24 +123,24 @@ typedef VALUE stack_type;
 static const rb_code_location_t NULL_LOC = { {0, -1}, {0, -1} };
 
 # define SHOW_BITSTACK(stack, name) (p->debug ? rb_parser_show_bitstack(p, stack, name, __LINE__) : (void)0)
-# define BITSTACK_PUSH(stack, n) (((stack) = ((stack)<<1)|((n)&1)), SHOW_BITSTACK(stack, #stack"(push)"))
-# define BITSTACK_POP(stack)	 (((stack) = (stack) >> 1), SHOW_BITSTACK(stack, #stack"(pop)"))
-# define BITSTACK_SET_P(stack)	 (SHOW_BITSTACK(stack, #stack), (stack)&1)
-# define BITSTACK_SET(stack, n)	 ((stack)=(n), SHOW_BITSTACK(stack, #stack"(set)"))
+# define BITSTACK_PUSH(stack, n) (((p->stack) = ((p->stack)<<1)|((n)&1)), SHOW_BITSTACK(p->stack, #stack"(push)"))
+# define BITSTACK_POP(stack)	 (((p->stack) = (p->stack) >> 1), SHOW_BITSTACK(p->stack, #stack"(pop)"))
+# define BITSTACK_SET_P(stack)	 (SHOW_BITSTACK(p->stack, #stack), (p->stack)&1)
+# define BITSTACK_SET(stack, n)	 ((p->stack)=(n), SHOW_BITSTACK(p->stack, #stack"(set)"))
 
 /* A flag to identify keyword_do_cond, "do" keyword after condition expression.
    Examples: `while ... do`, `until ... do`, and `for ... in ... do` */
-#define COND_PUSH(n)	BITSTACK_PUSH(p->cond_stack, (n))
-#define COND_POP()	BITSTACK_POP(p->cond_stack)
-#define COND_P()	BITSTACK_SET_P(p->cond_stack)
-#define COND_SET(n)	BITSTACK_SET(p->cond_stack, (n))
+#define COND_PUSH(n)	BITSTACK_PUSH(cond_stack, (n))
+#define COND_POP()	BITSTACK_POP(cond_stack)
+#define COND_P()	BITSTACK_SET_P(cond_stack)
+#define COND_SET(n)	BITSTACK_SET(cond_stack, (n))
 
 /* A flag to identify keyword_do_block; "do" keyword after command_call.
    Example: `foo 1, 2 do`. */
-#define CMDARG_PUSH(n)	BITSTACK_PUSH(p->cmdarg_stack, (n))
-#define CMDARG_POP()	BITSTACK_POP(p->cmdarg_stack)
-#define CMDARG_P()	BITSTACK_SET_P(p->cmdarg_stack)
-#define CMDARG_SET(n)	BITSTACK_SET(p->cmdarg_stack, (n))
+#define CMDARG_PUSH(n)	BITSTACK_PUSH(cmdarg_stack, (n))
+#define CMDARG_POP()	BITSTACK_POP(cmdarg_stack)
+#define CMDARG_P()	BITSTACK_SET_P(cmdarg_stack)
+#define CMDARG_SET(n)	BITSTACK_SET(cmdarg_stack, (n))
 
 struct vtable {
     ID *tbl;
@@ -157,7 +157,6 @@ struct local_vars {
     struct vtable *past;
 # endif
     struct local_vars *prev;
-    stack_type cmdargs, cond; /* XXX: backup for cmdargs_stack and p->cond_stack.  Because this is not a part of local variables, refactoring is needed. */
 };
 
 #define DVARS_INHERIT ((void*)1)
@@ -2271,13 +2270,12 @@ primary		: literal
 		    }
 		| k_begin
 		    {
-			$<val>1 = p->cmdarg_stack;
-			CMDARG_SET(0);
+			CMDARG_PUSH(0);
 		    }
 		  bodystmt
 		  k_end
 		    {
-			CMDARG_SET($<val>1);
+			CMDARG_POP();
 		    /*%%%*/
 			set_line_body($3, @1.end_pos.lineno);
 			$$ = NEW_BEGIN($3, &@$);
@@ -3267,14 +3265,14 @@ brace_body	: {$<vars>$ = dyna_push(p);}
 		;
 
 do_body 	: {$<vars>$ = dyna_push(p);}
-		  {$<val>$ = p->cmdarg_stack; CMDARG_SET(0);}
+		  {CMDARG_PUSH(0);}
 		  opt_block_param bodystmt
 		    {
 		    /*%%%*/
 			$$ = NEW_ITER($3, $4, &@$);
 		    /*% %*/
 		    /*% ripper: do_block!(escape_Qundef($3), $4) %*/
-			CMDARG_SET($<val>2);
+			CMDARG_POP();
 			dyna_pop(p, $<vars>1);
 		    }
 		;
@@ -3621,10 +3619,8 @@ string_content	: tSTRING_CONTENT
 		    }
 		| tSTRING_DBEG
 		    {
-			$<val>1 = p->cond_stack;
-			$<val>$ = p->cmdarg_stack;
-			COND_SET(0);
-			CMDARG_SET(0);
+			CMDARG_PUSH(0);
+			COND_PUSH(0);
 		    }
 		    {
 			/* need to backup p->lex.strterm so that a string literal `%!foo,#{ !0 },bar!` can be parsed */
@@ -3645,8 +3641,8 @@ string_content	: tSTRING_CONTENT
 		    }
 		  compstmt tSTRING_DEND
 		    {
-			COND_SET($<val>1);
-			CMDARG_SET($<val>2);
+			COND_POP();
+			CMDARG_POP();
 			p->lex.strterm = $<strterm>3;
 			SET_LEX_STATE($<num>4);
 			p->lex.brace_nest = $<num>5;
@@ -6134,10 +6130,12 @@ heredoc_dedent(struct parser_params *p, VALUE array)
 
 /*
  *  call-seq:
- *    Ripper.dedent_string(input, width)   -> string
+ *    Ripper.dedent_string(input, width)   -> Integer
  *
- *  Strips leading +width+ whitespaces from +input+, and returns
- *  stripped column width.
+ *  USE OF RIPPER LIBRARY ONLY.
+ *
+ *  Strips up to +width+ leading whitespaces from +input+,
+ *  and returns the stripped column width.
  */
 static VALUE
 parser_dedent_string(VALUE self, VALUE input, VALUE width)
@@ -6845,6 +6843,15 @@ parse_rational(struct parser_params *p, char *str, int len, int seen_point)
 }
 
 static enum yytokentype
+no_digits(struct parser_params *p)
+{
+    yyerror0("numeric literal without digits");
+    if (peek(p, '_')) nextc(p);
+    /* dummy 0, for tUMINUS_NUM at numeric */
+    return set_integer_literal(p, INT2FIX(0), 0);
+}
+
+static enum yytokentype
 parse_numeric(struct parser_params *p, int c)
 {
     int is_float, seen_point, seen_e, nondigit;
@@ -6858,7 +6865,6 @@ parse_numeric(struct parser_params *p, int c)
 	c = nextc(p);
     }
     if (c == '0') {
-#define no_digits() do {yyerror0("numeric literal without digits"); return 0;} while (0)
 	int start = toklen(p);
 	c = nextc(p);
 	if (c == 'x' || c == 'X') {
@@ -6879,7 +6885,7 @@ parse_numeric(struct parser_params *p, int c)
 	    pushback(p, c);
 	    tokfix(p);
 	    if (toklen(p) == start) {
-		no_digits();
+		return no_digits(p);
 	    }
 	    else if (nondigit) goto trailing_uc;
 	    suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
@@ -6903,7 +6909,7 @@ parse_numeric(struct parser_params *p, int c)
 	    pushback(p, c);
 	    tokfix(p);
 	    if (toklen(p) == start) {
-		no_digits();
+		return no_digits(p);
 	    }
 	    else if (nondigit) goto trailing_uc;
 	    suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
@@ -6927,7 +6933,7 @@ parse_numeric(struct parser_params *p, int c)
 	    pushback(p, c);
 	    tokfix(p);
 	    if (toklen(p) == start) {
-		no_digits();
+		return no_digits(p);
 	    }
 	    else if (nondigit) goto trailing_uc;
 	    suffix = number_literal_suffix(p, NUM_SUFFIX_ALL);
@@ -6941,7 +6947,7 @@ parse_numeric(struct parser_params *p, int c)
 	    /* prefixed octal */
 	    c = nextc(p);
 	    if (c == -1 || c == '_' || !ISDIGIT(c)) {
-		no_digits();
+		return no_digits(p);
 	    }
 	}
 	if (c >= '0' && c <= '7') {
@@ -8006,10 +8012,11 @@ parser_yylex(struct parser_params *p)
 	return c;
 
       case '}':
+	/* tSTRING_DEND does COND_POP and CMDARG_POP in the yacc's rule */
+	if (!p->lex.brace_nest--) return tSTRING_DEND;
 	COND_POP();
 	CMDARG_POP();
 	SET_LEX_STATE(EXPR_END);
-	if (!p->lex.brace_nest--) return tSTRING_DEND;
 	p->lex.paren_nest--;
 	return c;
 
@@ -10260,10 +10267,8 @@ local_push(struct parser_params *p, int toplevel_scope)
 # if WARN_PAST_SCOPE
     local->past = 0;
 # endif
-    local->cmdargs = p->cmdarg_stack;
-    CMDARG_SET(0);
-    local->cond = p->cond_stack;
-    COND_SET(0);
+    CMDARG_PUSH(0);
+    COND_PUSH(0);
     p->lvtbl = local;
 }
 
@@ -10284,8 +10289,8 @@ local_pop(struct parser_params *p)
 # endif
     vtable_free(p->lvtbl->args);
     vtable_free(p->lvtbl->vars);
-    CMDARG_SET(p->lvtbl->cmdargs);
-    COND_SET(p->lvtbl->cond);
+    CMDARG_POP();
+    COND_POP();
     xfree(p->lvtbl);
     p->lvtbl = local;
 }

@@ -472,15 +472,6 @@ static const rb_data_type_t dir_data_type = {
 
 static VALUE dir_close(VALUE);
 
-#define GlobPathValue(str, safe) \
-    /* can contain null bytes as separators */	\
-    (!RB_TYPE_P((str), T_STRING) ?		\
-     (void)FilePathValue(str) :			\
-     (void)(check_safe_glob((str), (safe)),		\
-      check_glob_encoding(str), (str)))
-#define check_safe_glob(str, safe) ((safe) ? rb_check_safe_obj(str) : (void)0)
-#define check_glob_encoding(str) rb_enc_check((str), rb_enc_from_encoding(rb_usascii_encoding()))
-
 static VALUE
 dir_s_alloc(VALUE klass)
 {
@@ -551,7 +542,7 @@ dir_initialize(int argc, VALUE *argv, VALUE dir)
 	}
     }
 
-    GlobPathValue(dirname, FALSE);
+    FilePathValue(dirname);
     orig = rb_str_dup_frozen(dirname);
     dirname = rb_str_encode_ospath(dirname);
     dirname = rb_str_dup_frozen(dirname);
@@ -2543,24 +2534,34 @@ static VALUE
 rb_push_glob(VALUE str, VALUE base, int flags) /* '\0' is delimiter */
 {
     long offset = 0;
+    long len;
     VALUE ary;
 
-    GlobPathValue(str, TRUE);
+    /* can contain null bytes as separators */
+    if (!RB_TYPE_P((str), T_STRING)) {
+	FilePathValue(str);
+    }
+    else {
+	rb_check_safe_obj(str);
+	rb_enc_check(str, rb_enc_from_encoding(rb_usascii_encoding()));
+    }
     ary = rb_ary_new();
 
-    while (offset < RSTRING_LEN(str)) {
-	char *p, *pend;
+    while (offset < (len = RSTRING_LEN(str))) {
 	int status;
-	p = RSTRING_PTR(str) + offset;
-	status = push_glob(ary, rb_enc_str_new(p, strlen(p), rb_enc_get(str)),
+        long rest = len - offset;
+        const char *pbeg = RSTRING_PTR(str), *p = pbeg + offset;
+        const char *pend = memchr(p, '\0', rest);
+        if (pend) {
+            rest = ++pend - p;
+            offset = pend - pbeg;
+        }
+        else {
+            offset = len;
+        }
+	status = push_glob(ary, rb_str_subseq(str, p-pbeg, rest),
 			   base, flags);
 	if (status) GLOB_JUMP_TAG(status);
-	if (offset >= RSTRING_LEN(str)) break;
-	p += strlen(p) + 1;
-	pend = RSTRING_PTR(str) + RSTRING_LEN(str);
-	while (p < pend && !*p)
-	    p++;
-	offset = p - RSTRING_PTR(str);
     }
 
     return ary;
@@ -2575,7 +2576,7 @@ dir_globs(long argc, const VALUE *argv, VALUE base, int flags)
     for (i = 0; i < argc; ++i) {
 	int status;
 	VALUE str = argv[i];
-	GlobPathValue(str, TRUE);
+	FilePathValue(str);
 	status = push_glob(ary, str, base, flags);
 	if (status) GLOB_JUMP_TAG(status);
     }
@@ -2600,7 +2601,7 @@ dir_glob_options(VALUE opt, VALUE *base, int *flags)
     }
 #endif
     else {
-	GlobPathValue(args[0], TRUE);
+	FilePathValue(args[0]);
 	if (!RSTRING_LEN(args[0])) args[0] = Qnil;
 	*base = args[0];
     }
@@ -2652,7 +2653,7 @@ dir_s_aref(int argc, VALUE *argv, VALUE obj)
  *
  *  <code>*</code>::
  *    Matches any file. Can be restricted by other values in the glob.
- *    Equivalent to <code>/ .* /x</code> in regexp.
+ *    Equivalent to <code>/ .* /mx</code> in regexp.
  *
  *    <code>*</code>::     Matches all files
  *    <code>c*</code>::    Matches all files beginning with <code>c</code>
@@ -2697,6 +2698,7 @@ dir_s_aref(int argc, VALUE *argv, VALUE obj)
  *     Dir.glob("*.{rb,h}")                #=> ["main.rb", "config.h"]
  *     Dir.glob("*")                       #=> ["config.h", "main.rb"]
  *     Dir.glob("*", File::FNM_DOTMATCH)   #=> [".", "..", "config.h", "main.rb"]
+ *     Dir.glob(["*.rb", "*.h"])           #=> ["main.rb", "config.h"]
  *
  *     rbfiles = File.join("**", "*.rb")
  *     Dir.glob(rbfiles)                   #=> ["main.rb",
@@ -3185,7 +3187,7 @@ rb_dir_s_empty_p(VALUE obj, VALUE dirname)
     const char *path;
     enum {false_on_notdir = 1};
 
-    GlobPathValue(dirname, FALSE);
+    FilePathValue(dirname);
     orig = rb_str_dup_frozen(dirname);
     dirname = rb_str_encode_ospath(dirname);
     dirname = rb_str_dup_frozen(dirname);

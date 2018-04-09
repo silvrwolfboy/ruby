@@ -563,15 +563,14 @@ rb_iseq_insns_info_encode_positions(const rb_iseq_t *iseq)
 #endif
 }
 
-void
-rb_iseq_insns_info_decode_positions(const rb_iseq_t *iseq)
+unsigned int *
+rb_iseq_insns_info_decode_positions(const struct rb_iseq_constant_body *body)
 {
 #if VM_INSN_INFO_TABLE_IMPL == 2
-    int size = iseq->body->insns_info.size;
-    int max_pos = iseq->body->iseq_size;
-    struct succ_index_table *sd = iseq->body->insns_info.succ_index_table;
-    if (iseq->body->insns_info.positions) ruby_xfree(iseq->body->insns_info.positions);
-    iseq->body->insns_info.positions = succ_index_table_invert(max_pos, sd, size);
+    int size = body->insns_info.size;
+    int max_pos = body->iseq_size;
+    struct succ_index_table *sd = body->insns_info.succ_index_table;
+    return succ_index_table_invert(max_pos, sd, size);
 #endif
 }
 
@@ -1871,6 +1870,15 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
     return ret;
 }
 
+static VALUE
+right_strip(VALUE str)
+{
+    const char *beg = RSTRING_PTR(str), *end = RSTRING_END(str);
+    while (end-- > beg && *end == ' ');
+    rb_str_set_len(str, end - beg + 1);
+    return str;
+}
+
 /**
  * Disassemble a instruction
  * Iseq -> Iseq inspect object
@@ -1932,12 +1940,13 @@ rb_iseq_disasm_insn(VALUE ret, const VALUE *code, size_t pos,
 	}
     }
 
+    right_strip(str);
     if (ret) {
 	rb_str_cat2(str, "\n");
 	rb_str_concat(ret, str);
     }
     else {
-	printf("%s\n", RSTRING_PTR(str));
+	printf("%.*s\n", (int)RSTRING_LEN(str), RSTRING_PTR(str));
     }
     return len;
 }
@@ -1981,8 +1990,8 @@ iseq_inspect(const rb_iseq_t *iseq)
     }
 }
 
-VALUE
-rb_iseq_disasm(const rb_iseq_t *iseq)
+static VALUE
+rb_iseq_disasm_recursive(const rb_iseq_t *iseq, VALUE indent)
 {
     VALUE *code;
     VALUE str = rb_str_new(0, 0);
@@ -1993,46 +2002,61 @@ rb_iseq_disasm(const rb_iseq_t *iseq)
     size_t n;
     enum {header_minlen = 72};
     st_table *done_iseq = 0;
+    const char *indent_str;
+    long indent_len;
 
     rb_secure(1);
 
     size = iseq->body->iseq_size;
 
+    indent_len = RSTRING_LEN(indent);
+    indent_str = RSTRING_PTR(indent);
+
+    rb_str_cat(str, indent_str, indent_len);
     rb_str_cat2(str, "== disasm: ");
 
-    rb_str_concat(str, iseq_inspect(iseq));
+    rb_str_append(str, iseq_inspect(iseq));
     rb_str_catf(str, " (catch: %s)", iseq->body->catch_except_p ? "TRUE" : "FALSE");
-    if ((l = RSTRING_LEN(str)) < header_minlen) {
-	rb_str_resize(str, header_minlen);
-	memset(RSTRING_PTR(str) + l, '=', header_minlen - l);
+    if ((l = RSTRING_LEN(str) - indent_len) < header_minlen) {
+	rb_str_modify_expand(str, header_minlen - l);
+	memset(RSTRING_END(str), '=', header_minlen - l);
     }
     rb_str_cat2(str, "\n");
 
     /* show catch table information */
     if (iseq->body->catch_table) {
+	rb_str_cat(str, indent_str, indent_len);
 	rb_str_cat2(str, "== catch table\n");
     }
     if (iseq->body->catch_table) {
+	rb_str_cat_cstr(indent, "| ");
+	indent_str = RSTRING_PTR(indent);
 	for (i = 0; i < iseq->body->catch_table->size; i++) {
 	    const struct iseq_catch_table_entry *entry = &iseq->body->catch_table->entries[i];
+	    rb_str_cat(str, indent_str, indent_len);
 	    rb_str_catf(str,
 			"| catch type: %-6s st: %04d ed: %04d sp: %04d cont: %04d\n",
 			catch_type((int)entry->type), (int)entry->start,
 			(int)entry->end, (int)entry->sp, (int)entry->cont);
 	    if (entry->iseq && !(done_iseq && st_is_member(done_iseq, (st_data_t)entry->iseq))) {
-		rb_str_concat(str, rb_iseq_disasm(rb_iseq_check(entry->iseq)));
+		rb_str_concat(str, rb_iseq_disasm_recursive(rb_iseq_check(entry->iseq), indent));
 		if (!done_iseq) done_iseq = st_init_numtable();
 		st_insert(done_iseq, (st_data_t)entry->iseq, (st_data_t)0);
+		indent_str = RSTRING_PTR(indent);
 	    }
 	}
+	rb_str_resize(indent, indent_len);
+	indent_str = RSTRING_PTR(indent);
     }
     if (iseq->body->catch_table) {
+	rb_str_cat(str, indent_str, indent_len);
 	rb_str_cat2(str, "|-------------------------------------"
 		    "-----------------------------------\n");
     }
 
     /* show local table information */
     if (iseq->body->local_table) {
+	rb_str_cat(str, indent_str, indent_len);
 	rb_str_catf(str,
 		    "local table (size: %d, argc: %d "
 		    "[opts: %d, rest: %d, post: %d, block: %d, kw: %d@%d, kwrest: %d])\n",
@@ -2070,29 +2094,39 @@ rb_iseq_disasm(const rb_iseq_t *iseq)
 		     (iseq->body->param.flags.has_kwrest && iseq->body->param.keyword->rest_start == li) ? "Kwrest" : "",
 		     (iseq->body->param.flags.has_block && iseq->body->param.block_start == li) ? "Block" : "");
 
+	    rb_str_cat(str, indent_str, indent_len);
 	    rb_str_catf(str, "[%2d] ", i + 1);
 	    width = RSTRING_LEN(str) + 11;
 	    rb_str_append(str, name);
 	    if (*argi) rb_str_catf(str, "<%s>", argi);
 	    if ((width -= RSTRING_LEN(str)) > 0) rb_str_catf(str, "%*s", (int)width, "");
 	}
-	rb_str_cat2(str, "\n");
+	rb_str_cat_cstr(right_strip(str), "\n");
     }
 
     /* show each line */
     code = rb_iseq_original_iseq(iseq);
     for (n = 0; n < size;) {
+	rb_str_cat(str, indent_str, indent_len);
 	n += rb_iseq_disasm_insn(str, code, n, iseq, child);
     }
 
     for (l = 0; l < RARRAY_LEN(child); l++) {
 	VALUE isv = rb_ary_entry(child, l);
 	if (done_iseq && st_is_member(done_iseq, (st_data_t)isv)) continue;
-	rb_str_concat(str, rb_iseq_disasm(rb_iseq_check((rb_iseq_t *)isv)));
+	rb_str_cat_cstr(str, "\n");
+	rb_str_concat(str, rb_iseq_disasm_recursive(rb_iseq_check((rb_iseq_t *)isv), indent));
+	indent_str = RSTRING_PTR(indent);
     }
     if (done_iseq) st_free_table(done_iseq);
 
     return str;
+}
+
+VALUE
+rb_iseq_disasm(const rb_iseq_t *iseq)
+{
+    return rb_iseq_disasm_recursive(iseq, rb_str_new(0, 0));
 }
 
 static VALUE

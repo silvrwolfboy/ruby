@@ -378,4 +378,13 @@ class TestFiber < Test::Unit::TestCase
     assert_match(/terminated/, f.to_s)
     assert_match(/resumed/, Fiber.current.to_s)
   end
+
+  def test_create_fiber_in_new_thread
+    ret = Thread.new{
+      Thread.new{
+        Fiber.new{Fiber.yield :ok}.resume
+      }.value
+    }.value
+    assert_equal :ok, ret, '[Bug #14642]'
+  end
 end

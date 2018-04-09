@@ -1477,13 +1477,21 @@ root_fiber_alloc(rb_thread_t *th)
     th->root_fiber = fib;
     DATA_PTR(fibval) = fib;
     fib->cont.self = fibval;
+
 #if FIBER_USE_NATIVE
 #ifdef _WIN32
+    /* setup fib_handle for root Fiber */
     if (fib->fib_handle == 0) {
-	fib->fib_handle = ConvertThreadToFiber(0);
+        if ((fib->fib_handle = ConvertThreadToFiber(0)) == 0) {
+            rb_bug("root_fiber_alloc: ConvertThreadToFiber() failed - %s\n", rb_w32_strerror(-1));
+        }
+    }
+    else {
+        rb_bug("root_fiber_alloc: fib_handle is not NULL.");
     }
 #endif
 #endif
+
     return fib;
 }
 
@@ -1497,13 +1505,8 @@ rb_threadptr_root_fiber_setup(rb_thread_t *th)
     fib->cont.saved_ec.thread_ptr = th;
     fiber_status_set(fib, FIBER_RESUMED); /* skip CREATED */
     th->ec = &fib->cont.saved_ec;
-#if FIBER_USE_NATIVE
-#ifdef _WIN32
-    if (fib->fib_handle == 0) {
-	fib->fib_handle = ConvertThreadToFiber(0);
-    }
-#endif
-#endif
+
+    /* NOTE: On WIN32, fib_handle is not allocated yet. */
 }
 
 void
