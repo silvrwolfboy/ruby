@@ -467,6 +467,8 @@ NORETURN(void rb_memerror(void));
 PUREFUNC(int rb_during_gc(void));
 void rb_gc_mark_locations(const VALUE*, const VALUE*);
 void rb_mark_tbl(struct st_table*);
+void rb_mark_tbl_no_pin(struct st_table*);
+void rb_gc_update_tbl_refs(st_table *ptr);
 void rb_mark_set(struct st_table*);
 void rb_mark_hash(struct st_table*);
 void rb_update_st_references(struct st_table *ht);

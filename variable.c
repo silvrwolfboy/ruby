@@ -1812,7 +1812,7 @@ rb_mod_const_missing(VALUE klass, VALUE name)
 static void
 autoload_mark(void *ptr)
 {
-    rb_mark_tbl((st_table *)ptr);
+    rb_mark_tbl_no_pin((st_table *)ptr);
 }
 
 static void
@@ -1828,9 +1828,15 @@ autoload_memsize(const void *ptr)
     return st_memsize(tbl);
 }
 
+static void
+autoload_compact(void *ptr)
+{
+    rb_gc_update_tbl_refs((st_table *)ptr);
+}
+
 static const rb_data_type_t autoload_data_type = {
     "autoload",
-    {autoload_mark, autoload_free, autoload_memsize,},
+    {autoload_mark, autoload_free, autoload_memsize, autoload_compact,},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 
@@ -1893,7 +1899,7 @@ autoload_i_memsize(const void *ptr)
 
 static const rb_data_type_t autoload_data_i_type = {
     "autoload_i",
-    {autoload_i_mark, RUBY_TYPED_DEFAULT_FREE, autoload_i_memsize,autoload_i_compact},
+    {autoload_i_mark, RUBY_TYPED_DEFAULT_FREE, autoload_i_memsize, autoload_i_compact},
     0, 0, RUBY_TYPED_FREE_IMMEDIATELY
 };
 

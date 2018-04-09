@@ -4230,11 +4230,26 @@ rb_gc_mark_stack_values(long n, const VALUE *values)
 }
 
 static int
+mark_entry_no_pin(st_data_t key, st_data_t value, st_data_t data)
+{
+    rb_objspace_t *objspace = (rb_objspace_t *)data;
+    gc_mark(objspace, (VALUE)value);
+    return ST_CONTINUE;
+}
+
+static int
 mark_entry(st_data_t key, st_data_t value, st_data_t data)
 {
     rb_objspace_t *objspace = (rb_objspace_t *)data;
     gc_mark_and_pin(objspace, (VALUE)value);
     return ST_CONTINUE;
+}
+
+static void
+mark_tbl_no_pin(rb_objspace_t *objspace, st_table *tbl)
+{
+    if (!tbl || tbl->num_entries == 0) return;
+    st_foreach(tbl, mark_entry_no_pin, (st_data_t)objspace);
 }
 
 static void
@@ -4435,6 +4450,12 @@ void
 rb_mark_tbl(st_table *tbl)
 {
     mark_tbl(&rb_objspace, tbl);
+}
+
+void
+rb_mark_tbl_no_pin(st_table *tbl)
+{
+    mark_tbl_no_pin(&rb_objspace, tbl);
 }
 
 static void
@@ -4759,7 +4780,7 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
       case T_MODULE:
 	mark_m_tbl(objspace, RCLASS_M_TBL(obj));
 	if (!RCLASS_EXT(obj)) break;
-	mark_tbl(objspace, RCLASS_IV_TBL(obj));
+	mark_tbl_no_pin(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
 	gc_mark(objspace, RCLASS_SUPER((VALUE)obj));
 	break;
@@ -7203,6 +7224,13 @@ gc_update_table_refs(rb_objspace_t * objspace, st_table *ht)
     }
 }
 
+void
+rb_gc_update_tbl_refs(st_table *ptr)
+{
+    rb_objspace_t *objspace = &rb_objspace;
+    gc_update_table_refs(objspace, ptr);
+}
+
 static void
 gc_ref_update_hash(rb_objspace_t * objspace, VALUE v)
 {
@@ -7396,6 +7424,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 	case T_MODULE:
 	    update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    if (!RCLASS_EXT(obj)) break;
+	    if (RCLASS_IV_TBL(obj)) {
+		gc_update_table_refs(objspace, RCLASS_IV_TBL(obj));
+	    }
 	    update_class_ext(objspace, RCLASS_EXT(obj));
 	    update_const_tbl(objspace, RCLASS_CONST_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
@@ -7406,6 +7437,9 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 		update_m_tbl(objspace, RCLASS_M_TBL(obj));
 	    }
 	    if (!RCLASS_EXT(obj)) break;
+	    if (RCLASS_IV_TBL(obj)) {
+		gc_update_table_refs(objspace, RCLASS_IV_TBL(obj));
+	    }
 	    update_class_ext(objspace, RCLASS_EXT(obj));
 	    update_m_tbl(objspace, RCLASS_CALLABLE_M_TBL(obj));
 	    UPDATE_IF_MOVED(objspace, RCLASS(obj)->super);
