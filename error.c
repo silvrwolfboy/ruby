@@ -325,7 +325,7 @@ warning_write(int argc, VALUE *argv, VALUE buf)
  *    warning 1
  *    warning 2
  *
- * If the <code>:uplevel</code> keyword is given, the string will
+ * If the <code>uplevel</code> keyword argument is given, the string will
  * be prepended with information for the given caller frame in
  * the same format used by the <code>rb_warn</code> C function.
  *
@@ -888,7 +888,7 @@ static VALUE rb_eNOERROR;
 
 static ID id_cause, id_message, id_backtrace;
 static ID id_name, id_key, id_args, id_Errno, id_errno, id_i_path;
-static ID id_receiver, id_iseq, id_local_variables;
+static ID id_receiver, id_recv, id_iseq, id_local_variables;
 static ID id_private_call_p, id_top, id_bottom;
 #define id_bt idBt
 #define id_bt_locations idBt_locations
@@ -916,6 +916,15 @@ rb_exc_new_str(VALUE etype, VALUE str)
     return rb_class_new_instance(1, &str, etype);
 }
 
+static VALUE
+exc_init(VALUE exc, VALUE mesg)
+{
+    rb_ivar_set(exc, id_mesg, mesg);
+    rb_ivar_set(exc, id_bt, Qnil);
+
+    return exc;
+}
+
 /*
  * call-seq:
  *    Exception.new(msg = nil)   ->  exception
@@ -930,10 +939,7 @@ exc_initialize(int argc, VALUE *argv, VALUE exc)
     VALUE arg;
 
     rb_scan_args(argc, argv, "01", &arg);
-    rb_ivar_set(exc, id_mesg, arg);
-    rb_ivar_set(exc, id_bt, Qnil);
-
-    return exc;
+    return exc_init(exc, arg);
 }
 
 /*
@@ -980,7 +986,16 @@ exc_to_s(VALUE exc)
 }
 
 /* FIXME: Include eval_error.c */
-void rb_error_write(VALUE errinfo, VALUE errat, VALUE str, VALUE highlight, VALUE reverse);
+void rb_error_write(VALUE errinfo, VALUE emesg, VALUE errat, VALUE str, VALUE highlight, VALUE reverse);
+
+VALUE
+rb_get_message(VALUE exc)
+{
+    VALUE e = rb_check_funcall(exc, id_message, 0, 0);
+    if (e == Qundef) return Qnil;
+    if (!RB_TYPE_P(e, T_STRING)) e = rb_check_string_type(e);
+    return e;
+}
 
 /*
  * call-seq:
@@ -1015,7 +1030,7 @@ exc_s_to_tty_p(VALUE self)
 static VALUE
 exc_full_message(int argc, VALUE *argv, VALUE exc)
 {
-    VALUE opt, str, errat;
+    VALUE opt, str, emesg, errat;
     enum {kw_highlight, kw_order, kw_max_};
     static ID kw[kw_max_];
     VALUE args[kw_max_] = {Qnil, Qnil};
@@ -1051,8 +1066,9 @@ exc_full_message(int argc, VALUE *argv, VALUE exc)
     }
     str = rb_str_new2("");
     errat = rb_get_backtrace(exc);
+    emesg = rb_get_message(exc);
 
-    rb_error_write(exc, errat, str, args[kw_highlight], args[kw_order]);
+    rb_error_write(exc, emesg, errat, str, args[kw_highlight], args[kw_order]);
     return str;
 }
 
@@ -1074,7 +1090,7 @@ exc_message(VALUE exc)
  * call-seq:
  *   exception.inspect   -> string
  *
- * Return this exception's class name and message
+ * Return this exception's class name and message.
  */
 
 static VALUE
@@ -1411,7 +1427,17 @@ rb_name_error_str(VALUE str, const char *fmt, ...)
     rb_exc_raise(exc);
 }
 
-static VALUE name_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options);
+static VALUE
+name_err_init_attr(VALUE exc, VALUE recv, VALUE method)
+{
+    const rb_execution_context_t *ec = GET_EC();
+    rb_control_frame_t *cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(ec->cfp);
+    cfp = rb_vm_get_ruby_level_next_cfp(ec, cfp);
+    rb_ivar_set(exc, id_name, method);
+    if (recv != Qundef) rb_ivar_set(exc, id_recv, recv);
+    if (cfp) rb_ivar_set(exc, id_iseq, rb_iseqw_new(cfp->iseq));
+    return exc;
+}
 
 /*
  * call-seq:
@@ -1425,38 +1451,30 @@ static VALUE name_err_initialize_options(int argc, VALUE *argv, VALUE self, VALU
 static VALUE
 name_err_initialize(int argc, VALUE *argv, VALUE self)
 {
-    VALUE options;
-    argc = rb_scan_args(argc, argv, "*:", NULL, &options);
-    return name_err_initialize_options(argc, argv, self, options);
-}
-
-static VALUE
-name_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options)
-{
     ID keywords[1];
-    VALUE values[numberof(keywords)];
-    VALUE name;
-    VALUE iseqw = Qnil;
-    int i;
+    VALUE values[numberof(keywords)], name, options;
 
+    argc = rb_scan_args(argc, argv, "*:", NULL, &options);
     keywords[0] = id_receiver;
     rb_get_kwargs(options, keywords, 0, numberof(values), values);
     name = (argc > 1) ? argv[--argc] : Qnil;
     rb_call_super(argc, argv);
-    rb_ivar_set(self, id_name, name);
-    for (i = 0; i < numberof(keywords); ++i) {
-	if (values[i] != Qundef) {
-	    rb_ivar_set(self, keywords[i], values[i]);
-	}
-    }
-    {
-	const rb_execution_context_t *ec = GET_EC();
-	rb_control_frame_t *cfp =
-	    rb_vm_get_ruby_level_next_cfp(ec, RUBY_VM_PREVIOUS_CONTROL_FRAME(ec->cfp));
-	if (cfp) iseqw = rb_iseqw_new(cfp->iseq);
-    }
-    rb_ivar_set(self, id_iseq, iseqw);
+    name_err_init_attr(self, values[0], name);
     return self;
+}
+
+static VALUE
+name_err_init(VALUE exc, VALUE mesg, VALUE recv, VALUE method)
+{
+    exc_init(exc, rb_name_err_mesg_new(mesg, recv, method));
+    return name_err_init_attr(exc, recv, method);
+}
+
+VALUE
+rb_name_err_new(VALUE mesg, VALUE recv, VALUE method)
+{
+    VALUE exc = rb_obj_alloc(rb_eNameError);
+    return name_err_init(exc, mesg, recv, method);
 }
 
 /*
@@ -1496,7 +1514,13 @@ name_err_local_variables(VALUE self)
     return vars;
 }
 
-static VALUE nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options);
+static VALUE
+nometh_err_init_attr(VALUE exc, VALUE args, int priv)
+{
+    rb_ivar_set(exc, id_args, args);
+    rb_ivar_set(exc, id_private_call_p, priv ? Qtrue : Qfalse);
+    return exc;
+}
 
 /*
  * call-seq:
@@ -1511,20 +1535,22 @@ static VALUE nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VA
 static VALUE
 nometh_err_initialize(int argc, VALUE *argv, VALUE self)
 {
-    VALUE options;
+    int priv;
+    VALUE args, options;
     argc = rb_scan_args(argc, argv, "*:", NULL, &options);
-    return nometh_err_initialize_options(argc, argv, self, options);
+    priv = (argc > 3) && (--argc, RTEST(argv[argc]));
+    args = (argc > 2) ? argv[--argc] : Qnil;
+    if (!NIL_P(options)) argv[argc++] = options;
+    rb_call_super(argc, argv);
+    return nometh_err_init_attr(self, args, priv);
 }
 
-static VALUE
-nometh_err_initialize_options(int argc, VALUE *argv, VALUE self, VALUE options)
+VALUE
+rb_nomethod_err_new(VALUE mesg, VALUE recv, VALUE method, VALUE args, int priv)
 {
-    VALUE priv = (argc > 3) && (--argc, RTEST(argv[argc])) ? Qtrue : Qfalse;
-    VALUE args = (argc > 2) ? argv[--argc] : Qnil;
-    name_err_initialize_options(argc, argv, self, options);
-    rb_ivar_set(self, id_args, args);
-    rb_ivar_set(self, id_private_call_p, priv);
-    return self;
+    VALUE exc = rb_obj_alloc(rb_eNoMethodError);
+    name_err_init(exc, mesg, recv, method);
+    return nometh_err_init_attr(exc, args, priv);
 }
 
 /* :nodoc: */
@@ -1572,17 +1598,6 @@ rb_name_err_mesg_new(VALUE mesg, VALUE recv, VALUE method)
     ptr[NAME_ERR_MESG__NAME] = method;
     RTYPEDDATA_DATA(result) = ptr;
     return result;
-}
-
-VALUE
-rb_name_err_new(VALUE mesg, VALUE recv, VALUE method)
-{
-    VALUE exc = rb_obj_alloc(rb_eNameError);
-    rb_ivar_set(exc, id_mesg, rb_name_err_mesg_new(mesg, recv, method));
-    rb_ivar_set(exc, id_bt, Qnil);
-    rb_ivar_set(exc, id_name, method);
-    rb_ivar_set(exc, id_receiver, recv);
-    return exc;
 }
 
 /* :nodoc: */
@@ -1685,7 +1700,7 @@ name_err_receiver(VALUE self)
 {
     VALUE *ptr, recv, mesg;
 
-    recv = rb_ivar_lookup(self, id_receiver, Qundef);
+    recv = rb_ivar_lookup(self, id_recv, Qundef);
     if (recv != Qundef) return recv;
 
     mesg = rb_attr_get(self, id_mesg);
@@ -2501,6 +2516,7 @@ Init_Exception(void)
     id_top = rb_intern_const("top");
     id_bottom = rb_intern_const("bottom");
     id_iseq = rb_make_internal_id();
+    id_recv = rb_make_internal_id();
 }
 
 void

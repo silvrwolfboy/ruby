@@ -707,7 +707,7 @@ class TestRubyOptimization < Test::Unit::TestCase
   end
 
   def test_clear_unreachable_keyword_args
-    assert_separately [], <<-END, timeout: 15
+    assert_separately [], <<-END, timeout: 20
       script =  <<-EOS
         if true
         else
@@ -763,5 +763,12 @@ class TestRubyOptimization < Test::Unit::TestCase
     result = nil
     assert_equal(42, obj.foo {result = 42})
     assert_equal(42, result)
+  end
+
+  def test_unconditional_branch_to_leave_block
+    assert_valid_syntax("#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
+      tap {true || tap {}}
+    end;
   end
 end

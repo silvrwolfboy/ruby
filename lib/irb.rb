@@ -439,6 +439,8 @@ module IRB
 
     # Evaluates input for this session.
     def eval_input
+      last_error = nil
+
       @scanner.set_prompt do
         |ltype, indent, continue, line_no|
         if ltype
@@ -488,7 +490,7 @@ module IRB
         signal_status(:IN_EVAL) do
           begin
             line.untaint
-            @context.evaluate(line, line_no)
+            @context.evaluate(line, line_no, exception: last_error)
             output_value if @context.echo?
             exc = nil
           rescue Interrupt => exc
@@ -497,43 +499,66 @@ module IRB
           rescue Exception => exc
           end
           if exc
-            if exc.backtrace && exc.backtrace[0] =~ /irb(2)?(\/.*|-.*|\.rb)?:/ && exc.class.to_s !~ /^IRB/ &&
-                !(SyntaxError === exc)
-              irb_bug = true
-            else
-              irb_bug = false
-            end
-
-            messages = []
-            lasts = []
-            levels = 0
-            if exc.backtrace
-              count = 0
-              exc.backtrace.each do |m|
-                m = @context.workspace.filter_backtrace(m) or next unless irb_bug
-                m = sprintf("%9d: from %s", (count += 1), m)
-                if messages.size < @context.back_trace_limit
-                  messages.push(m)
-                elsif lasts.size < @context.back_trace_limit
-                  lasts.push(m).shift
-                  levels += 1
-                end
-              end
-            end
-            attr = STDOUT.tty? ? ATTR_TTY : ATTR_PLAIN
-            print "#{attr[1]}Traceback#{attr[]} (most recent call last):\n"
-            unless lasts.empty?
-              puts lasts.reverse
-              printf "... %d levels...\n", levels if levels > 0
-            end
-            puts messages.reverse
-            messages = exc.to_s.split(/\n/)
-            print "#{attr[1]}#{exc.class} (#{attr[4]}#{messages.shift}#{attr[0, 1]})#{attr[]}\n"
-            puts messages.map {|s| "#{attr[1]}#{s}#{attr[]}\n"}
-            print "Maybe IRB bug!\n" if irb_bug
+            last_error = exc
+            handle_exception(exc)
           end
         end
       end
+    end
+
+    def handle_exception(exc)
+      if exc.backtrace && exc.backtrace[0] =~ /irb(2)?(\/.*|-.*|\.rb)?:/ && exc.class.to_s !~ /^IRB/ &&
+         !(SyntaxError === exc)
+        irb_bug = true
+      else
+        irb_bug = false
+      end
+
+      if STDOUT.tty?
+        attr = ATTR_TTY
+        print "#{attr[1]}Traceback#{attr[]} (most recent call last):\n"
+      else
+        attr = ATTR_PLAIN
+      end
+      messages = []
+      lasts = []
+      levels = 0
+      if exc.backtrace
+        count = 0
+        exc.backtrace.each do |m|
+          m = @context.workspace.filter_backtrace(m) or next unless irb_bug
+          count += 1
+          if attr == ATTR_TTY
+            m = sprintf("%9d: from %s", count, m)
+          else
+            m = "\tfrom #{m}"
+          end
+          if messages.size < @context.back_trace_limit
+            messages.push(m)
+          elsif lasts.size < @context.back_trace_limit
+            lasts.push(m).shift
+            levels += 1
+          end
+        end
+      end
+      if attr == ATTR_TTY
+        unless lasts.empty?
+          puts lasts.reverse
+          printf "... %d levels...\n", levels if levels > 0
+        end
+        puts messages.reverse
+      end
+      m = exc.to_s.split(/\n/)
+      print "#{attr[1]}#{exc.class} (#{attr[4]}#{m.shift}#{attr[0, 1]})#{attr[]}\n"
+      puts m.map {|s| "#{attr[1]}#{s}#{attr[]}\n"}
+      if attr == ATTR_PLAIN
+        puts messages
+        unless lasts.empty?
+          puts lasts
+          printf "... %d levels...\n", levels if levels > 0
+        end
+      end
+      print "Maybe IRB bug!\n" if irb_bug
     end
 
     # Evaluates the given block using the given +path+ as the Context#irb_path

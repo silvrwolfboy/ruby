@@ -4325,6 +4325,50 @@ str_upto_each(VALUE beg, VALUE end, int excl, int (*each)(VALUE, VALUE), VALUE a
     return beg;
 }
 
+VALUE
+rb_str_upto_endless_each(VALUE beg, VALUE (*each)(VALUE, VALUE), VALUE arg)
+{
+    VALUE current;
+    ID succ;
+
+    CONST_ID(succ, "succ");
+    /* both edges are all digits */
+    if (is_ascii_string(beg) && ISDIGIT(RSTRING_PTR(beg)[0]) &&
+	all_digits_p(RSTRING_PTR(beg), RSTRING_LEN(beg))) {
+	VALUE b, args[2], fmt = rb_fstring_cstr("%.*d");
+	int width = RSTRING_LENINT(beg);
+	b = rb_str_to_inum(beg, 10, FALSE);
+	if (FIXNUM_P(b)) {
+	    long bi = FIX2LONG(b);
+	    rb_encoding *usascii = rb_usascii_encoding();
+
+	    while (FIXABLE(bi)) {
+		(*each)(rb_enc_sprintf(usascii, "%.*ld", width, bi), arg);
+		bi++;
+	    }
+	    b = LONG2NUM(bi);
+	}
+	args[0] = INT2FIX(width);
+	while (1) {
+	    args[1] = b;
+	    (*each)(rb_str_format(numberof(args), args, fmt), arg);
+	    b = rb_funcallv(b, succ, 0, 0);
+	}
+    }
+    /* normal case */
+    current = rb_str_dup(beg);
+    while (1) {
+	VALUE next = rb_funcallv(current, succ, 0, 0);
+	(*each)(current, arg);
+	current = next;
+	StringValue(current);
+	if (RSTRING_LEN(current) == 0)
+	    break;
+    }
+
+    return beg;
+}
+
 static int
 include_range_i(VALUE str, VALUE arg)
 {
@@ -5966,7 +6010,7 @@ rb_str_dump(VALUE str)
     char *q, *qend;
     VALUE result;
     int u8 = (encidx == rb_utf8_encindex());
-    static const char nonascii_suffix[] = ".force_encoding(\"%s\")";
+    static const char nonascii_suffix[] = ".dup.force_encoding(\"%s\")";
 
     len = 2;			/* "" */
     if (!rb_enc_asciicompat(enc)) {
@@ -6285,18 +6329,24 @@ str_undump(VALUE str)
 		break;
 	    }
 	    else {
+		static const char force_encoding_suffix[] = ".force_encoding(\""; /* "\")" */
+		static const char dup_suffix[] = ".dup";
 		const char *encname;
 		int encidx;
 		ptrdiff_t size;
 
+		/* check separately for strings dumped by older versions */
+		size = sizeof(dup_suffix) - 1;
+		if (s_end - s > size && memcmp(s, dup_suffix, size) == 0) s += size;
+
+		size = sizeof(force_encoding_suffix) - 1;
+		if (s_end - s <= size) goto invalid_format;
+		if (memcmp(s, force_encoding_suffix, size) != 0) goto invalid_format;
+		s += size;
+
 		if (utf8) {
 		    rb_raise(rb_eRuntimeError, "dumped string contained Unicode escape but used force_encoding");
 		}
-
-		size = rb_strlen_lit(".force_encoding(\"");
-		if (s_end - s <= size) goto invalid_format;
-		if (memcmp(s, ".force_encoding(\"", size) != 0) goto invalid_format;
-		s += size;
 
 		encname = s;
 		s = memchr(s, '"', s_end-s);
@@ -7682,7 +7732,7 @@ split_string(VALUE result, VALUE str, long beg, long len, long empty_count)
  *
  *     "".split(',', -1)               #=> []
  *
- *  If a block is given, invoke the block with each split substrings.
+ *  If a block is given, invoke the block with each split substring.
  *
  */
 
@@ -8996,6 +9046,7 @@ scan_once(VALUE str, VALUE pat, long *start, int set_backref_str)
 	else {
 	    match = rb_backref_get();
 	    regs = RMATCH_REGS(match);
+	    pos = BEG(0);
 	    end = END(0);
 	}
 	if (pos == end) {

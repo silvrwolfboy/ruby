@@ -294,8 +294,8 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 
 	    for (j = 0; i < body->param.keyword->num; i++, j++) {
 		VALUE obj = body->param.keyword->default_values[j];
-		if (obj != Qundef) {
-		    rb_gc_mark_no_pin(obj);
+		if (!SPECIAL_CONST_P(obj)) {
+		    rb_gc_mark(obj);
 		}
 	    }
 	}
@@ -1731,7 +1731,7 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
 	    ret = rb_iseq_defined_string(deftype);
 	    if (ret) break;
 	}
-	else if (insn == BIN(branchiftype) && op_no == 0) {
+	else if (insn == BIN(checktype) && op_no == 0) {
 	    const char *type_str = rb_type_str((enum ruby_value_type)op);
 	    if (type_str) {
 		ret = rb_str_new_cstr(type_str); break;

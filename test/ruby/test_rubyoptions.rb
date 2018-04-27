@@ -450,12 +450,13 @@ class TestRubyOptions < Test::Unit::TestCase
           ["begin", "rescue ; end"],
           ["begin rescue", "else ; end"],
           ["begin", "ensure ; end"],
-          ["case nil", "when true; end"],
+          ["  case nil", "when true; end"],
+          ["case nil; when true", "end"],
         ].each do
           |b, e = 'end'|
           src = ["#{b}\n", " #{e}\n"]
-          k = b[/\A\S+/]
-          e = e[/\A\S+/]
+          k = b[/\A\s*(\S+)/, 1]
+          e = e[/\A\s*(\S+)/, 1]
 
           a.for("no directives with #{b}") do
             err = ["#{t.path}:2: warning: mismatched indentations at '#{e}' with '#{k}' at 1"]
@@ -1018,5 +1019,10 @@ class TestRubyOptions < Test::Unit::TestCase
         assert_ruby_status([{"RUBYLIB"=>"."}, *%w[-E cp932:utf-8 a.rb]])
       end
     end
+  end
+
+  def test_null_script
+    skip "#{IO::NULL} is not a character device" unless File.chardev?(IO::NULL)
+    assert_in_out_err([IO::NULL], success: true)
   end
 end

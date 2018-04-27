@@ -1452,7 +1452,7 @@ heap_pages_expand_sorted(rb_objspace_t *objspace)
 {
     /* usually heap_allocatable_pages + heap_eden->total_pages == heap_pages_sorted_length
      * because heap_allocatable_pages contains heap_tomb->total_pages (recycle heap_tomb pages).
-     * howerver, if there are pages which do not have empty slots, then try to create new pages
+     * however, if there are pages which do not have empty slots, then try to create new pages
      * so that the additional allocatable_pages counts (heap_tomb->total_pages) are added.
      */
     size_t next_length = heap_allocatable_pages;
@@ -2451,16 +2451,6 @@ Init_heap(void)
 
     heap_add_pages(objspace, heap_eden, gc_params.heap_init_slots / HEAP_PAGE_OBJ_LIMIT);
     init_mark_stack(&objspace->mark_stack);
-
-#ifdef USE_SIGALTSTACK
-    {
-	/* altstack of another threads are allocated in another place */
-	rb_thread_t *th = GET_THREAD();
-	void *tmp = th->altstack;
-	th->altstack = malloc(rb_sigaltstack_size());
-	free(tmp); /* free previously allocated area */
-    }
-#endif
 
     objspace->profile.invoke_time = getrusage_time();
     finalizer_table = st_init_numtable();

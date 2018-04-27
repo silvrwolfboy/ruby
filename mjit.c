@@ -101,7 +101,7 @@ extern void rb_native_mutex_unlock(rb_nativethread_lock_t *lock);
 extern void rb_native_mutex_initialize(rb_nativethread_lock_t *lock);
 extern void rb_native_mutex_destroy(rb_nativethread_lock_t *lock);
 
-extern void rb_native_cond_initialize(rb_nativethread_cond_t *cond, int flags);
+extern void rb_native_cond_initialize(rb_nativethread_cond_t *cond);
 extern void rb_native_cond_destroy(rb_nativethread_cond_t *cond);
 extern void rb_native_cond_signal(rb_nativethread_cond_t *cond);
 extern void rb_native_cond_broadcast(rb_nativethread_cond_t *cond);
@@ -1105,7 +1105,7 @@ mjit_add_iseq_to_process(const rb_iseq_t *iseq)
 {
     struct rb_mjit_unit_node *node;
 
-    if (!mjit_init_p)
+    if (!mjit_init_p || pch_status == PCH_FAILED)
         return;
 
     iseq->body->jit_func = (mjit_func_t)NOT_READY_JIT_ISEQ_FUNC;
@@ -1139,7 +1139,7 @@ mjit_get_iseq_func(struct rb_iseq_constant_body *body)
     tv.tv_usec = 1000;
     while (body->jit_func == (mjit_func_t)NOT_READY_JIT_ISEQ_FUNC) {
         tries++;
-        if (tries / 1000 > MJIT_WAIT_TIMEOUT_SECONDS) {
+        if (tries / 1000 > MJIT_WAIT_TIMEOUT_SECONDS || pch_status == PCH_FAILED) {
             CRITICAL_SECTION_START(3, "in mjit_get_iseq_func to set jit_func");
             body->jit_func = (mjit_func_t)NOT_COMPILABLE_JIT_ISEQ_FUNC; /* JIT worker seems dead. Give up. */
             CRITICAL_SECTION_FINISH(3, "in mjit_get_iseq_func to set jit_func");
@@ -1176,13 +1176,20 @@ init_header_filename(void)
     const size_t header_name_len = sizeof(header_name) - 1;
     char *p;
 #ifdef _WIN32
+    static const char libdirname[] = "/"
+# ifdef LIBDIR_BASENAME
+	LIBDIR_BASENAME
+# else
+	"lib"
+# endif
+	;
     static const char libpathflag[] =
 # ifdef _MSC_VER
         "-LIBPATH:"
 # else
         "-L"
 # endif
-            ;
+	;
     const size_t libpathflag_len = sizeof(libpathflag) - 1;
 #endif
 
@@ -1210,9 +1217,9 @@ init_header_filename(void)
     p = append_str2(p, basedir, baselen);
     *p = '\0';
 
-    libruby_installed = xmalloc(libpathflag_len + baselen + rb_strlen_lit("/lib") + 1);
+    libruby_installed = xmalloc(libpathflag_len + baselen + sizeof(libdirname));
     p = append_str2(libruby_installed, libruby_build, p - libruby_build);
-    p = append_lit(p, "/lib");
+    p = append_str(p, libdirname);
     *p = '\0';
 #endif
 }
@@ -1370,10 +1377,10 @@ mjit_init(struct mjit_options *opts)
 
     /* Initialize mutex */
     rb_native_mutex_initialize(&mjit_engine_mutex);
-    rb_native_cond_initialize(&mjit_pch_wakeup, RB_CONDATTR_CLOCK_MONOTONIC);
-    rb_native_cond_initialize(&mjit_client_wakeup, RB_CONDATTR_CLOCK_MONOTONIC);
-    rb_native_cond_initialize(&mjit_worker_wakeup, RB_CONDATTR_CLOCK_MONOTONIC);
-    rb_native_cond_initialize(&mjit_gc_wakeup, RB_CONDATTR_CLOCK_MONOTONIC);
+    rb_native_cond_initialize(&mjit_pch_wakeup);
+    rb_native_cond_initialize(&mjit_client_wakeup);
+    rb_native_cond_initialize(&mjit_worker_wakeup);
+    rb_native_cond_initialize(&mjit_gc_wakeup);
 
     /* Initialize class_serials cache for compilation */
     valid_class_serials = rb_hash_new();

@@ -738,7 +738,7 @@ PRINTF_ARGS(static void parser_compile_error(struct parser_params*, const char *
 
 static void token_info_push(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_pop(struct parser_params*, const char *token, const rb_code_location_t *loc);
-static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, const rb_code_location_t *loc);
+static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc);
 %}
 
 %pure-parser
@@ -1903,6 +1903,22 @@ arg		: lhs '=' arg_rhs
 		    /*% %*/
 		    /*% ripper: dot3!($1, $3) %*/
 		    }
+		| arg tDOT2
+		    {
+		    /*%%%*/
+			value_expr($1);
+			$$ = NEW_DOT2($1, new_nil(&@$), &@$);
+		    /*% %*/
+		    /*% ripper: dot2!($1, Qnil) %*/
+		    }
+		| arg tDOT3
+		    {
+		    /*%%%*/
+			value_expr($1);
+			$$ = NEW_DOT3($1, new_nil(&@$), &@$);
+		    /*% %*/
+		    /*% ripper: dot3!($1, Qnil) %*/
+		    }
 		| arg '+' arg
 		    {
 			$$ = call_bin_op(p, $1, '+', $3, &@2, &@$);
@@ -2170,7 +2186,20 @@ command_args	:   {
 		    }
 		  call_args
 		    {
+			/* call_args can be followed by tLBRACE_ARG (that does CMDARG_PUSH(0) in the lexer)
+			 * but the push must be done after CMDARG_POP() in the parser.
+			 * So this code does CMDARG_POP() to pop 0 pushed by tLBRACE_ARG,
+			 * CMDARG_POP() to pop 1 pushed by command_args,
+			 * and CMDARG_PUSH(0) to restore back the flag set by tLBRACE_ARG.
+			 */
+			int lookahead = 0;
+			switch (yychar) {
+			  case tLBRACE_ARG:
+			    lookahead = 1;
+			}
+			if (lookahead) CMDARG_POP();
 			CMDARG_POP();
+			if (lookahead) CMDARG_PUSH(0);
 			$$ = $2;
 		    }
 		;
@@ -2731,31 +2760,33 @@ k_do_block	: keyword_do_block
 
 k_rescue	: keyword_rescue
 		    {
-			token_info_warn(p, "rescue", p->token_info, &@$);
+			token_info_warn(p, "rescue", p->token_info, 1, &@$);
 		    }
 		;
 
 k_ensure	: keyword_ensure
 		    {
-			token_info_warn(p, "ensure", p->token_info, &@$);
+			token_info_warn(p, "ensure", p->token_info, 1, &@$);
 		    }
 		;
 
 k_when		: keyword_when
 		    {
-			token_info_warn(p, "when", p->token_info, &@$);
+			token_info_warn(p, "when", p->token_info, 0, &@$);
 		    }
 		;
 
 k_else		: keyword_else
 		    {
-			token_info_warn(p, "else", p->token_info, &@$);
+			token_info *ptinfo_beg = p->token_info;
+			int same = ptinfo_beg && strcmp(ptinfo_beg->token, "case") != 0;
+			token_info_warn(p, "else", p->token_info, same, &@$);
 		    }
 		;
 
 k_elsif 	: keyword_elsif
 		    {
-			token_info_warn(p, "elsif", p->token_info, &@$);
+			token_info_warn(p, "elsif", p->token_info, 1, &@$);
 		    }
 		;
 
@@ -4533,12 +4564,12 @@ token_info_pop(struct parser_params *p, const char *token, const rb_code_locatio
     p->token_info = ptinfo_beg->next;
 
     /* indentation check of matched keywords (begin..end, if..end, etc.) */
-    token_info_warn(p, token, ptinfo_beg, loc);
+    token_info_warn(p, token, ptinfo_beg, 1, loc);
     xfree(ptinfo_beg);
 }
 
 static void
-token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, const rb_code_location_t *loc)
+token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc)
 {
     token_info ptinfo_end_body, *ptinfo_end = &ptinfo_end_body;
     if (!p->token_info_enabled) return;
@@ -4547,6 +4578,7 @@ token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_b
     if (ptinfo_beg->linenum == ptinfo_end->linenum) return; /* ignore one-line block */
     if (ptinfo_beg->nonspc || ptinfo_end->nonspc) return; /* ignore keyword in the middle of a line */
     if (ptinfo_beg->column == ptinfo_end->column) return; /* the indents are matched */
+    if (!same && ptinfo_beg->column < ptinfo_end->column) return;
     rb_warn3L(ptinfo_end->linenum,
 	      "mismatched indentations at '%s' with '%s' at %d",
 	      WARN_S(token), WARN_S(ptinfo_beg->token), WARN_I(ptinfo_beg->linenum));

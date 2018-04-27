@@ -814,6 +814,9 @@ CODE
     assert_raise(RuntimeError) { S('"\xA"').undump }
     assert_raise(RuntimeError) { S('"\\"').undump }
     assert_raise(RuntimeError) { S(%("\0")).undump }
+    assert_raise_with_message(RuntimeError, /invalid/) {
+      '"\\u{007F}".xxxxxx'.undump
+    }
   end
 
   def test_dup
@@ -1539,6 +1542,8 @@ CODE
     assert_nil($~)
 
     assert_equal(3, S("hello hello hello").scan("hello".taint).count(&:tainted?))
+
+    assert_equal(%w[1 2 3], S("a1 a2 a3").scan(/a\K./))
   end
 
   def test_size
