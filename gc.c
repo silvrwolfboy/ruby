@@ -6983,15 +6983,10 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     int uncollectible;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
-    struct heap_page *from;
-    struct heap_page *to;
 
     marked = rb_objspace_marked_object_p((VALUE)src);
     wb_unprotected = RVALUE_WB_UNPROTECTED((VALUE)src);
     uncollectible = RVALUE_UNCOLLECTIBLE((VALUE)src);
-
-    from = GET_HEAP_PAGE((VALUE)src);
-    to = GET_HEAP_PAGE((VALUE)dest);
 
     objspace->total_allocated_objects++;
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
