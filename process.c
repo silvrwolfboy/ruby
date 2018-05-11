@@ -2355,6 +2355,14 @@ open_func(void *ptr)
     return NULL;
 }
 
+static void
+rb_execarg_allocate_dup2_tmpbuf(struct rb_execarg *eargp, long len)
+{
+    VALUE tmpbuf = rb_imemo_tmpbuf_auto_free_pointer(NULL);
+    ((rb_imemo_tmpbuf_t *)tmpbuf)->ptr = ruby_xmalloc(run_exec_dup2_tmpbuf_size(len));
+    eargp->dup2_tmpbuf = tmpbuf;
+}
+
 static VALUE
 rb_execarg_parent_start1(VALUE execarg_obj)
 {
@@ -2409,10 +2417,7 @@ rb_execarg_parent_start1(VALUE execarg_obj)
 
     ary = eargp->fd_dup2;
     if (ary != Qfalse) {
-        size_t len = run_exec_dup2_tmpbuf_size(RARRAY_LEN(ary));
-        VALUE tmpbuf = hide_obj(rb_str_new(0, len));
-        rb_str_set_len(tmpbuf, len);
-        eargp->dup2_tmpbuf = tmpbuf;
+        rb_execarg_allocate_dup2_tmpbuf(eargp, RARRAY_LEN(ary));
     }
 
     unsetenv_others = eargp->unsetenv_others_given && eargp->unsetenv_others_do;
@@ -2775,10 +2780,10 @@ run_exec_dup2(VALUE ary, VALUE tmpbuf, struct rb_execarg *sargp, char *errmsg, s
     long n, i;
     int ret;
     int extra_fd = -1;
-    struct run_exec_dup2_fd_pair *pairs = 0;
+    struct rb_imemo_tmpbuf_struct *buf = (void *)tmpbuf;
+    struct run_exec_dup2_fd_pair *pairs = (void *)buf->ptr;
 
     n = RARRAY_LEN(ary);
-    pairs = (struct run_exec_dup2_fd_pair *)RSTRING_PTR(tmpbuf);
 
     /* initialize oldfd and newfd: O(n) */
     for (i = 0; i < n; i++) {
@@ -3155,10 +3160,7 @@ rb_execarg_run_options(const struct rb_execarg *eargp, struct rb_execarg *sargp,
     if (sargp) {
         VALUE ary = sargp->fd_dup2;
         if (ary != Qfalse) {
-            size_t len = run_exec_dup2_tmpbuf_size(RARRAY_LEN(ary));
-            VALUE tmpbuf = hide_obj(rb_str_new(0, len));
-            rb_str_set_len(tmpbuf, len);
-            sargp->dup2_tmpbuf = tmpbuf;
+            rb_execarg_allocate_dup2_tmpbuf(sargp, RARRAY_LEN(ary));
         }
     }
 
@@ -3270,6 +3272,13 @@ pipe_nocrash(int filedes[2], VALUE fds)
 #define O_BINARY 0
 #endif
 
+static VALUE
+rb_thread_sleep_that_takes_VALUE_as_sole_argument(VALUE n)
+{
+    rb_thread_sleep(NUM2INT(n));
+    return Qundef;
+}
+
 static int
 handle_fork_error(int err, int *status, int *ep, volatile int *try_gc_p)
 {
@@ -3291,7 +3300,7 @@ handle_fork_error(int err, int *status, int *ep, volatile int *try_gc_p)
             return 0;
         }
         else {
-            rb_protect((VALUE (*)())rb_thread_sleep, 1, &state);
+            rb_protect(rb_thread_sleep_that_takes_VALUE_as_sole_argument, INT2FIX(1), &state);
             if (status) *status = state;
             if (!state) return 0;
         }

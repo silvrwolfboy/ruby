@@ -142,6 +142,18 @@ enum fiber_status {
 #define FIBER_RUNNABLE_P(fib)   (FIBER_CREATED_P(fib) || FIBER_SUSPENDED_P(fib))
 
 #if FIBER_USE_NATIVE && !defined(_WIN32)
+static inline void
+fiber_context_create(ucontext_t *context, void (*func)(), void *arg, void *ptr, size_t size)
+{
+    getcontext(context);
+    context->uc_link = NULL;
+    context->uc_stack.ss_sp = ptr;
+    context->uc_stack.ss_size = size;
+    makecontext(context, func, 0);
+}
+#endif
+
+#if FIBER_USE_NATIVE && !defined(_WIN32)
 #define MAX_MACHINE_STACK_CACHE  10
 static int machine_stack_cache_index = 0;
 typedef struct machine_stack_cache_struct {
@@ -156,7 +168,7 @@ struct rb_fiber_struct {
     rb_context_t cont;
     VALUE first_proc;
     struct rb_fiber_struct *prev;
-    const enum fiber_status status;
+    enum fiber_status status;
     /* If a fiber invokes "transfer",
      * then this fiber can't "resume" any more after that.
      * You shouldn't mix "transfer" and "resume".
@@ -223,13 +235,13 @@ rb_ec_verify(const rb_execution_context_t *ec)
 #endif
 
 static void
-fiber_status_set(const rb_fiber_t *fib, enum fiber_status s)
+fiber_status_set(rb_fiber_t *fib, enum fiber_status s)
 {
     if (0) fprintf(stderr, "fib: %p, status: %s -> %s\n", (void *)fib, fiber_status_name(fib->status), fiber_status_name(s));
     VM_ASSERT(!FIBER_TERMINATED_P(fib));
     VM_ASSERT(fib->status != s);
     fiber_verify(fib);
-    *((enum fiber_status *)&fib->status) = s;
+    fib->status = s;
 }
 
 void
@@ -750,6 +762,7 @@ fiber_set_stack_location(void)
     th->ec->machine.stack_start = (void*)(((VALUE)ptr & RB_PAGE_MASK) + STACK_UPPER((void *)&ptr, 0, RB_PAGE_SIZE));
 }
 
+NORETURN(static VOID CALLBACK fiber_entry(void *arg));
 static VOID CALLBACK
 fiber_entry(void *arg)
 {
@@ -757,6 +770,13 @@ fiber_entry(void *arg)
     rb_fiber_start();
 }
 #else /* _WIN32 */
+
+NORETURN(static void fiber_entry(void *arg));
+static void
+fiber_entry(void *arg)
+{
+    rb_fiber_start();
+}
 
 /*
  * FreeBSD require a first (i.e. addr) argument of mmap(2) is not NULL
@@ -768,6 +788,8 @@ fiber_entry(void *arg)
 #else
 #define FIBER_STACK_FLAGS (MAP_PRIVATE | MAP_ANON)
 #endif
+
+#define ERRNOMSG strerror(errno)
 
 static char*
 fiber_machine_stack_alloc(size_t size)
@@ -793,13 +815,13 @@ fiber_machine_stack_alloc(size_t size)
 	errno = 0;
 	ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, FIBER_STACK_FLAGS, -1, 0);
 	if (ptr == MAP_FAILED) {
-	    rb_raise(rb_eFiberError, "can't alloc machine stack to fiber: %s", strerror(errno));
+	    rb_raise(rb_eFiberError, "can't alloc machine stack to fiber: %s", ERRNOMSG);
 	}
 
 	/* guard page setup */
 	page = ptr + STACK_DIR_UPPER(size - RB_PAGE_SIZE, 0);
 	if (mprotect(page, RB_PAGE_SIZE, PROT_NONE) < 0) {
-	    rb_raise(rb_eFiberError, "mprotect failed");
+	    rb_raise(rb_eFiberError, "can't set a guard page: %s", ERRNOMSG);
 	}
     }
 
@@ -828,18 +850,13 @@ fiber_initialize_machine_stack_context(rb_fiber_t *fib, size_t size)
     }
     sec->machine.stack_maxsize = size;
 #else /* not WIN32 */
-    ucontext_t *context = &fib->context;
     char *ptr;
     STACK_GROW_DIR_DETECTION;
 
-    getcontext(context);
     ptr = fiber_machine_stack_alloc(size);
-    context->uc_link = NULL;
-    context->uc_stack.ss_sp = ptr;
-    context->uc_stack.ss_size = size;
     fib->ss_sp = ptr;
     fib->ss_size = size;
-    makecontext(context, rb_fiber_start, 0);
+    fiber_context_create(&fib->context, fiber_entry, NULL, fib->ss_sp, fib->ss_size);
     sec->machine.stack_start = (VALUE*)(ptr + STACK_DIR_UPPER(0, size));
     sec->machine.stack_maxsize = size - RB_PAGE_SIZE;
 #endif
@@ -1600,12 +1617,10 @@ fiber_store(rb_fiber_t *next_fib, rb_thread_t *th)
 #if FIBER_USE_NATIVE
     fiber_setcontext(next_fib, fib);
     /* restored */
-#ifndef _WIN32
+#ifdef MAX_MACHINE_STACK_CACHE
     if (terminated_machine_stack.ptr) {
 	if (machine_stack_cache_index < MAX_MACHINE_STACK_CACHE) {
-	    machine_stack_cache[machine_stack_cache_index].ptr = terminated_machine_stack.ptr;
-	    machine_stack_cache[machine_stack_cache_index].size = terminated_machine_stack.size;
-	    machine_stack_cache_index++;
+	    machine_stack_cache[machine_stack_cache_index++] = terminated_machine_stack;
 	}
 	else {
 	    if (terminated_machine_stack.ptr != fib->cont.machine.stack) {
@@ -1743,11 +1758,13 @@ rb_fiber_terminate(rb_fiber_t *fib, int need_interrupt)
     rb_fiber_close(fib);
 
 #if FIBER_USE_NATIVE && !defined(_WIN32)
+    fib->context.uc_stack.ss_sp = NULL;
+#endif
+#ifdef MAX_MACHINE_STACK_CACHE
     /* Ruby must not switch to other thread until storing terminated_machine_stack */
     terminated_machine_stack.ptr = fib->ss_sp;
     terminated_machine_stack.size = fib->ss_size / sizeof(VALUE);
     fib->ss_sp = NULL;
-    fib->context.uc_stack.ss_sp = NULL;
     fib->cont.machine.stack = NULL;
     fib->cont.machine.stack_size = 0;
 #endif

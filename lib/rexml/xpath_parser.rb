@@ -47,11 +47,12 @@ module REXML
     include XMLTokens
     LITERAL    = /^'([^']*)'|^"([^"]*)"/u
 
-    def initialize( )
+    def initialize(strict: false)
       @parser = REXML::Parsers::XPathParser.new
       @namespaces = nil
       @variables = {}
       @nest = 0
+      @strict = strict
     end
 
     def namespaces=( namespaces={} )
@@ -139,7 +140,9 @@ module REXML
     end
 
     private
-
+    def strict?
+      @strict
+    end
 
     # Returns a String namespace for a node, given a prefix
     # The rules are:
@@ -431,7 +434,7 @@ module REXML
         while path_stack[0] == :predicate
           path_stack.shift # :predicate
           predicate_expression = path_stack.shift.dclone
-          nodesets = predicate(predicate_expression, nodesets)
+          nodesets = evaluate_predicate(predicate_expression, nodesets)
         end
         if nodesets.size == 1
           ordered_nodeset = nodesets[0]
@@ -474,7 +477,13 @@ module REXML
               if prefix.nil?
                 raw_node.name == name
               elsif prefix.empty?
-                raw_node.name == name and raw_node.namespace == ""
+                if strict?
+                  raw_node.name == name and raw_node.namespace == ""
+                else
+                  # FIXME: This DOUBLES the time XPath searches take
+                  ns = get_namespace(raw_node, prefix)
+                  raw_node.name == name and raw_node.namespace == ns
+                end
               else
                 # FIXME: This DOUBLES the time XPath searches take
                 ns = get_namespace(raw_node, prefix)
@@ -569,7 +578,7 @@ module REXML
       new_nodeset
     end
 
-    def predicate(expression, nodesets)
+    def evaluate_predicate(expression, nodesets)
       # enter(:predicate, expression, nodesets)
       new_nodesets = nodesets.collect do |nodeset|
         new_nodeset = []
@@ -603,6 +612,7 @@ module REXML
         end
         new_nodeset
       end
+      new_nodesets
     # ensure
     #   leave(:predicate, new_nodesets)
     end
@@ -722,7 +732,6 @@ module REXML
 
     def following(node)
       followings = []
-      position = 1
       following_node = next_sibling_node(node)
       while following_node
         followings << XPathNode.new(following_node,
@@ -759,8 +768,8 @@ module REXML
         # trace(:child, node_type, node)
         case node_type
         when :element
-          nodesets << raw_node.children.collect.with_index do |node, i|
-            XPathNode.new(node, position: i + 1)
+          nodesets << raw_node.children.collect.with_index do |child_node, i|
+            XPathNode.new(child_node, position: i + 1)
           end
         when :document
           new_nodeset = []

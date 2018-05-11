@@ -1281,20 +1281,18 @@ update_catch_except_flags(struct rb_iseq_constant_body *body)
 
     /* This assumes that a block has parent_iseq which may catch an exception from the block, and that
        BREAK/NEXT/REDO catch table entries are used only when `throw` insn is used in the block. */
-    if (body->parent_iseq != NULL) {
-        pos = 0;
-        while (pos < body->iseq_size) {
+    pos = 0;
+    while (pos < body->iseq_size) {
 #if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
-            insn = rb_vm_insn_addr2insn((void *)body->iseq_encoded[pos]);
+        insn = rb_vm_insn_addr2insn((void *)body->iseq_encoded[pos]);
 #else
-            insn = (int)body->iseq_encoded[pos];
+        insn = (int)body->iseq_encoded[pos];
 #endif
-            if (insn == BIN(throw)) {
-                struct rb_iseq_constant_body *parent_body = body->parent_iseq->body;
-                set_catch_except_p(parent_body);
-            }
-            pos += insn_len(insn);
+        if (insn == BIN(throw)) {
+            set_catch_except_p(body);
+            break;
         }
+        pos += insn_len(insn);
     }
 
     if (ct == NULL)
@@ -2677,7 +2675,8 @@ iseq_peephole_optimize(rb_iseq_t *iseq, LINK_ELEMENT *list, const int do_tailcal
 	    remove_unreachable_chunk(iseq, iobj->link.next);
 	    goto again;
 	}
-	else if (IS_INSN_ID(diobj, leave) ? !(dniobj = 0) :
+	else if (dniobj = 0,
+		 IS_INSN_ID(diobj, leave) ||
 		 (diobj->operand_size == 0 &&
 		  (dniobj = (INSN *)get_next_insn(diobj)) != 0 &&
 		  (IS_INSN_ID(dniobj, leave) || (dniobj = 0)))) {
@@ -8931,7 +8930,7 @@ ibf_dump_iseq_each(struct ibf_dump *dump, const rb_iseq_t *iseq)
     dump_body.ci_entries =           ibf_dump_ci_entries(dump, iseq);
     dump_body.cc_entries =           NULL;
     dump_body.variable.coverage      = Qnil;
-    dump_body.variable.original_iseq = Qnil;
+    dump_body.variable.original_iseq = NULL;
 
     IBF_W_ALIGN(struct rb_iseq_constant_body);
     return IBF_WV(dump_body);

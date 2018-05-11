@@ -425,7 +425,7 @@ class FTPTest < Test::Unit::TestCase
           end
           conn.print(l, "\r\n")
         end
-      rescue Errno::EPIPE, Errno::EPROTOTYPE
+      rescue Errno::EPIPE
       ensure
         assert_nil($!)
         conn.close
@@ -2158,7 +2158,7 @@ EOF
           begin
             ftp = Net::FTP.new
             ftp.resume = resume
-            ftp.read_timeout = 0.2
+            ftp.read_timeout = RubyVM::MJIT.enabled? ? 1 : 0.2 # use large timeout for --jit-wait
             ftp.connect(SERVER_ADDR, server.port)
             ftp.login
             assert_match(/\AUSER /, commands.shift)

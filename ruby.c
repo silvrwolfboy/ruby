@@ -497,13 +497,31 @@ dladdr_path(const void* addr)
 
 #define INITIAL_LOAD_PATH_MARK rb_intern_const("@gem_prelude_index")
 
+VALUE ruby_archlibdir_path, ruby_prefix_path;
+
 void
 ruby_init_loadpath_safe(int safe_level)
 {
-    VALUE load_path;
+    VALUE load_path, archlibdir = 0;
     ID id_initial_load_path_mark;
     const char *paths = ruby_initial_load_paths;
 #if defined LOAD_RELATIVE
+#if !defined ENABLE_MULTIARCH
+# define RUBY_ARCH_PATH ""
+#elif defined RUBY_ARCH
+# define RUBY_ARCH_PATH "/"RUBY_ARCH
+#else
+# define RUBY_ARCH_PATH "/"RUBY_PLATFORM
+#endif
+    static const char libdir[] = "/"
+#ifdef LIBDIR_BASENAME
+	LIBDIR_BASENAME
+#else
+	"lib"
+#endif
+	RUBY_ARCH_PATH;
+    const ptrdiff_t libdir_len = (ptrdiff_t)sizeof(libdir)
+	- rb_strlen_lit(RUBY_ARCH_PATH) - 1;
     char *libpath;
     VALUE sopath;
     size_t baselen;
@@ -561,23 +579,22 @@ ruby_init_loadpath_safe(int safe_level)
     p = strrchr(libpath, '/');
     if (p) {
 	static const char bindir[] = "/bin";
-#ifdef LIBDIR_BASENAME
-	static const char libdir[] = "/"LIBDIR_BASENAME;
-#else
-	static const char libdir[] = "/lib";
-#endif
 	const ptrdiff_t bindir_len = (ptrdiff_t)sizeof(bindir) - 1;
-	const ptrdiff_t libdir_len = (ptrdiff_t)sizeof(libdir) - 1;
 
-#ifdef ENABLE_MULTIARCH
 	const char *p2 = NULL;
 
+#ifdef ENABLE_MULTIARCH
       multiarch:
 #endif
 	if (p - libpath >= bindir_len && !STRNCASECMP(p - bindir_len, bindir, bindir_len)) {
 	    p -= bindir_len;
+	    archlibdir = rb_str_subseq(sopath, 0, p - libpath);
+	    rb_str_cat_cstr(archlibdir, libdir);
+	    OBJ_FREEZE_RAW(archlibdir);
 	}
 	else if (p - libpath >= libdir_len && !strncmp(p - libdir_len, libdir, libdir_len)) {
+	    archlibdir = rb_str_subseq(sopath, 0, (p2 ? p2 : p) - libpath);
+	    OBJ_FREEZE_RAW(archlibdir);
 	    p -= libdir_len;
 	}
 #ifdef ENABLE_MULTIARCH
@@ -603,6 +620,13 @@ ruby_init_loadpath_safe(int safe_level)
 #define RUBY_RELATIVE(path, len) rubylib_path_new((path), (len))
 #define PREFIX_PATH() RUBY_RELATIVE(ruby_exec_prefix, exec_prefix_len)
 #endif
+    rb_gc_register_address(&ruby_prefix_path);
+    ruby_prefix_path = PREFIX_PATH();
+    OBJ_FREEZE_RAW(ruby_prefix_path);
+    if (!archlibdir) archlibdir = ruby_prefix_path;
+    rb_gc_register_address(&ruby_archlibdir_path);
+    ruby_archlibdir_path = archlibdir;
+
     load_path = GET_VM()->load_path;
 
     if (safe_level == 0) {
@@ -618,7 +642,7 @@ ruby_init_loadpath_safe(int safe_level)
 	paths += len + 1;
     }
 
-    rb_const_set(rb_cObject, rb_intern_const("TMP_RUBY_PREFIX"), rb_obj_freeze(PREFIX_PATH()));
+    rb_const_set(rb_cObject, rb_intern_const("TMP_RUBY_PREFIX"), ruby_prefix_path);
 }
 
 
@@ -735,6 +759,7 @@ moreswitches(const char *s, ruby_cmdline_options_t *opt, int envopt)
     char **argv, *p;
     const char *ap = 0;
     VALUE argstr, argary;
+    void *ptr;
 
     while (ISSPACE(*s)) s++;
     if (!*s) return;
@@ -757,7 +782,8 @@ moreswitches(const char *s, ruby_cmdline_options_t *opt, int envopt)
     argc = RSTRING_LEN(argary) / sizeof(ap);
     ap = 0;
     rb_str_cat(argary, (char *)&ap, sizeof(ap));
-    argv = (char **)RSTRING_PTR(argary);
+    argv = ptr = ALLOC_N(char *, argc);
+    MEMMOVE(argv, RSTRING_PTR(argary), char *, argc);
 
     while ((i = proc_options(argc, argv, opt, envopt)) > 1 && envopt && (argc -= i) > 0) {
 	argv += i;
@@ -770,6 +796,7 @@ moreswitches(const char *s, ruby_cmdline_options_t *opt, int envopt)
 	}
     }
 
+    ruby_xfree(ptr);
     /* get rid of GC */
     rb_str_resize(argary, 0);
     rb_str_resize(argstr, 0);

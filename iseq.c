@@ -281,7 +281,6 @@ rb_iseq_mark(const rb_iseq_t *iseq)
 	}
 
 	rb_gc_mark_no_pin(body->variable.coverage);
-	rb_gc_mark_no_pin(body->variable.original_iseq);
 	rb_gc_mark_no_pin(body->location.label);
 	rb_gc_mark_no_pin(body->location.base_label);
 	rb_gc_mark_no_pin(body->location.pathobj);
@@ -1865,7 +1864,7 @@ rb_insn_operand_intern(const rb_iseq_t *iseq,
 	break;
 
       default:
-	rb_bug("insn_operand_intern: unknown operand type: %c", type);
+	rb_bug("unknown operand type: %c", type);
     }
     return ret;
 }
@@ -1896,10 +1895,11 @@ rb_iseq_disasm_insn(VALUE ret, const VALUE *code, size_t pos,
 
     insn_name_buff = insn_name(insn);
     if (1) {
-	rb_str_catf(str, "%04"PRIuSIZE" %-16s ", pos, insn_name_buff);
+	extern const int rb_vm_max_insn_name_size;
+	rb_str_catf(str, "%04"PRIuSIZE" %-*s ", pos, rb_vm_max_insn_name_size, insn_name_buff);
     }
     else {
-	rb_str_catf(str, "%04"PRIuSIZE" %-16.*s ", pos,
+	rb_str_catf(str, "%04"PRIuSIZE" %-28.*s ", pos,
 		    (int)strcspn(insn_name_buff, "_"), insn_name_buff);
     }
 
@@ -1968,7 +1968,7 @@ catch_type(int type)
       case CATCH_TYPE_NEXT:
 	return "next";
       default:
-	rb_bug("unknown catch type (%d)", type);
+	rb_bug("unknown catch type: %d", type);
 	return 0;
     }
 }
@@ -2375,7 +2375,7 @@ ruby_node_name(int node)
     switch (node) {
 #include "node_name.inc"
       default:
-	rb_bug("unknown node (%d)", node);
+	rb_bug("unknown node: %d", node);
 	return 0;
     }
 }
@@ -2406,7 +2406,7 @@ exception_type2symbol(VALUE type)
       case CATCH_TYPE_REDO:   CONST_ID(id, "redo");   break;
       case CATCH_TYPE_NEXT:   CONST_ID(id, "next");   break;
       default:
-	rb_bug("exception_type2symbol: unknown type %d", (int)type);
+	rb_bug("unknown exception type: %d", (int)type);
     }
     return ID2SYM(id);
 }
@@ -2478,7 +2478,7 @@ iseq_data_to_ary(const rb_iseq_t *iseq)
       case ISEQ_TYPE_EVAL:   type = sym_eval;   break;
       case ISEQ_TYPE_MAIN:   type = sym_main;   break;
       case ISEQ_TYPE_PLAIN:  type = sym_plain;  break;
-      default: rb_bug("unsupported iseq type");
+      default: rb_bug("unsupported iseq type: %d", (int)iseq->body->type);
     };
 
     /* locals */

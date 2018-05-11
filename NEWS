@@ -18,7 +18,7 @@ with all sufficient information, see the ChangeLog file or Redmine
 
 * refinements take place at block passing.  [Feature #14223]
 
-* `else` without `rescue` is now causes a syntax error.  [EXPERIMENTAL]
+* `else` without `rescue` now causes a syntax error.  [EXPERIMENTAL]
 
 * constant names may start with a non-ASCII capital letter. [Feature #13770]
 
@@ -118,7 +118,7 @@ with all sufficient information, see the ChangeLog file or Redmine
 
 * String
 
-  * String#split yields each substrings to the block if given. [Feature #4780]
+  * String#split yields each substring to the block if given. [Feature #4780]
 
 === Stdlib updates (outstanding ones only)
 
@@ -140,6 +140,41 @@ with all sufficient information, see the ChangeLog file or Redmine
   * New method:
 
     * Matrix#antisymmetric?
+
+* REXML
+
+  * Improved some XPath implementations:
+
+    * concat() function: Stringify all arguments before concatenating
+
+    * string() function: Support context node
+
+    * string() function: Support processing instruction node
+
+    * Support "*:#{ELEMENT_NAME}" syntax in XPath 2.0
+
+  * Fixed some XPath implementations:
+
+    * "//#{ELEMENT_NAME}[#{POSITION}]" case
+
+    * string() function: Fix function(document) returns nodes that are
+      out of root elements.
+
+    * "/ #{ELEMENT_NAME} " case
+
+    * "/ #{ELEMENT_NAME} [ #{PREDICATE} ]" case
+
+    * "/ #{AXIS}:: #{ELEMENT_NAME} " case
+
+    * "#{N}-#{M}" case: One ore more white spaces were required before "-"
+
+    * "/child::node()" case
+
+    * "#{FUNCTION}()/#{PATH}" case
+
+    * "@#{ATTRIBUTE}/parent::" case
+
+    * "name(#{NODE_SET})" case
 
 * Set
 
@@ -191,3 +226,15 @@ with all sufficient information, see the ChangeLog file or Redmine
 * VM generator script renewal; makes the generated VM more optimized. [GH-1779]
 
 === Miscellaneous changes
+
+* On macOS, shared libraries no longer include a full version number of ruby in their names.
+  This eliminates the burden of each teeny upgrade on the platform that users need to rebuild every extension library.
+
+  * Before:
+    * libruby.2.6.0.dylib
+    * libruby.2.6.dylib -> libruby.2.6.0.dylib
+    * libruby.dylib -> libruby.2.6.0.dylib
+
+  * After:
+    * libruby.2.6.dylib
+    * libruby.dylib -> libruby.2.6.dylib

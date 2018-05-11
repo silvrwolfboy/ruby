@@ -3270,9 +3270,16 @@ rb_cstr_to_dbl_raise(const char *p, int badcheck, int raise, int *error)
     if (*end) {
         char buf[DBL_DIG * 4 + 10];
         char *n = buf;
-        char *e = buf + sizeof(buf) - 1;
+        char *const init_e = buf + DBL_DIG * 4;
+        char *e = init_e;
         char prev = 0;
+        int dot_seen = FALSE;
 
+        switch (*p) {case '+': case '-': prev = *n++ = *p++;}
+        if (*p == '0') {
+            prev = *n++ = '0';
+            while (*++p == '0');
+        }
         while (p < end && n < e) prev = *n++ = *p++;
         while (*p) {
             if (*p == '_') {
@@ -3283,6 +3290,27 @@ rb_cstr_to_dbl_raise(const char *p, int badcheck, int raise, int *error)
                 }
             }
             prev = *p++;
+            if (e == init_e && (prev == 'e' || prev == 'E' || prev == 'p' || prev == 'P')) {
+                e = buf + sizeof(buf) - 1;
+                *n++ = prev;
+                switch (*p) {case '+': case '-': prev = *n++ = *p++;}
+                if (*p == '0') {
+                    prev = *n++ = '0';
+                    while (*++p == '0');
+                }
+                continue;
+            }
+            else if (ISSPACE(prev)) {
+                while (ISSPACE(*p)) ++p;
+                if (*p) {
+                    if (badcheck) goto bad;
+                    break;
+                }
+            }
+            else if (prev == '.' ? dot_seen++ : !ISDIGIT(prev)) {
+                if (badcheck) goto bad;
+                break;
+            }
             if (n < e) *n++ = prev;
         }
         *n = '\0';

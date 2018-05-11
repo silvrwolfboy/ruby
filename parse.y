@@ -183,7 +183,7 @@ typedef struct rb_strterm_struct rb_strterm_t;
                      token
 */
 struct parser_params {
-    rb_imemo_alloc_t *heap;
+    rb_imemo_tmpbuf_t *heap;
 
     YYSTYPE *lval;
 
@@ -1906,16 +1906,24 @@ arg		: lhs '=' arg_rhs
 		| arg tDOT2
 		    {
 		    /*%%%*/
+                        YYLTYPE loc;
+                        loc.beg_pos = @2.end_pos;
+                        loc.end_pos = @2.end_pos;
+
 			value_expr($1);
-			$$ = NEW_DOT2($1, new_nil(&@$), &@$);
+			$$ = NEW_DOT2($1, new_nil(&loc), &@$);
 		    /*% %*/
 		    /*% ripper: dot2!($1, Qnil) %*/
 		    }
 		| arg tDOT3
 		    {
 		    /*%%%*/
+                        YYLTYPE loc;
+                        loc.beg_pos = @2.end_pos;
+                        loc.end_pos = @2.end_pos;
+
 			value_expr($1);
-			$$ = NEW_DOT3($1, new_nil(&@$), &@$);
+			$$ = NEW_DOT3($1, new_nil(&loc), &@$);
 		    /*% %*/
 		    /*% ripper: dot3!($1, Qnil) %*/
 		    }
@@ -2505,7 +2513,7 @@ primary		: literal
 			NODE *args, *scope, *internal_var = NEW_DVAR(id, &@2);
 			ID *tbl = ALLOC_N(ID, 2);
 			tbl[0] = 1 /* length of local var table */; tbl[1] = id /* internal id */;
-			add_mark_object(p, (VALUE)rb_imemo_alloc_new((VALUE)tbl, 0, 0, 0));
+			add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(tbl));
 
 			switch (nd_type($2)) {
 			  case NODE_LASGN:
@@ -9988,7 +9996,7 @@ new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, 
     NODE *node;
 
     args = ZALLOC(struct rb_args_info);
-    add_mark_object(p, (VALUE)rb_imemo_alloc_new((VALUE)args, 0, 0, 0));
+    add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(args));
     node = NEW_NODE(NODE_ARGS, 0, 0, args, &NULL_LOC);
     if (p->error_p) return node;
 
@@ -10350,7 +10358,7 @@ local_tbl(struct parser_params *p)
     if (--j < cnt) REALLOC_N(buf, ID, (cnt = j) + 1);
     buf[0] = cnt;
 
-    add_mark_object(p, (VALUE)rb_imemo_alloc_new((VALUE)buf, 0, 0, 0));
+    add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(buf));
 
     return buf;
 }
@@ -10968,7 +10976,9 @@ rb_parser_set_yydebug(VALUE self, VALUE flag)
 #ifndef RIPPER
 #ifdef YYMALLOC
 #define HEAPCNT(n, size) ((n) * (size) / sizeof(YYSTYPE))
-#define NEWHEAP() rb_imemo_alloc_new(0, (VALUE)p->heap, 0, 0)
+/* Keep the order; NEWHEAP then xmalloc and ADD2HEAP to get rid of
+ * potential memory leak */
+#define NEWHEAP() rb_imemo_tmpbuf_parser_heap(0, p->heap, 0)
 #define ADD2HEAP(new, cnt, ptr) ((p->heap = (new))->ptr = (ptr), \
 			   (new)->cnt = (cnt), (ptr))
 
@@ -10976,7 +10986,7 @@ void *
 rb_parser_malloc(struct parser_params *p, size_t size)
 {
     size_t cnt = HEAPCNT(1, size);
-    rb_imemo_alloc_t *n = NEWHEAP();
+    rb_imemo_tmpbuf_t *n = NEWHEAP();
     void *ptr = xmalloc(size);
 
     return ADD2HEAP(n, cnt, ptr);
@@ -10986,7 +10996,7 @@ void *
 rb_parser_calloc(struct parser_params *p, size_t nelem, size_t size)
 {
     size_t cnt = HEAPCNT(nelem, size);
-    rb_imemo_alloc_t *n = NEWHEAP();
+    rb_imemo_tmpbuf_t *n = NEWHEAP();
     void *ptr = xcalloc(nelem, size);
 
     return ADD2HEAP(n, cnt, ptr);
@@ -10995,7 +11005,7 @@ rb_parser_calloc(struct parser_params *p, size_t nelem, size_t size)
 void *
 rb_parser_realloc(struct parser_params *p, void *ptr, size_t size)
 {
-    rb_imemo_alloc_t *n;
+    rb_imemo_tmpbuf_t *n;
     size_t cnt = HEAPCNT(1, size);
 
     if (ptr && (n = p->heap) != NULL) {
@@ -11015,7 +11025,7 @@ rb_parser_realloc(struct parser_params *p, void *ptr, size_t size)
 void
 rb_parser_free(struct parser_params *p, void *ptr)
 {
-    rb_imemo_alloc_t **prev = &p->heap, *n;
+    rb_imemo_tmpbuf_t **prev = &p->heap, *n;
 
     while ((n = *prev) != NULL) {
 	if (n->ptr == ptr) {

@@ -478,7 +478,6 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
 	return;
 
       case NODE_CALL:
-      case NODE_OPCALL:
 	ANN("method invocation");
 	ANN("format: [nd_recv].[nd_mid]([nd_args])");
 	ANN("example: obj.foo(1)");
@@ -487,6 +486,16 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
 	LAST_NODE;
 	F_NODE(nd_args, "arguments");
 	return;
+
+      case NODE_OPCALL:
+        ANN("method invocation");
+        ANN("format: [nd_recv] [nd_mid] [nd_args]");
+        ANN("example: foo + bar");
+        F_ID(nd_mid, "method id");
+        F_NODE(nd_recv, "receiver");
+        LAST_NODE;
+        F_NODE(nd_args, "arguments");
+        return;
 
       case NODE_FCALL:
 	ANN("function call");
@@ -760,7 +769,7 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
       case NODE_DEFN:
 	ANN("method definition");
 	ANN("format: def [nd_mid] [nd_defn]; end");
-	ANN("example; def foo; bar; end");
+	ANN("example: def foo; bar; end");
 	F_ID(nd_mid, "method name");
 	LAST_NODE;
 	F_NODE(nd_defn, "method definition");
@@ -769,7 +778,7 @@ dump_node(VALUE buf, VALUE indent, int comment, const NODE * node)
       case NODE_DEFS:
 	ANN("singleton method definition");
 	ANN("format: def [nd_recv].[nd_mid] [nd_defn]; end");
-	ANN("example; def obj.foo; bar; end");
+	ANN("example: def obj.foo; bar; end");
 	F_NODE(nd_recv, "receiver");
 	F_ID(nd_mid, "method name");
 	LAST_NODE;

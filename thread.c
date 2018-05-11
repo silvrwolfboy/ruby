@@ -196,7 +196,7 @@ vm_check_ints_blocking(rb_execution_context_t *ec)
 }
 
 static int
-vm_living_thread_num(rb_vm_t *vm)
+vm_living_thread_num(const rb_vm_t *vm)
 {
     return vm->living_thread_num;
 }
@@ -2288,8 +2288,9 @@ rb_notify_fd_close(int fd, struct list_head *busy)
 void
 rb_thread_fd_close(int fd)
 {
-    LIST_HEAD(busy);
+    struct list_head busy;
 
+    list_head_init(&busy);
     if (rb_notify_fd_close(fd, &busy)) {
 	do rb_thread_schedule(); while (!list_empty(&busy));
     }

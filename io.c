@@ -945,18 +945,24 @@ internal_read_func(void *ptr)
     return read(iis->fd, iis->buf, iis->capa);
 }
 
+#if defined __APPLE__
+# define do_write_retry(code) do {ret = code;} while (ret == -1 && errno == EPROTOTYPE)
+#else
+# define do_write_retry(code) ret = code
+#endif
 static VALUE
 internal_write_func(void *ptr)
 {
     struct io_internal_write_struct *iis = ptr;
-    return write(iis->fd, iis->buf, iis->capa);
+    ssize_t ret;
+    do_write_retry(write(iis->fd, iis->buf, iis->capa));
+    return (VALUE)ret;
 }
 
 static void*
 internal_write_func2(void *ptr)
 {
-    struct io_internal_write_struct *iis = ptr;
-    return (void*)(intptr_t)write(iis->fd, iis->buf, iis->capa);
+    return (void*)internal_write_func(ptr);
 }
 
 #ifdef HAVE_WRITEV
@@ -964,7 +970,9 @@ static VALUE
 internal_writev_func(void *ptr)
 {
     struct io_internal_writev_struct *iis = ptr;
-    return writev(iis->fd, iis->iov, iis->iovcnt);
+    ssize_t ret;
+    do_write_retry(writev(iis->fd, iis->iov, iis->iovcnt));
+    return (VALUE)ret;
 }
 #endif
 
@@ -4621,20 +4629,35 @@ clear_codeconv(rb_io_t *fptr)
     clear_writeconv(fptr);
 }
 
-int
-rb_io_fptr_finalize(rb_io_t *fptr)
+void
+rb_io_fptr_finalize_internal(void *ptr)
 {
-    if (!fptr) return 0;
+    rb_io_t *fptr = ptr;
+
+    if (!ptr) return;
     fptr->pathv = Qnil;
     if (0 <= fptr->fd)
-	rb_io_fptr_cleanup(fptr, TRUE);
+        rb_io_fptr_cleanup(fptr, TRUE);
     fptr->write_lock = 0;
     free_io_buffer(&fptr->rbuf);
     free_io_buffer(&fptr->wbuf);
     clear_codeconv(fptr);
     free(fptr);
-    return 1;
 }
+
+#undef rb_io_fptr_finalize
+int
+rb_io_fptr_finalize(rb_io_t *fptr)
+{
+    if (!fptr) {
+        return 0;
+    }
+    else {
+        rb_io_fptr_finalize_internal(fptr);
+        return 1;
+    }
+}
+#define rb_io_fptr_finalize(fptr) rb_io_fptr_finalize_internal(fptr)
 
 RUBY_FUNC_EXPORTED size_t
 rb_io_memsize(const rb_io_t *fptr)
@@ -4662,8 +4685,9 @@ io_close_fptr(VALUE io)
     rb_io_t *fptr;
     VALUE write_io;
     rb_io_t *write_fptr;
-    LIST_HEAD(busy);
+    struct list_head busy;
 
+    list_head_init(&busy);
     write_io = GetWriteIO(io);
     if (io != write_io) {
         write_fptr = RFILE(write_io)->fptr;

@@ -49,8 +49,8 @@ class TestIO < Test::Unit::TestCase
     end
     flunk("timeout") unless wt.join(10) && rt.join(10)
   ensure
-    w.close unless !w || w.closed?
-    r.close unless !r || r.closed?
+    w&.close
+    r&.close
     (wt.kill; wt.join) if wt
     (rt.kill; rt.join) if rt
     raise we if we
@@ -62,8 +62,8 @@ class TestIO < Test::Unit::TestCase
     begin
       yield r, w
     ensure
-      r.close unless r.closed?
-      w.close unless w.closed?
+      r.close
+      w.close
     end
   end
 
@@ -567,7 +567,6 @@ class TestIO < Test::Unit::TestCase
               w2.nonblock = true
             rescue Errno::EBADF
               skip "nonblocking IO for pipe is not implemented"
-              break
             end
             s = w2.syswrite("a" * 100000)
             t = Thread.new { sleep 0.1; r2.read }
@@ -633,7 +632,7 @@ class TestIO < Test::Unit::TestCase
           assert_equal(bigcontent[30, 40], File.read("bigdst"))
           assert_equal(0, f.pos)
         rescue NotImplementedError
-          #skip "pread(2) is not implemtented."
+          #skip "pread(2) is not implemented."
         end
       }
     }
@@ -1859,7 +1858,6 @@ class TestIO < Test::Unit::TestCase
 
   def test_pos
     make_tempfile {|t|
-
       open(t.path, IO::RDWR|IO::CREAT|IO::TRUNC, 0600) do |f|
         f.write "Hello"
         assert_equal(5, f.pos)
@@ -2258,13 +2256,13 @@ class TestIO < Test::Unit::TestCase
 
   def test_reopen_inherit
     mkcdtmpdir {
-      system(EnvUtil.rubybin, '-e', <<"End")
+      system(EnvUtil.rubybin, '-e', <<-"End")
         f = open("out", "w")
         STDOUT.reopen(f)
         STDERR.reopen(f)
         system(#{EnvUtil.rubybin.dump}, '-e', 'STDOUT.print "out"')
         system(#{EnvUtil.rubybin.dump}, '-e', 'STDERR.print "err"')
-End
+      End
       assert_equal("outerr", File.read("out"))
     }
   end
@@ -2325,7 +2323,7 @@ End
       t
     end
   ensure
-    t.close(true) if t and block_given?
+    t&.close(true) if block_given?
   end
 
   def test_reopen_encoding
@@ -2565,7 +2563,6 @@ End
     return unless defined?(Fcntl::F_GETFL)
 
     make_tempfile {|t|
-
       fd = IO.sysopen(t.path, "w")
       assert_kind_of(Integer, fd)
       %w[r r+ w+ a+].each do |mode|
@@ -2691,7 +2688,6 @@ __END__
   end
 
   def test_flush_in_finalizer1
-    require 'tempfile'
     bug3910 = '[ruby-dev:42341]'
     tmp = Tempfile.open("bug3910") {|t|
       path = t.path
@@ -2717,7 +2713,6 @@ __END__
   end
 
   def test_flush_in_finalizer2
-    require 'tempfile'
     bug3910 = '[ruby-dev:42341]'
     Tempfile.open("bug3910") {|t|
       path = t.path
@@ -2851,7 +2846,7 @@ __END__
   end
 
   def test_fcntl_lock_linux
-    pad=0
+    pad = 0
     Tempfile.create(self.class.name) do |f|
       r, w = IO.pipe
       pid = fork do
@@ -3160,7 +3155,7 @@ __END__
         f.ioctl(tiocgwinsz, winsize)
       }
     ensure
-      f.close if f
+      f&.close
     end
   end if /^(?:i.?86|x86_64)-linux/ =~ RUBY_PLATFORM
 
