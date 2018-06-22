@@ -147,7 +147,8 @@ VALUE rb_cSymbol;
     }\
     else {\
 	assert(!FL_TEST((str), STR_SHARED)); \
-	REALLOC_N(RSTRING(str)->as.heap.ptr, char, (size_t)(capacity) + (termlen));\
+	SIZED_REALLOC_N(RSTRING(str)->as.heap.ptr, char, \
+			(size_t)(capacity) + (termlen), STR_HEAP_SIZE(str)); \
 	RSTRING(str)->as.heap.aux.capa = (capacity);\
     }\
 } while (0)
@@ -1586,7 +1587,8 @@ rb_str_init(int argc, VALUE *argv, VALUE str)
 		RSTRING(str)->as.heap.ptr = ALLOC_N(char, (size_t)capa + termlen);
 	    }
 	    else if (STR_HEAP_SIZE(str) != (size_t)capa + termlen) {
-		REALLOC_N(RSTRING(str)->as.heap.ptr, char, (size_t)capa + termlen);
+		SIZED_REALLOC_N(RSTRING(str)->as.heap.ptr, char,
+			(size_t)capa + termlen, STR_HEAP_SIZE(str));
 	    }
 	    RSTRING(str)->as.heap.len = len;
 	    TERM_FILL(&RSTRING(str)->as.heap.ptr[len], termlen);
@@ -2605,20 +2607,15 @@ str_uplus(VALUE str)
  * call-seq:
  *   -str  -> str (frozen)
  *
- * If the string is frozen, then return the string itself.
+ * Returns a frozen, possibly pre-existing copy of the string.
  *
- * If the string is not frozen, return a frozen, possibly pre-existing
- * copy of it.
+ * The string will be deduplicated as long as it is not tainted,
+ * or has any instance variables set on it.
  */
 static VALUE
 str_uminus(VALUE str)
 {
-    if (OBJ_FROZEN(str)) {
-	return str;
-    }
-    else {
-	return rb_fstring(str);
-    }
+    return rb_fstring(str);
 }
 
 RUBY_ALIAS_FUNCTION(rb_str_dup_frozen(VALUE str), rb_str_new_frozen, (str))
@@ -2710,7 +2707,8 @@ rb_str_resize(VALUE str, long len)
 	}
 	else if ((capa = RSTRING(str)->as.heap.aux.capa) < len ||
 		 (capa - len) > (len < 1024 ? len : 1024)) {
-	    REALLOC_N(RSTRING(str)->as.heap.ptr, char, (size_t)len + termlen);
+	    SIZED_REALLOC_N(RSTRING(str)->as.heap.ptr, char,
+	                    (size_t)len + termlen, STR_HEAP_SIZE(str));
 	    RSTRING(str)->as.heap.aux.capa = len;
 	}
 	else if (len == slen) return str;
@@ -3149,7 +3147,7 @@ rb_str_hash_cmp(VALUE str1, VALUE str2)
  * call-seq:
  *    str.hash   -> integer
  *
- * Return a hash based on the string's length, content and encoding.
+ * Returns a hash based on the string's length, content and encoding.
  *
  * See also Object#hash.
  */
@@ -4721,7 +4719,7 @@ rb_str_aset(VALUE str, VALUE indx, VALUE val)
     }
 
     if (SPECIAL_CONST_P(indx)) goto generic;
-    switch (TYPE(indx)) {
+    switch (BUILTIN_TYPE(indx)) {
       case T_REGEXP:
 	rb_str_subpat_set(str, indx, INT2FIX(0), val);
 	return val;
@@ -6482,7 +6480,7 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
 	    while (current_buffer) {
 		previous_buffer = current_buffer;
 		current_buffer  = current_buffer->next;
-		xfree(previous_buffer);
+		ruby_sized_xfree(previous_buffer, previous_buffer->capa);
 	    }
 	    rb_raise(rb_eArgError, "input string invalid");
 	}
@@ -6494,7 +6492,7 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
 
     if (buffer_count==1) {
 	target = rb_str_new_with_class(source, (const char*)current_buffer->space, target_length);
-	xfree(current_buffer);
+	ruby_sized_xfree(current_buffer, current_buffer->capa);
     }
     else {
 	char *target_current;
@@ -6508,7 +6506,7 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
 	    target_current += current_buffer->used;
 	    previous_buffer = current_buffer;
 	    current_buffer  = current_buffer->next;
-	    xfree(previous_buffer);
+	    ruby_sized_xfree(previous_buffer, previous_buffer->capa);
 	}
     }
 
@@ -7032,8 +7030,9 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 		if (enc != e1) may_modify = 1;
 	    }
 	    if ((offset = t - buf) + tlen > max) {
+		size_t MAYBE_UNUSED(old) = max + termlen;
 		max = offset + tlen + (send - s);
-		REALLOC_N(buf, char, max + termlen);
+		SIZED_REALLOC_N(buf, char, max + termlen, old);
 		t = buf + offset;
 	    }
 	    rb_enc_mbcput(c, t, enc);
@@ -7104,8 +7103,9 @@ tr_trans(VALUE str, VALUE src, VALUE repl, int sflag)
 		if (enc != e1) may_modify = 1;
 	    }
 	    if ((offset = t - buf) + tlen > max) {
+		size_t MAYBE_UNUSED(old) = max + termlen;
 		max = offset + tlen + (long)((send - s) * 1.2);
-		REALLOC_N(buf, char, max + termlen);
+		SIZED_REALLOC_N(buf, char, max + termlen, old);
 		t = buf + offset;
 	    }
 	    if (s != t) {
@@ -8173,11 +8173,17 @@ rb_str_each_line(int argc, VALUE *argv, VALUE str)
 
 /*
  *  call-seq:
- *     str.lines(separator=$/)  -> an_array
+ *     str.lines(separator=$/ [, getline_args])  -> an_array
  *
  *  Returns an array of lines in <i>str</i> split using the supplied
  *  record separator (<code>$/</code> by default).  This is a
- *  shorthand for <code>str.each_line(separator).to_a</code>.
+ *  shorthand for <code>str.each_line(separator, getline_args).to_a</code>.
+ *
+ *  See IO.readlines for details about getline_args.
+ *
+ *     "hello\nworld\n".lines              #=> ["hello\n", "world\n"]
+ *     "hello  world".lines(' ')           #=> ["hello ", " ", "world"]
+ *     "hello\nworld\n".lines(chomp: true) #=> ["hello", "world"]
  *
  *  If a block is given, which is a deprecated form, works the same as
  *  <code>each_line</code>.
@@ -9271,7 +9277,7 @@ rb_str_crypt(VALUE str, VALUE salt)
  *  call-seq:
  *     str.ord   -> integer
  *
- *  Return the <code>Integer</code> ordinal of a one-character string.
+ *  Returns the <code>Integer</code> ordinal of a one-character string.
  *
  *     "a".ord         #=> 97
  */
@@ -9606,8 +9612,10 @@ rb_str_rpartition(VALUE str, VALUE sep)
  *     str.start_with?([prefixes]+)   -> true or false
  *
  *  Returns true if +str+ starts with one of the +prefixes+ given.
+ *  Each of the +prefixes+ should be a String or a Regexp.
  *
  *    "hello".start_with?("hell")               #=> true
+ *    "hello".start_with?(/H/i)                 #=> true
  *
  *    # returns true if one of the prefixes matches.
  *    "hello".start_with?("heaven", "hell")     #=> true
@@ -9621,14 +9629,11 @@ rb_str_start_with(int argc, VALUE *argv, VALUE str)
 
     for (i=0; i<argc; i++) {
 	VALUE tmp = argv[i];
-	switch (TYPE(tmp)) {
-	  case T_REGEXP:
-	    {
-		bool r = rb_reg_start_with_p(tmp, str);
-		if (r) return Qtrue;
-	    }
-	    break;
-	  default:
+	if (RB_TYPE_P(tmp, T_REGEXP)) {
+	    if (rb_reg_start_with_p(tmp, str))
+		return Qtrue;
+	}
+	else {
 	    StringValue(tmp);
 	    rb_enc_check(str, tmp);
 	    if (RSTRING_LEN(str) < RSTRING_LEN(tmp)) continue;

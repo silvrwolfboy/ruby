@@ -116,9 +116,24 @@ with all sufficient information, see the ChangeLog file or Redmine
 
     * added Random.bytes. [Feature #4938]
 
+* Range
+
+  * Range#=== now uses #cover? instead of #include? method. [Feature #14575]
+
+* RubyVM::AST
+
+  * RubyVM::AST.parse parses a given string and returns AST nodes. [experimental]
+  * RubyVM::AST.parse_file parses a given file and returns AST nodes. [experimental]
+
 * String
 
   * String#split yields each substring to the block if given. [Feature #4780]
+
+* TracePoint
+
+  * New methods:
+
+    * TracePoint#parameters [Feature #14694]
 
 === Stdlib updates (outstanding ones only)
 
@@ -140,6 +155,20 @@ with all sufficient information, see the ChangeLog file or Redmine
   * New method:
 
     * Matrix#antisymmetric?
+
+* Net
+
+  * New method:
+
+    * Add write_timeout keyword argument to Net::BufferedIO.new. [Feature #13396]
+
+    * Add Net::BufferedIO#write_timeout, Net::BufferedIO#write_timeout=,
+      Net::HTTP#write_timeout, and Net::HTTP#write_timeout=. [Feature #13396]
+
+  * New constant:
+
+    * Add Net::HTTPClientException to deprecate Net::HTTPServerException,
+      whose name is misleading. [Bug #14688]
 
 * REXML
 
@@ -175,6 +204,11 @@ with all sufficient information, see the ChangeLog file or Redmine
     * "@#{ATTRIBUTE}/parent::" case
 
     * "name(#{NODE_SET})" case
+
+* RSS
+
+  * RSS::Parser.parse: Accept options as Hash. :validate,
+    :ignore_unknown_element, :parser_class options are available.
 
 * Set
 
@@ -224,6 +258,9 @@ with all sufficient information, see the ChangeLog file or Redmine
     Rails application slower for now.
 
 * VM generator script renewal; makes the generated VM more optimized. [GH-1779]
+
+* Thread cache enabled for pthreads platforms
+  (for `Thread.new` and `Thread.start`) [Feature #14757]
 
 === Miscellaneous changes
 

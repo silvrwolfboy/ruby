@@ -144,6 +144,11 @@ void *rb_register_sigaltstack(void);
 #endif /* OPT_STACK_CACHING */
 #endif /* OPT_CALL_THREADED_CODE */
 
+#if OPT_DIRECT_THREADED_CODE || OPT_CALL_THREADED_CODE
+void rb_addr2insn_init(void);
+#else
+static inline void rb_addr2insn_init(void) { }
+#endif
 typedef unsigned long rb_num_t;
 typedef   signed long rb_snum_t;
 
@@ -300,7 +305,6 @@ pathobj_realpath(VALUE pathobj)
 
 /* Forward declarations */
 struct rb_mjit_unit;
-struct rb_execution_context_struct;
 
 struct rb_iseq_constant_body {
     enum iseq_type {
@@ -591,8 +595,7 @@ typedef struct rb_vm_struct {
     struct st_table *ensure_rollback_table;
 
     /* postponed_job */
-    struct rb_postponed_job_struct *postponed_job_buffer;
-    int postponed_job_index;
+    struct st_table *postponed_jobs;
 
     int src_encoding_index;
 
@@ -787,7 +790,7 @@ typedef struct rb_execution_context_struct {
 
     /* interrupt flags */
     rb_atomic_t interrupt_flag;
-    unsigned long interrupt_mask;
+    rb_atomic_t interrupt_mask; /* size should match flag */
 
     rb_fiber_t *fiber_ptr;
     struct rb_thread_struct *thread_ptr;
@@ -1086,7 +1089,6 @@ enum {
 #define VM_ENV_DATA_INDEX_SPECVAL    (-1) /* ep[-1] */
 #define VM_ENV_DATA_INDEX_FLAGS      ( 0) /* ep[ 0] */
 #define VM_ENV_DATA_INDEX_ENV        ( 1) /* ep[ 1] */
-#define VM_ENV_DATA_INDEX_ENV_PROC   ( 2) /* ep[ 2] */
 
 #define VM_ENV_INDEX_LAST_LVAR              (-VM_ENV_DATA_SIZE)
 
@@ -1223,16 +1225,6 @@ static inline const rb_env_t *
 VM_ENV_ENVVAL_PTR(const VALUE *ep)
 {
     return (const rb_env_t *)VM_ENV_ENVVAL(ep);
-}
-
-static inline VALUE
-VM_ENV_PROCVAL(const VALUE *ep)
-{
-    VM_ASSERT(VM_ENV_ESCAPED_P(ep));
-    VM_ASSERT(VM_ENV_LOCAL_P(ep));
-    VM_ASSERT(VM_ENV_BLOCK_HANDLER(ep) != VM_BLOCK_HANDLER_NONE);
-
-    return ep[VM_ENV_DATA_INDEX_ENV_PROC];
 }
 
 static inline const rb_env_t *

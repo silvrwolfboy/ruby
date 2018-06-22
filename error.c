@@ -371,7 +371,7 @@ rb_warn_m(int argc, VALUE *argv, VALUE exc)
 		args[0] = LONG2NUM(lev + 1);
 		args[1] = INT2FIX(1);
 		location = rb_vm_thread_backtrace_locations(2, args, GET_THREAD()->self);
-		if (!NIL_P(uplevel)) {
+		if (!NIL_P(location)) {
 		    location = rb_ary_entry(location, 0);
 		}
 	    }
@@ -886,7 +886,9 @@ VALUE rb_eSystemCallError;
 VALUE rb_mErrno;
 static VALUE rb_eNOERROR;
 
-static ID id_cause, id_message, id_backtrace;
+ID ruby_static_id_cause;
+#define id_cause ruby_static_id_cause
+static ID id_message, id_backtrace;
 static ID id_name, id_key, id_args, id_Errno, id_errno, id_i_path;
 static ID id_receiver, id_recv, id_iseq, id_local_variables;
 static ID id_private_call_p, id_top, id_bottom;
@@ -1162,19 +1164,21 @@ VALUE
 rb_get_backtrace(VALUE exc)
 {
     ID mid = id_backtrace;
+    VALUE info;
     if (rb_method_basic_definition_p(CLASS_OF(exc), id_backtrace)) {
-	VALUE info, klass = rb_eException;
+	VALUE klass = rb_eException;
 	rb_execution_context_t *ec = GET_EC();
 	if (NIL_P(exc))
 	    return Qnil;
 	EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_CALL, exc, mid, mid, klass, Qundef);
 	info = exc_backtrace(exc);
 	EXEC_EVENT_HOOK(ec, RUBY_EVENT_C_RETURN, exc, mid, mid, klass, info);
-	if (NIL_P(info))
-	    return Qnil;
-	return rb_check_backtrace(info);
     }
-    return rb_funcallv(exc, mid, 0, 0);
+    else {
+	info = rb_funcallv(exc, mid, 0, 0);
+    }
+    if (NIL_P(info)) return Qnil;
+    return rb_check_backtrace(info);
 }
 
 /*

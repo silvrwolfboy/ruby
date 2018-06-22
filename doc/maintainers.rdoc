@@ -68,10 +68,6 @@ Zachary Scott (zzak)
   Akinori MUSHA (knu)
 [lib/irb.rb, lib/irb/*]
   Keiju ISHITSUKA (keiju)
-[lib/logger.rb]
-  Naotoshi Seo (sonots)
-[lib/matrix.rb]
-  Marc-Andre Lafortune (marcandre)
 [lib/mkmf.rb]
   _unmaintained_
 [lib/monitor.rb]
@@ -98,14 +94,10 @@ Zachary Scott (zzak)
   _unmaintained_
 [lib/optparse.rb, lib/optparse/*]
   Nobuyuki Nakada (nobu)
-[lib/ostruct.rb]
-  Marc-Andre Lafortune (marcandre)
 [lib/pp.rb]
   Tanaka Akira (akr)
 [lib/prettyprint.rb]
   Tanaka Akira (akr)
-[lib/prime.rb]
-  Yuki Sonoda (yugui)
 [lib/profile.rb]
   _unmaintained_
 [lib/profiler.rb]
@@ -118,12 +110,8 @@ Zachary Scott (zzak)
   Tanaka Akira (akr)
 [lib/resolv.rb]
   Tanaka Akira (akr)
-[lib/rexml/*]
-  Kouhei Sutou (kou)
 [lib/rinda/*]
   Masatoshi SEKI (seki)
-[lib/rss.rb, lib/rss/*]
-  Kouhei Sutou (kou)
 [lib/rubygems.rb, lib/ubygems.rb, lib/rubygems/*]
   Eric Hodel (drbrain), Hiroshi SHIBATA (hsbt)
   https://github.com/rubygems/rubygems
@@ -217,9 +205,21 @@ Zachary Scott (zzak)
 [lib/fileutils.rb]
   _unmaintained_
   https://github.com/ruby/fileutils
+[lib/logger.rb]
+  Naotoshi Seo (sonots)
+[lib/matrix.rb]
+  Marc-Andre Lafortune (marcandre)
+[lib/ostruct.rb]
+  Marc-Andre Lafortune (marcandre)
+[lib/prime.rb]
+  Yuki Sonoda (yugui)
 [lib/rdoc.rb, lib/rdoc/*]
   Eric Hodel (drbrain), Hiroshi SHIBATA (hsbt)
   https://github.com/ruby/rdoc
+[lib/rexml/*]
+  Kouhei Sutou (kou)
+[lib/rss.rb, lib/rss/*]
+  Kouhei Sutou (kou)
 [lib/scanf.rb]
   David A. Black (dblack)
   https://github.com/ruby/scanf

@@ -216,15 +216,34 @@ VALUE rb_mMJIT;
 static char *libruby_pathflag;
 #endif
 
+static void remove_file(const char *filename);
+
 /* Return time in milliseconds as a double.  */
+#ifdef __APPLE__
+double ruby_real_ms_time(void);
+#define real_ms_time() ruby_real_ms_time()
+#else
 static double
 real_ms_time(void)
 {
+#ifdef HAVE_CLOCK_GETTIME
+    struct timespec  tv;
+# ifdef CLOCK_MONOTONIC
+    const clockid_t c = CLOCK_MONOTONIC;
+# else
+    const clockid_t c = CLOCK_REALTIME;
+# endif
+
+    clock_gettime(c, &tv);
+    return tv.tv_nsec / 1000000.0 + tv.tv_sec * 1000.0;
+#else
     struct timeval  tv;
 
     gettimeofday(&tv, NULL);
     return tv.tv_usec / 1000.0 + tv.tv_sec * 1000.0;
+#endif
 }
+#endif
 
 /* Make and return copy of STR in the heap. */
 #define get_string ruby_strdup
@@ -452,10 +471,7 @@ clean_so_file(struct rb_mjit_unit *unit)
     char *so_file = unit->so_file;
     if (so_file) {
         unit->so_file = NULL;
-        if (remove(so_file)) {
-            fprintf(stderr, "failed to remove \"%s\": %s\n",
-                    so_file, strerror(errno));
-        }
+        remove_file(so_file);
         free(so_file);
     }
 #endif
@@ -771,6 +787,15 @@ print_jit_result(const char *result, const struct rb_mjit_unit *unit, const doub
             RSTRING_PTR(rb_iseq_path(unit->iseq)), FIX2INT(unit->iseq->body->location.first_lineno), c_file);
 }
 
+static void
+remove_file(const char *filename)
+{
+    if (remove(filename) && (mjit_opts.warnings || mjit_opts.verbose)) {
+        fprintf(stderr, "MJIT warning: failed to remove \"%s\": %s\n",
+                filename, strerror(errno));
+    }
+}
+
 /* Compile ISeq in UNIT and return function pointer of JIT-ed code.
    It may return NOT_COMPILABLE_JIT_ISEQ_FUNC if something went wrong. */
 static mjit_func_t
@@ -869,7 +894,7 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
     fclose(f);
     if (!success) {
         if (!mjit_opts.save_temps)
-            remove(c_file);
+            remove_file(c_file);
         print_jit_result("failure", unit, 0, c_file);
         return (mjit_func_t)NOT_COMPILABLE_JIT_ISEQ_FUNC;
     }
@@ -879,7 +904,7 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
     end_time = real_ms_time();
 
     if (!mjit_opts.save_temps)
-        remove(c_file);
+        remove_file(c_file);
     if (!success) {
         verbose(2, "Failed to generate so: %s", so_file);
         return (mjit_func_t)NOT_COMPILABLE_JIT_ISEQ_FUNC;
@@ -890,7 +915,7 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
 #ifdef _WIN32
         unit->so_file = strdup(so_file);
 #else
-        remove(so_file);
+        remove_file(so_file);
 #endif
     }
 
@@ -905,10 +930,10 @@ convert_unit_to_func(struct rb_mjit_unit *unit)
     return (mjit_func_t)func;
 }
 
-/* Set to TRUE to finish worker.  */
-static int finish_worker_p;
-/* Set to TRUE if worker is finished.  */
-static int worker_finished;
+/* Set to TRUE to stop worker.  */
+static int stop_worker_p;
+/* Set to TRUE if worker is stopped.  */
+static int worker_stopped;
 
 /* The function implementing a worker. It is executed in a separate
    thread by rb_thread_create_mjit_thread. It compiles precompiled header
@@ -916,24 +941,26 @@ static int worker_finished;
 static void
 worker(void)
 {
-    make_pch();
+    if (pch_status == PCH_NOT_READY) {
+        make_pch();
+    }
     if (pch_status == PCH_FAILED) {
         mjit_init_p = FALSE;
-        CRITICAL_SECTION_START(3, "in worker to update worker_finished");
-        worker_finished = TRUE;
+        CRITICAL_SECTION_START(3, "in worker to update worker_stopped");
+        worker_stopped = TRUE;
         verbose(3, "Sending wakeup signal to client in a mjit-worker");
         rb_native_cond_signal(&mjit_client_wakeup);
-        CRITICAL_SECTION_FINISH(3, "in worker to update worker_finished");
+        CRITICAL_SECTION_FINISH(3, "in worker to update worker_stopped");
         return; /* TODO: do the same thing in the latter half of mjit_finish */
     }
 
     /* main worker loop */
-    while (!finish_worker_p) {
+    while (!stop_worker_p) {
         struct rb_mjit_unit_node *node;
 
         /* wait until unit is available */
         CRITICAL_SECTION_START(3, "in worker dequeue");
-        while ((unit_queue.head == NULL || active_units.length > mjit_opts.max_cache_size) && !finish_worker_p) {
+        while ((unit_queue.head == NULL || active_units.length > mjit_opts.max_cache_size) && !stop_worker_p) {
             rb_native_cond_wait(&mjit_worker_wakeup, &mjit_engine_mutex);
             verbose(3, "Getting wakeup from client");
         }
@@ -954,7 +981,7 @@ worker(void)
     }
 
     /* To keep mutex unlocked when it is destroyed by mjit_finish, don't wrap CRITICAL_SECTION here. */
-    worker_finished = TRUE;
+    worker_stopped = TRUE;
 }
 
 /* MJIT info related to an existing continutaion.  */
@@ -1351,6 +1378,26 @@ system_tmpdir(void)
 
 extern const char ruby_description_with_jit[];
 
+/* Start MJIT worker. Return TRUE if worker is sucessfully started. */
+static int
+start_worker(void)
+{
+    stop_worker_p = FALSE;
+    worker_stopped = FALSE;
+
+    if (!rb_thread_create_mjit_thread(child_after_fork, worker)) {
+        mjit_init_p = FALSE;
+        rb_native_mutex_destroy(&mjit_engine_mutex);
+        rb_native_cond_destroy(&mjit_pch_wakeup);
+        rb_native_cond_destroy(&mjit_client_wakeup);
+        rb_native_cond_destroy(&mjit_worker_wakeup);
+        rb_native_cond_destroy(&mjit_gc_wakeup);
+        verbose(1, "Failure in MJIT thread initialization\n");
+        return FALSE;
+    }
+    return TRUE;
+}
+
 /* Initialize MJIT.  Start a thread creating the precompiled header and
    processing ISeqs.  The function should be called first for using MJIT.
    If everything is successfull, MJIT_INIT_P will be TRUE.  */
@@ -1413,17 +1460,51 @@ mjit_init(struct mjit_options *opts)
     rb_define_global_const("RUBY_DESCRIPTION", rb_obj_freeze(rb_description));
 
     /* Initialize worker thread */
-    finish_worker_p = FALSE;
-    worker_finished = FALSE;
-    if (!rb_thread_create_mjit_thread(child_after_fork, worker)) {
-        mjit_init_p = FALSE;
-        rb_native_mutex_destroy(&mjit_engine_mutex);
-        rb_native_cond_destroy(&mjit_pch_wakeup);
-        rb_native_cond_destroy(&mjit_client_wakeup);
-        rb_native_cond_destroy(&mjit_worker_wakeup);
-        rb_native_cond_destroy(&mjit_gc_wakeup);
-        verbose(1, "Failure in MJIT thread initialization\n");
+    start_worker();
+}
+
+static void
+stop_worker(void)
+{
+    stop_worker_p = TRUE;
+    while (!worker_stopped) {
+        verbose(3, "Sending cancel signal to worker");
+        CRITICAL_SECTION_START(3, "in stop_worker");
+        rb_native_cond_broadcast(&mjit_worker_wakeup);
+        CRITICAL_SECTION_FINISH(3, "in stop_worker");
     }
+}
+
+/* Stop JIT-compiling methods but compiled code is kept available. */
+VALUE
+mjit_pause(void)
+{
+    if (!mjit_init_p) {
+        rb_raise(rb_eRuntimeError, "MJIT is not enabled");
+    }
+    if (worker_stopped) {
+        return Qfalse;
+    }
+
+    stop_worker();
+    return Qtrue;
+}
+
+/* Restart JIT-compiling methods after mjit_pause. */
+VALUE
+mjit_resume(void)
+{
+    if (!mjit_init_p) {
+        rb_raise(rb_eRuntimeError, "MJIT is not enabled");
+    }
+    if (!worker_stopped) {
+        return Qfalse;
+    }
+
+    if (!start_worker()) {
+        rb_raise(rb_eRuntimeError, "Failed to resume MJIT worker");
+    }
+    return Qtrue;
 }
 
 /* Finish the threads processing units and creating PCH, finalize
@@ -1450,13 +1531,7 @@ mjit_finish(void)
     CRITICAL_SECTION_FINISH(3, "in mjit_finish to wakeup from pch");
 
     /* Stop worker */
-    finish_worker_p = TRUE;
-    while (!worker_finished) {
-        verbose(3, "Sending cancel signal to workers");
-        CRITICAL_SECTION_START(3, "in mjit_finish");
-        rb_native_cond_broadcast(&mjit_worker_wakeup);
-        CRITICAL_SECTION_FINISH(3, "in mjit_finish");
-    }
+    stop_worker();
 
     rb_native_mutex_destroy(&mjit_engine_mutex);
     rb_native_cond_destroy(&mjit_pch_wakeup);
@@ -1466,7 +1541,7 @@ mjit_finish(void)
 
     /* cleanup temps */
     if (!mjit_opts.save_temps)
-        remove(pch_file);
+        remove_file(pch_file);
 
     xfree(tmp_dir); tmp_dir = NULL;
     xfree(pch_file); pch_file = NULL;

@@ -706,13 +706,6 @@ proc_new(VALUE klass, int8_t is_lambda)
 	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
 
 	if ((block_handler = rb_vm_frame_block_handler(cfp)) != VM_BLOCK_HANDLER_NONE) {
-	    const VALUE *lep = rb_vm_ep_local_ep(cfp->ep);
-
-	    if (VM_ENV_ESCAPED_P(lep)) {
-		procval = VM_ENV_PROCVAL(lep);
-		goto return_existing_proc;
-	    }
-
 	    if (is_lambda) {
 		rb_warn(proc_without_block);
 	    }
@@ -730,13 +723,12 @@ proc_new(VALUE klass, int8_t is_lambda)
       case block_handler_type_proc:
 	procval = VM_BH_TO_PROC(block_handler);
 
-      return_existing_proc:
 	if (RBASIC_CLASS(procval) == klass) {
 	    return procval;
 	}
 	else {
 	    VALUE newprocval = rb_proc_dup(procval);
-	    RBASIC_SET_CLASS(newprocval, klass);
+            RBASIC_SET_CLASS(newprocval, klass);
 	    return newprocval;
 	}
 	break;
@@ -1156,8 +1148,8 @@ rb_proc_location(VALUE self)
     return iseq_location(rb_proc_get_iseq(self, 0));
 }
 
-static VALUE
-unnamed_parameters(int arity)
+VALUE
+rb_unnamed_parameters(int arity)
 {
     VALUE a, param = rb_ary_new2((arity < 0) ? -arity : arity);
     int n = (arity < 0) ? ~arity : arity;
@@ -1191,7 +1183,7 @@ rb_proc_parameters(VALUE self)
     int is_proc;
     const rb_iseq_t *iseq = rb_proc_get_iseq(self, &is_proc);
     if (!iseq) {
-	return unnamed_parameters(rb_proc_arity(self));
+	return rb_unnamed_parameters(rb_proc_arity(self));
     }
     return rb_iseq_parameters(iseq, is_proc);
 }
@@ -2575,7 +2567,7 @@ rb_method_parameters(VALUE method)
 {
     const rb_iseq_t *iseq = rb_method_iseq(method);
     if (!iseq) {
-	return unnamed_parameters(method_arity(method));
+	return rb_unnamed_parameters(method_arity(method));
     }
     return rb_iseq_parameters(iseq, 0);
 }

@@ -81,6 +81,7 @@ MJIT_CC = @MJIT_CC@
 MJIT_OPTFLAGS = @MJIT_OPTFLAGS@
 MJIT_DEBUGFLAGS = @MJIT_DEBUGFLAGS@
 MJIT_LDSHARED = @MJIT_LDSHARED@
+MJIT_DLDFLAGS = @DLDFLAGS@
 LDFLAGS = @STATIC@ $(CFLAGS) @LDFLAGS@
 EXTLDFLAGS = @EXTLDFLAGS@
 XLDFLAGS = @XLDFLAGS@ $(EXTLDFLAGS)
@@ -209,6 +210,7 @@ INSTALLED_LIST= .installed.list
 NEWLINE_C     = enc/trans/newline.c
 MINIPRELUDE_C = miniprelude.c
 PRELUDE_C     = prelude.c
+GOLF_PRELUDE_C= golf_prelude.c
 RBCONFIG      = .rbconfig.time
 
 MAINSRC = $(MAINOBJ:@OBJEXT@=c)
@@ -271,9 +273,9 @@ $(LIBRUBY_SO):
 		-$(Q) $(OBJCOPY) -w -L '$(SYMBOL_PREFIX)Init_*' -L '$(SYMBOL_PREFIX)ruby_static_id_*' \
 			-L '$(SYMBOL_PREFIX)*_threadptr_*' -L '$(SYMBOL_PREFIX)*_ec_*' $@
 		$(Q) $(POSTLINK)
-		@-$(MINIRUBY) -e 'ARGV.each{|link| File.delete link rescue nil; \
-						  File.symlink "$(LIBRUBY_SO)", link}' \
-				$(LIBRUBY_ALIASES) || true
+		@-$(MINIRUBY) -e 'so, *aliases = ARGV; aliases.uniq!; aliases.delete(File.basename(so)); \
+				  aliases.each { |link| File.delete link rescue nil; File.symlink so, link }' \
+				$(LIBRUBY_SO) $(LIBRUBY_ALIASES) || true
 
 LIBRUBY_WITH_EXT = @LIBRUBY_WITH_EXT@
 $(LIBRUBY_$(LIBRUBY_WITH_EXT)): $(LIBRUBY_SO_UPDATE)
@@ -420,7 +422,7 @@ probes.stamp: $(DTRACE_REBUILD_OBJS)
 	fi
 	$(Q) touch $@
 
-probes.@OBJEXT@: $(srcdir)/probes.d $(DTRACE_REBUILD:yes=probes.stamp)
+probes.$(OBJEXT): $(srcdir)/probes.d $(DTRACE_REBUILD:yes=probes.stamp)
 	@$(ECHO) processing probes in object files
 	$(Q) $(RM) $@
 	$(Q) $(DTRACE) -G -C $(INCFLAGS) -s $(srcdir)/probes.d -o $@ $(DTRACE_REBUILD_OBJS)
@@ -557,6 +559,7 @@ mjit_config.h:
 	    echo; \
 	}; \
 	archs="$(UNIVERSAL_ARCHNAMES)"; \
+	archs="$${archs:-$(ARCH_FLAG:-arch=)}"; \
 	test "$(Q)" = @ || set -x; \
 	echo '#ifndef RUBY_MJIT_CONFIG_H'; \
 	echo '#define RUBY_MJIT_CONFIG_H 1'; \
@@ -569,7 +572,7 @@ mjit_config.h:
 	quote "MJIT_OPTFLAGS   " $(MJIT_OPTFLAGS); \
 	quote "MJIT_DEBUGFLAGS " $(MJIT_DEBUGFLAGS); \
 	quote "MJIT_LDSHARED   " $(MJIT_LDSHARED); \
-	quote "MJIT_DLDFLAGS   " @DLDFLAGS@; \
+	quote "MJIT_DLDFLAGS   $${archs:+ MJIT_ARCHFLAG}" $(MJIT_DLDFLAGS); \
 	quote "MJIT_LIBS       " $(LIBRUBYARG_SHARED); \
 	$${archs:+echo} $${archs:+'#if 0'}; \
 	for arch in $$archs; do \

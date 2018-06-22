@@ -1283,7 +1283,7 @@ proc_exec_cmd(const char *prog, VALUE argv_str, VALUE envp_str)
     rb_w32_uaspawn(P_OVERLAY, prog, argv);
     return errno;
 #else
-    envp = envp_str ? (char **)RSTRING_PTR(envp_str) : NULL;
+    envp = envp_str ? RB_IMEMO_TMPBUF_PTR(envp_str) : NULL;
     if (envp_str)
         execve(prog, argv, envp); /* async-signal-safe */
     else
@@ -1324,7 +1324,7 @@ proc_exec_sh(const char *str, VALUE envp_str)
     }
 #else
     if (envp_str)
-        execle("/bin/sh", "sh", "-c", str, (char *)NULL, (char **)RSTRING_PTR(envp_str)); /* async-signal-safe */
+        execle("/bin/sh", "sh", "-c", str, (char *)NULL, RB_IMEMO_TMPBUF_PTR(envp_str)); /* async-signal-safe */
     else
         execl("/bin/sh", "sh", "-c", str, (char *)NULL); /* async-signal-safe (since SUSv4) */
 #endif	/* _WIN32 */
@@ -2264,7 +2264,8 @@ rb_exec_fillarg(VALUE prog, int argc, VALUE *argv, VALUE env, VALUE opthash, VAL
             p += strlen(p) + 1;
         }
         rb_str_buf_cat(argv_str, (char *)&null, sizeof(null)); /* terminator for execve.  */
-        eargp->invoke.cmd.argv_str = argv_str;
+        eargp->invoke.cmd.argv_str =
+            rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(argv_str);
     }
     RB_GC_GUARD(execarg_obj);
 }
@@ -2464,7 +2465,8 @@ rb_execarg_parent_start1(VALUE execarg_obj)
         }
         p = NULL;
         rb_str_buf_cat(envp_str, (char *)&p, sizeof(p));
-        eargp->envp_str = envp_str;
+        eargp->envp_str =
+            rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(envp_str);
         eargp->envp_buf = envp_buf;
 
         /*
@@ -7182,7 +7184,7 @@ make_clock_result(struct timetick *ttp,
 }
 
 #ifdef __APPLE__
-static mach_timebase_info_data_t *
+static const mach_timebase_info_data_t *
 get_mach_timebase_info(void)
 {
     static mach_timebase_info_data_t sTimebaseInfo;
@@ -7192,6 +7194,14 @@ get_mach_timebase_info(void)
     }
 
     return &sTimebaseInfo;
+}
+
+double
+ruby_real_ms_time(void)
+{
+    const mach_timebase_info_data_t *info = get_mach_timebase_info();
+    uint64_t t = mach_absolute_time();
+    return (double)t * info->numer / info->denom / 1e6;
 }
 #endif
 
@@ -7338,8 +7348,9 @@ rb_clock_gettime(int argc, VALUE *argv)
     if (SYMBOL_P(clk_id)) {
         /*
          * Non-clock_gettime clocks are provided by symbol clk_id.
-         *
-         * gettimeofday is always available on platforms supported by Ruby.
+         */
+#ifdef HAVE_GETTIMEOFDAY
+        /*
          * GETTIMEOFDAY_BASED_CLOCK_REALTIME is used for
          * CLOCK_REALTIME if clock_gettime is not available.
          */
@@ -7354,6 +7365,7 @@ rb_clock_gettime(int argc, VALUE *argv)
             denominators[num_denominators++] = 1000000000;
             goto success;
         }
+#endif
 
 #define RUBY_TIME_BASED_CLOCK_REALTIME ID2SYM(id_TIME_BASED_CLOCK_REALTIME)
         if (clk_id == RUBY_TIME_BASED_CLOCK_REALTIME) {
@@ -7446,7 +7458,7 @@ rb_clock_gettime(int argc, VALUE *argv)
 #ifdef __APPLE__
 #define RUBY_MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC ID2SYM(id_MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC)
         if (clk_id == RUBY_MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC) {
-	    mach_timebase_info_data_t *info = get_mach_timebase_info();
+	    const mach_timebase_info_data_t *info = get_mach_timebase_info();
             uint64_t t = mach_absolute_time();
             tt.count = (int32_t)(t % 1000000000);
             tt.giga_count = t / 1000000000;
@@ -7585,7 +7597,7 @@ rb_clock_getres(int argc, VALUE *argv)
 
 #ifdef RUBY_MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC
         if (clk_id == RUBY_MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC) {
-	    mach_timebase_info_data_t *info = get_mach_timebase_info();
+	    const mach_timebase_info_data_t *info = get_mach_timebase_info();
             tt.count = 1;
             tt.giga_count = 0;
             numerators[num_numerators++] = info->numer;

@@ -6,6 +6,7 @@
 #++
 
 require 'rubygems/util'
+require 'rubygems/deprecate'
 
 ##
 # Module that defines the default UserInteraction.  Any class including this
@@ -170,6 +171,8 @@ end
 
 class Gem::StreamUI
 
+  extend Gem::Deprecate
+
   ##
   # The input stream
 
@@ -202,11 +205,7 @@ class Gem::StreamUI
   # Returns true if TTY methods should be used on this StreamUI.
 
   def tty?
-    if RUBY_VERSION < '1.9.3' and RUBY_PLATFORM =~ /mingw|mswin/ then
-      @usetty
-    else
-      @usetty && @ins.tty?
-    end
+    @usetty && @ins.tty?
   end
 
   ##
@@ -321,29 +320,7 @@ class Gem::StreamUI
 
   def _gets_noecho
     require_io_console
-    if IO.method_defined?(:noecho) then
-      @ins.noecho {@ins.gets}
-    elsif Gem.win_platform?
-      require "Win32API"
-      password = ''
-
-      while char = Win32API.new("crtdll", "_getch", [ ], "L").Call do
-        break if char == 10 || char == 13 # received carriage return or newline
-        if char == 127 || char == 8 # backspace and delete
-          password.slice!(-1, 1)
-        else
-          password << char.chr
-        end
-      end
-      password
-    else
-      system "stty -echo"
-      begin
-        @ins.gets
-      ensure
-        system "stty echo"
-      end
-    end
+    @ins.noecho {@ins.gets}
   end
 
   ##
@@ -384,6 +361,7 @@ class Gem::StreamUI
   def debug(statement)
     @errs.puts statement
   end
+  deprecate :debug, :none, 2018, 12
 
   ##
   # Terminate the application with exit code +status+, running any exit
@@ -680,8 +658,8 @@ class Gem::SilentUI < Gem::StreamUI
   def initialize
     reader, writer = nil, nil
 
-    reader = File.open(Gem::Util::NULL_DEVICE, 'r')
-    writer = File.open(Gem::Util::NULL_DEVICE, 'w')
+    reader = File.open(IO::NULL, 'r')
+    writer = File.open(IO::NULL, 'w')
 
     super reader, writer, writer, false
   end

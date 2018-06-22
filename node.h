@@ -248,7 +248,6 @@ typedef struct RNode {
 	struct RNode *node;
 	ID id;
 	VALUE value;
-	VALUE (*cfunc)(ANYARGS);
 	ID *tbl;
     } u1;
     union {
@@ -263,7 +262,6 @@ typedef struct RNode {
 	long state;
 	struct rb_global_entry *entry;
 	struct rb_args_info *args;
-	long cnt;
 	VALUE value;
     } u3;
     rb_code_location_t nd_loc;
@@ -325,7 +323,6 @@ typedef struct RNode {
 #define nd_cval  u3.value
 
 #define nd_oid   u1.id
-#define nd_cnt   u3.cnt
 #define nd_tbl   u1.tbl
 
 #define nd_var   u1.node
@@ -336,7 +333,6 @@ typedef struct RNode {
 
 #define nd_lit   u1.value
 
-#define nd_frml  u2.argc
 #define nd_rest  u1.id
 #define nd_opt   u1.node
 #define nd_pid   u1.id
@@ -347,11 +343,7 @@ typedef struct RNode {
 #define nd_args  u3.node
 #define nd_ainfo u3.args
 
-#define nd_noex  u3.id
 #define nd_defn  u3.node
-
-#define nd_cfnc  u1.cfunc
-#define nd_argc  u2.argc
 
 #define nd_cpath u1.node
 #define nd_super u3.node
@@ -540,7 +532,7 @@ void *rb_parser_malloc(struct parser_params *, size_t);
 void *rb_parser_realloc(struct parser_params *, void *, size_t);
 void *rb_parser_calloc(struct parser_params *, size_t, size_t);
 void rb_parser_free(struct parser_params *, void *);
-void rb_parser_printf(struct parser_params *parser, const char *fmt, ...);
+PRINTF_ARGS(void rb_parser_printf(struct parser_params *parser, const char *fmt, ...), 2, 3);
 
 RUBY_SYMBOL_EXPORT_END
 

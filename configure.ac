@@ -457,6 +457,7 @@ AS_IF([test "$GCC:${warnflags+set}:no" = yes::no], [
 		 -Wno-parentheses-equality \
 		 -Wno-constant-logical-operand \
 		 -Wno-self-assign \
+		 -Wno-cast-function-type \
 		 -Wunused-variable \
 		 -Werror=implicit-int \
 		 -Werror=pointer-arith \
@@ -580,6 +581,17 @@ AS_IF([test "$GCC" = yes], [
     ],
     [cygwin*|darwin*|netbsd*], [
       # need lgamma_r(), finite()
+    ],
+    [solaris*], [
+      # ANSI (no XCFLAGS because this is C only)
+      # Because "-std=gnu99" affects existance of functions on Solaris,
+      # "-std=gnu99" will be appended to CPPFLAGS.
+	for ansi_options in -std=gnu99; do
+	    RUBY_TRY_CFLAGS(${ansi_options}, [
+		RUBY_APPEND_OPTIONS(CPPFLAGS, ${ansi_options})
+	    ], [ansi_options=])
+	    test "x${ansi_options}" = x || break
+	done
     ],
     [
       # ANSI (no XCFLAGS because this is C only)
@@ -822,36 +834,20 @@ main()
 		ac_cv_func_vfork=no
 		AC_MSG_CHECKING(whether _XOPEN_SOURCE is already given)
 		AC_TRY_COMPILE([#include <unistd.h>
-		    #ifndef _XOPEN_SOURCE
-		    #error _XOPEN_SOURCE is not defined
-		    #endif
-		    ], [],
-		    [given_xopen_source=yes], [given_xopen_source=no])
+			#ifndef _XOPEN_SOURCE
+			#error _XOPEN_SOURCE is not defined
+			#endif
+			], [],
+		        [given_xopen_source=yes], [given_xopen_source=no])
 		AC_MSG_RESULT($given_xopen_source)
 		AS_IF([test $given_xopen_source = no], [
-		  # On Solaris, with gcc, -std=iso9899:1999 in $ansi_options
-		  # is often also needed in CPPFLAGS, because some feature
-		  # definitions vary depending on such standards options.
-		  AS_CASE(["${ansi_options}"],
-		  [*-std=iso9899:1999*], [
-		    RUBY_APPEND_OPTIONS(CPPFLAGS, ${ansi_options})
-		  ])
 		  AC_MSG_CHECKING(appropriate _XOPEN_SOURCE value to define)
 		  define_xopen_source=""
 		  for tmp_xpg in 7 6 5; do
 		    AS_IF([test x"$define_xopen_source" != x], [
-		        break
+		      break
 		    ])
-		    # Both AC_TRY_CPP and AC_TRY_COMPILE should pass
-		    # because some options may not be set to CPPFLAGS.
-		    AC_TRY_CPP([
-			#define _XOPEN_SOURCE ${tmp_xpg}00
-			#include <unistd.h>
-			#ifndef _XPG${tmp_xpg}
-			#error _XPG${tmp_xpg} should be defined by _XOPEN_SOURCE=${tmp_xpg}00
-			#endif
-			], [
-			AC_TRY_COMPILE([
+		    RUBY_WERROR_FLAG([AC_TRY_COMPILE([
 			#define _XOPEN_SOURCE ${tmp_xpg}00
 			#include <unistd.h>
 			#ifndef _XPG${tmp_xpg}
@@ -859,7 +855,7 @@ main()
 			#endif
 			], [],
 			[define_xopen_source=${tmp_xpg}00], [])
-			], [])
+			])
 		  done
 		  AS_IF([test x"$define_xopen_source" = x], [
 		    define_xopen_source=no
@@ -1022,13 +1018,17 @@ AS_IF([test "x$with_gmp" != xno],
 AC_ARG_WITH([jemalloc],
   [AS_HELP_STRING([--with-jemalloc],[use jemalloc allocator])],
   [with_jemalloc=$withval], [with_jemalloc=no])
-AS_IF([test "x$with_jemalloc" = xyes],[
+AS_IF([test "x$with_jemalloc" != xno],[
   AC_SEARCH_LIBS([malloc_conf], [jemalloc],
-    [AC_DEFINE(HAVE_LIBJEMALLOC, 1)], [with_jemalloc=no])
+    [
+      AC_DEFINE(HAVE_LIBJEMALLOC, 1)
+      with_jemalloc=yes
+    ],
+    [test x$with_jemalloc = xyes && with_jemalloc=no])
   AC_CHECK_HEADER(jemalloc/jemalloc.h, [
     AC_DEFINE(RUBY_ALTERNATIVE_MALLOC_HEADER, [<jemalloc/jemalloc.h>])
   ])
-  AS_IF([test "x$with_jemalloc" = xno], [
+  AS_IF([test "x$with_jemalloc" != xyes], [
     AC_CACHE_CHECK([for jemalloc with JEMALLOC_MANGLE], rb_cv_jemalloc_demangle,
       [AC_LINK_IFELSE([AC_LANG_PROGRAM([@%:@define JEMALLOC_MANGLE 1
       @%:@ifdef RUBY_ALTERNATIVE_MALLOC_HEADER
@@ -1044,11 +1044,13 @@ AS_IF([test "x$with_jemalloc" = xyes],[
     AC_DEFINE(JEMALLOC_MANGLE)
     with_jemalloc=yes
   ])
-  AS_IF([test "x$with_jemalloc" = xyes],
+  AS_CASE(["$with_jemalloc"],
+    [yes],
     [
       AC_DEFINE(HAVE_MALLOC_CONF)
       ac_cv_func_malloc_usable_size=yes
     ],
+    [no],
     [AC_MSG_ERROR([jemalloc requested but not found])
   ])
 ])
@@ -2200,8 +2202,10 @@ AS_IF([test "$rb_cv_rshift_sign" = yes], [
   AC_DEFINE(RSHIFT(x,y), (((x)<0) ? ~((~(x))>>(int)(y)) : (x)>>(int)(y)))
 ])
 
-AS_IF([test x"$ac_cv_func_gettimeofday" != xyes], [
-    AC_MSG_ERROR(gettimeofday() must exist)
+AS_CASE(["$ac_cv_func_gettimeofday:$ac_cv_func_clock_gettime"],
+[*yes*], [],
+[
+    AC_MSG_ERROR(clock_gettime() or gettimeofday() must exist)
 ])
 
 AS_IF([test "$ac_cv_func_sysconf" = yes], [

@@ -73,8 +73,7 @@ gvl_acquire_common(rb_vm_t *vm)
 {
     if (vm->gvl.acquired) {
 
-	vm->gvl.waiting++;
-	if (vm->gvl.waiting == 1) {
+	if (!vm->gvl.waiting++) {
 	    /*
 	     * Wake up timer thread iff timer thread is slept.
 	     * When timer thread is polling mode, we don't want to
@@ -87,7 +86,7 @@ gvl_acquire_common(rb_vm_t *vm)
             rb_native_cond_wait(&vm->gvl.cond, &vm->gvl.lock);
 	}
 
-	vm->gvl.waiting--;
+	--vm->gvl.waiting;
 
 	if (vm->gvl.need_yield) {
 	    vm->gvl.need_yield = 0;
@@ -399,7 +398,10 @@ Init_native_thread(rb_thread_t *th)
 {
 #if defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
     if (condattr_monotonic) {
-        int r = pthread_condattr_setclock(condattr_monotonic, CLOCK_MONOTONIC);
+        int r = pthread_condattr_init(condattr_monotonic);
+        if (r == 0) {
+            r = pthread_condattr_setclock(condattr_monotonic, CLOCK_MONOTONIC);
+        }
         if (r) condattr_monotonic = NULL;
     }
 #endif
@@ -432,11 +434,11 @@ native_thread_destroy(rb_thread_t *th)
 }
 
 #ifndef USE_THREAD_CACHE
-#define USE_THREAD_CACHE 0
+#define USE_THREAD_CACHE 1
 #endif
 
 #if USE_THREAD_CACHE
-static rb_thread_t *register_cached_thread_and_wait(rb_nativethread_id_t);
+static rb_thread_t *register_cached_thread_and_wait(void);
 #endif
 
 #if defined HAVE_PTHREAD_GETATTR_NP || defined HAVE_PTHREAD_ATTR_GET_NP
@@ -841,7 +843,7 @@ thread_start_func_1(void *th_ptr)
 #if USE_THREAD_CACHE
     if (1) {
 	/* cache thread */
-	if ((th = register_cached_thread_and_wait(th->thread_id)) != 0) {
+	if ((th = register_cached_thread_and_wait()) != 0) {
 	    goto thread_start;
 	}
     }
@@ -870,15 +872,24 @@ thread_cache_reset(void)
 }
 #  endif
 
+/*
+ * number of seconds to cache for, I think 1-5s is sufficient to obviate
+ * the need for thread pool in many network programs (taking into account
+ * worst case network latency across the globe) without wasting memory
+ */
+#ifndef THREAD_CACHE_TIME
+#  define THREAD_CACHE_TIME 3
+#endif
+
 static rb_thread_t *
-register_cached_thread_and_wait(rb_nativethread_id_t thread_self_id)
+register_cached_thread_and_wait(void)
 {
-    struct timespec end = { 60, 0 };
+    struct timespec end = { THREAD_CACHE_TIME, 0 };
     struct cached_thread_entry entry;
 
     rb_native_cond_initialize(&entry.cond);
     entry.th = NULL;
-    entry.thread_id = thread_self_id;
+    entry.thread_id = pthread_self();
     end = native_cond_timeout(&entry.cond, end);
 
     rb_native_mutex_lock(&thread_cache_lock);
@@ -964,7 +975,6 @@ native_thread_create(rb_thread_t *th)
     return err;
 }
 
-#if USE_SLEEPY_TIMER_THREAD
 static void
 native_thread_join(pthread_t th)
 {
@@ -973,8 +983,6 @@ native_thread_join(pthread_t th)
 	rb_raise(rb_eThreadError, "native_thread_join() failed (%d)", err);
     }
 }
-#endif
-
 
 #if USE_NATIVE_THREAD_PRIORITY
 
@@ -1044,7 +1052,7 @@ native_sleep(rb_thread_t *th, struct timespec *timeout_rel)
 	timeout = native_cond_timeout(cond, *timeout_rel);
     }
 
-    GVL_UNLOCK_BEGIN();
+    GVL_UNLOCK_BEGIN(th);
     {
         rb_native_mutex_lock(lock);
 	th->unblock.func = ubf_pthread_cond_signal;
@@ -1065,7 +1073,7 @@ native_sleep(rb_thread_t *th, struct timespec *timeout_rel)
 
 	rb_native_mutex_unlock(lock);
     }
-    GVL_UNLOCK_END();
+    GVL_UNLOCK_END(th);
 
     thread_debug("native_sleep done\n");
 }
@@ -1596,9 +1604,10 @@ rb_thread_create_timer_thread(void)
 #endif
 	    return;
 	}
-
+#if USE_SLEEPY_TIMER_THREAD
 	/* validate pipe on this process */
 	timer_thread_pipe.owner_process = getpid();
+#endif
 	timer_thread.created = 1;
     }
 }
@@ -1610,8 +1619,8 @@ native_stop_timer_thread(void)
     stopped = --system_working <= 0;
 
     if (TT_DEBUG) fprintf(stderr, "stop timer thread\n");
-#if USE_SLEEPY_TIMER_THREAD
     if (stopped) {
+#if USE_SLEEPY_TIMER_THREAD
 	/* prevent wakeups from signal handler ASAP */
 	timer_thread_pipe.owner_process = 0;
 
@@ -1627,18 +1636,20 @@ native_stop_timer_thread(void)
 	/* stop writing ends of pipes so timer thread notices EOF */
 	CLOSE_INVALIDATE(normal[1]);
 	CLOSE_INVALIDATE(low[1]);
+#endif
 
 	/* timer thread will stop looping when system_working <= 0: */
 	native_thread_join(timer_thread.id);
 
+#if USE_SLEEPY_TIMER_THREAD
 	/* timer thread will close the read end on exit: */
 	VM_ASSERT(timer_thread_pipe.normal[0] == -1);
 	VM_ASSERT(timer_thread_pipe.low[0] == -1);
+#endif
 
 	if (TT_DEBUG) fprintf(stderr, "joined timer thread\n");
 	timer_thread.created = 0;
     }
-#endif
     return stopped;
 }
 

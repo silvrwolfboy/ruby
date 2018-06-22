@@ -116,7 +116,7 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_verbose
     assert_in_out_err(["-vve", ""]) do |r, e|
       assert_match(VERSION_PATTERN, r[0])
-      assert_equal(NO_JIT_DESCRIPTION, r[0])
+      assert_equal(RUBY_DESCRIPTION, r[0])
       assert_equal([], e)
     end
 
@@ -590,11 +590,11 @@ class TestRubyOptions < Test::Unit::TestCase
 
       pid = spawn(EnvUtil.rubybin, "test-script")
       ps = nil
-      10.times do
+      begin
         sleep 0.1
         ps = `#{PSCMD.join(' ')} #{pid}`
         break if /hello world/ =~ ps
-      end
+      end until Process.wait(pid, Process::WNOHANG)
       assert_match(/hello world/, ps)
       Process.kill :KILL, pid
       Process.wait(pid)
@@ -616,11 +616,11 @@ class TestRubyOptions < Test::Unit::TestCase
 
       pid = spawn(EnvUtil.rubybin, "test-script")
       ps = nil
-      10.times do
+      begin
         sleep 0.1
         ps = `#{PSCMD.join(' ')} #{pid}`
         break if /hello world/ =~ ps
-      end
+      end until Process.wait(pid, Process::WNOHANG)
       assert_match(/hello world/, ps)
       Process.kill :KILL, pid
       Process.wait(pid)

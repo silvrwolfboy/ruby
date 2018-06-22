@@ -333,7 +333,6 @@ vendorlibdir = CONFIG["vendorlibdir"]
 vendorarchlibdir = CONFIG["vendorarchdir"]
 mandir = CONFIG["mandir", true]
 docdir = CONFIG["docdir", true]
-configure_args = Shellwords.shellwords(CONFIG["configure_args"])
 enable_shared = CONFIG["ENABLE_SHARED"] == 'yes'
 dll = CONFIG["LIBRUBY_SO", enable_shared]
 lib = CONFIG["LIBRUBY", true]
@@ -361,7 +360,7 @@ install?(:local, :arch, :lib, :'lib-arch') do
   install lib, libdir, :mode => $prog_mode, :strip => $strip unless lib == arc
   install arc, libdir, :mode => $data_mode unless CONFIG["INSTALL_STATIC_LIBRARY"] == "no"
   if dll == lib and dll != arc
-    for link in CONFIG["LIBRUBY_ALIASES"].split
+    for link in CONFIG["LIBRUBY_ALIASES"].split - [File.basename(dll)]
       ln_sf(dll, File.join(libdir, link))
     end
   end
@@ -591,7 +590,7 @@ install?(:local, :comm, :man) do
           STDIN.reopen(f)
           begin
             destfile << suffix
-            IO.popen(compress) {|f| f.read}
+            IO.popen(compress, &:read)
           ensure
             STDIN.reopen(stdin)
             stdin.close
@@ -823,7 +822,7 @@ install?(:ext, :comm, :gem, :'bundled-gems') do
       inst.spec.extension_dir = with_destdir(inst.spec.extension_dir)
       begin
         Gem::DefaultUserInteraction.use_ui(silent) {inst.install}
-      rescue Gem::InstallError => e
+      rescue Gem::InstallError
         next
       end
       gemname = File.basename(gem)

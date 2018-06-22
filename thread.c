@@ -92,8 +92,13 @@ static VALUE sym_on_blocking;
 static VALUE sym_never;
 static ID id_locals;
 
-static void sleep_timespec(rb_thread_t *, struct timespec, int spurious_check);
-static void sleep_forever(rb_thread_t *th, int nodeadlock, int spurious_check);
+enum SLEEP_FLAGS {
+    SLEEP_DEADLOCKABLE = 0x1,
+    SLEEP_SPURIOUS_CHECK = 0x2
+};
+
+static void sleep_timespec(rb_thread_t *, struct timespec, unsigned int fl);
+static void sleep_forever(rb_thread_t *th, unsigned int fl);
 static void rb_thread_sleep_deadly_allow_spurious_wakeup(void);
 static int rb_threadptr_dead(rb_thread_t *th);
 static void rb_check_deadlock(rb_vm_t *vm);
@@ -149,14 +154,13 @@ static inline void blocking_region_end(rb_thread_t *th, struct rb_blocking_regio
 	SET_MACHINE_STACK_END(&(th)->ec->machine.stack_end);	\
     } while (0)
 
-#define GVL_UNLOCK_BEGIN() do { \
-  rb_thread_t *_th_stored = GET_THREAD(); \
-  RB_GC_SAVE_MACHINE_CONTEXT(_th_stored); \
-  gvl_release(_th_stored->vm);
+#define GVL_UNLOCK_BEGIN(th) do { \
+  RB_GC_SAVE_MACHINE_CONTEXT(th); \
+  gvl_release(th->vm);
 
-#define GVL_UNLOCK_END() \
-  gvl_acquire(_th_stored->vm, _th_stored); \
-  rb_thread_set_current(_th_stored); \
+#define GVL_UNLOCK_END(th) \
+  gvl_acquire(th->vm, th); \
+  rb_thread_set_current(th); \
 } while(0)
 
 #ifdef __GNUC__
@@ -168,14 +172,13 @@ static inline void blocking_region_end(rb_thread_t *th, struct rb_blocking_regio
 #else
 #define only_if_constant(expr, notconst) notconst
 #endif
-#define BLOCKING_REGION(exec, ubf, ubfarg, fail_if_interrupted) do { \
-    rb_thread_t *__th = GET_THREAD(); \
+#define BLOCKING_REGION(th, exec, ubf, ubfarg, fail_if_interrupted) do { \
     struct rb_blocking_region_buffer __region; \
-    if (blocking_region_begin(__th, &__region, (ubf), (ubfarg), fail_if_interrupted) || \
+    if (blocking_region_begin(th, &__region, (ubf), (ubfarg), fail_if_interrupted) || \
 	/* always return true unless fail_if_interrupted */ \
 	!only_if_constant(fail_if_interrupted, TRUE)) { \
 	exec; \
-	blocking_region_end(__th, &__region); \
+	blocking_region_end(th, &__region); \
     }; \
 } while(0)
 
@@ -206,8 +209,15 @@ vm_living_thread_num(const rb_vm_t *vm)
  * one we know of that supports using poll() in all places select()
  * would work.
  */
-#if defined(HAVE_POLL) && defined(__linux__)
-#  define USE_POLL
+#if defined(HAVE_POLL)
+#  if defined(__linux__)
+#    define USE_POLL
+#  endif
+#  if defined(__FreeBSD_version) && __FreeBSD_version >= 1100000
+#    define USE_POLL
+     /* FreeBSD does not set POLLOUT when POLLHUP happens */
+#    define POLLERR_SET (POLLHUP | POLLERR)
+#  endif
 #endif
 
 static struct timespec *
@@ -230,6 +240,21 @@ timeval_for(struct timeval *tv, const struct timespec *ts)
         return tv;
     }
     return 0;
+}
+
+static void
+timeout_prepare(struct timespec **tsp,
+            struct timespec *ts, struct timespec *end,
+            const struct timeval *timeout)
+{
+    if (timeout) {
+        getclockofday(end);
+        timespec_add(end, timespec_for(ts, timeout));
+        *tsp = ts;
+    }
+    else {
+	*tsp = 0;
+    }
 }
 
 #if THREAD_DEBUG
@@ -1130,24 +1155,25 @@ double2timespec(struct timespec *ts, double d)
 }
 
 static void
-sleep_forever(rb_thread_t *th, int deadlockable, int spurious_check)
+sleep_forever(rb_thread_t *th, unsigned int fl)
 {
     enum rb_thread_status prev_status = th->status;
-    enum rb_thread_status status = deadlockable ? THREAD_STOPPED_FOREVER : THREAD_STOPPED;
+    enum rb_thread_status status;
 
+    status  = fl & SLEEP_DEADLOCKABLE ? THREAD_STOPPED_FOREVER : THREAD_STOPPED;
     th->status = status;
     RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
     while (th->status == status) {
-	if (deadlockable) {
+	if (fl & SLEEP_DEADLOCKABLE) {
 	    th->vm->sleeper++;
 	    rb_check_deadlock(th->vm);
 	}
 	native_sleep(th, 0);
-	if (deadlockable) {
+	if (fl & SLEEP_DEADLOCKABLE) {
 	    th->vm->sleeper--;
 	}
 	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
-	if (!spurious_check)
+	if (!(fl & SLEEP_SPURIOUS_CHECK))
 	    break;
     }
     th->status = prev_status;
@@ -1233,7 +1259,7 @@ timespec_update_expire(struct timespec *ts, const struct timespec *end)
 }
 
 static void
-sleep_timespec(rb_thread_t *th, struct timespec ts, int spurious_check)
+sleep_timespec(rb_thread_t *th, struct timespec ts, unsigned int fl)
 {
     struct timespec end;
     enum rb_thread_status prev_status = th->status;
@@ -1247,7 +1273,7 @@ sleep_timespec(rb_thread_t *th, struct timespec ts, int spurious_check)
 	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
 	if (timespec_update_expire(&ts, &end))
 	    break;
-	if (!spurious_check)
+	if (!(fl & SLEEP_SPURIOUS_CHECK))
 	    break;
     }
     th->status = prev_status;
@@ -1257,21 +1283,21 @@ void
 rb_thread_sleep_forever(void)
 {
     thread_debug("rb_thread_sleep_forever\n");
-    sleep_forever(GET_THREAD(), FALSE, TRUE);
+    sleep_forever(GET_THREAD(), SLEEP_SPURIOUS_CHECK);
 }
 
 void
 rb_thread_sleep_deadly(void)
 {
     thread_debug("rb_thread_sleep_deadly\n");
-    sleep_forever(GET_THREAD(), TRUE, TRUE);
+    sleep_forever(GET_THREAD(), SLEEP_DEADLOCKABLE|SLEEP_SPURIOUS_CHECK);
 }
 
 static void
 rb_thread_sleep_deadly_allow_spurious_wakeup(void)
 {
     thread_debug("rb_thread_sleep_deadly_allow_spurious_wakeup\n");
-    sleep_forever(GET_THREAD(), TRUE, FALSE);
+    sleep_forever(GET_THREAD(), SLEEP_DEADLOCKABLE);
 }
 
 void
@@ -1281,7 +1307,7 @@ rb_thread_wait_for(struct timeval time)
     struct timespec ts;
 
     timespec_for(&ts, &time);
-    sleep_timespec(th, ts, 1);
+    sleep_timespec(th, ts, SLEEP_SPURIOUS_CHECK);
 }
 
 /*
@@ -1392,7 +1418,7 @@ call_without_gvl(void *(*func)(void *), void *data1,
 	data2 = th;
     }
 
-    BLOCKING_REGION({
+    BLOCKING_REGION(th, {
 	val = func(data1);
 	saved_errno = errno;
     }, ubf, data2, fail_if_interrupted);
@@ -1520,10 +1546,10 @@ rb_thread_io_blocking_region(rb_blocking_function_t *func, void *data1, int fd)
 
     EC_PUSH_TAG(ec);
     if ((state = EC_EXEC_TAG()) == TAG_NONE) {
-	BLOCKING_REGION({
+	BLOCKING_REGION(wfd.th, {
 	    val = func(data1);
 	    saved_errno = errno;
-	}, ubf_select, rb_ec_thread_ptr(ec), FALSE);
+	}, ubf_select, wfd.th, FALSE);
     }
     EC_POP_TAG();
 
@@ -3778,27 +3804,37 @@ rb_fd_set(int fd, rb_fdset_t *set)
 #define rb_fd_no_init(fds) (void)(fds)
 #endif
 
-static inline int
-retryable(int e)
+static int
+wait_retryable(int *result, int errnum, struct timespec *timeout,
+                const struct timespec *end)
 {
-    if (e == EINTR) return TRUE;
+    if (*result < 0) {
+        switch (errnum) {
+          case EINTR:
 #ifdef ERESTART
-    if (e == ERESTART) return TRUE;
+          case ERESTART:
 #endif
+            *result = 0;
+            if (timeout && timespec_update_expire(timeout, end)) {
+                timeout->tv_sec = 0;
+                timeout->tv_nsec = 0;
+            }
+            return TRUE;
+        }
+        return FALSE;
+    }
+    else if (*result == 0) {
+	/* check for spurious wakeup */
+        if (timeout) {
+            return !timespec_update_expire(timeout, end);
+        }
+        return TRUE;
+    }
     return FALSE;
 }
 
 #define restore_fdset(fds1, fds2) \
     ((fds1) ? rb_fd_dup(fds1, fds2) : (void)0)
-
-static inline int
-update_timespec(struct timespec *timeout, const struct timespec *end)
-{
-    if (timeout) {
-        return !timespec_update_expire(timeout, end);
-    }
-    return TRUE;
-}
 
 static int
 do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
@@ -3809,26 +3845,15 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
     rb_fdset_t MAYBE_UNUSED(orig_read);
     rb_fdset_t MAYBE_UNUSED(orig_write);
     rb_fdset_t MAYBE_UNUSED(orig_except);
-    struct timespec end;
-    struct timespec *tsp = 0;
-    struct timespec ts
-#if defined(__GNUC__) && (__GNUC__ == 7 || __GNUC__ == 8)
-        = {0, 0}
-#endif
-        ;
+    struct timespec ts, end, *tsp;
     rb_thread_t *th = GET_THREAD();
 
+    timeout_prepare(&tsp, &ts, &end, timeout);
 #define do_select_update() \
     (restore_fdset(readfds, &orig_read), \
      restore_fdset(writefds, &orig_write), \
      restore_fdset(exceptfds, &orig_except), \
-     update_timespec(tsp, &end))
-
-    if (timeout) {
-        getclockofday(&end);
-        timespec_add(&end, timespec_for(&ts, timeout));
-        tsp = &ts;
-    }
+     TRUE)
 
 #define fd_init_copy(f) \
     (f##fds) ? rb_fd_init_copy(&orig_##f, f##fds) : rb_fd_no_init(&orig_##f)
@@ -3840,20 +3865,23 @@ do_select(int n, rb_fdset_t *const readfds, rb_fdset_t *const writefds,
     do {
 	lerrno = 0;
 
-	BLOCKING_REGION({
+	BLOCKING_REGION(th, {
 	    result = native_fd_select(n, readfds, writefds, exceptfds,
 				      timeval_for(timeout, tsp), th);
 	    if (result < 0) lerrno = errno;
 	}, ubf_select, th, FALSE);
 
 	RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
-    } while (result < 0 && retryable(errno = lerrno) && do_select_update());
+    } while (wait_retryable(&result, lerrno, tsp, &end) && do_select_update());
 
 #define fd_term(f) if (f##fds) rb_fd_term(&orig_##f)
     fd_term(read);
     fd_term(write);
     fd_term(except);
 #undef fd_term
+    if (result < 0) {
+	errno = lerrno;
+    }
 
     return result;
 }
@@ -3923,6 +3951,10 @@ rb_thread_fd_select(int max, rb_fdset_t * read, rb_fdset_t * write, rb_fdset_t *
 #define POLLOUT_SET (POLLWRBAND | POLLWRNORM | POLLOUT | POLLERR)
 #define POLLEX_SET (POLLPRI)
 
+#ifndef POLLERR_SET /* defined for FreeBSD for now */
+#  define POLLERR_SET (0)
+#endif
+
 #ifndef HAVE_PPOLL
 /* TODO: don't ignore sigmask */
 int
@@ -3960,32 +3992,27 @@ rb_wait_for_single_fd(int fd, int events, struct timeval *timeout)
 {
     struct pollfd fds;
     int result = 0, lerrno;
-    struct timespec ts;
-    struct timespec end;
-    struct timespec *tsp = 0;
+    struct timespec ts, end, *tsp;
     rb_thread_t *th = GET_THREAD();
 
-    if (timeout) {
-        getclockofday(&end);
-        timespec_add(&end, timespec_for(&ts, timeout));
-        tsp = &ts;
-    }
-
+    timeout_prepare(&tsp, &ts, &end, timeout);
     fds.fd = fd;
     fds.events = (short)events;
 
     do {
         fds.revents = 0;
         lerrno = 0;
-        BLOCKING_REGION({
+        BLOCKING_REGION(th, {
             result = ppoll(&fds, 1, tsp, NULL);
             if (result < 0) lerrno = errno;
         }, ubf_select, th, FALSE);
 
         RUBY_VM_CHECK_INTS_BLOCKING(th->ec);
-    } while (result < 0 && retryable(errno = lerrno) &&
-            update_timespec(tsp, &end));
-    if (result < 0) return -1;
+    } while (wait_retryable(&result, lerrno, tsp, &end));
+    if (result < 0) {
+	errno = lerrno;
+	return -1;
+    }
 
     if (fds.revents & POLLNVAL) {
 	errno = EBADF;
@@ -4003,6 +4030,10 @@ rb_wait_for_single_fd(int fd, int events, struct timeval *timeout)
 	result |= RB_WAITFD_OUT;
     if (fds.revents & POLLEX_SET)
 	result |= RB_WAITFD_PRI;
+
+    /* all requested events are ready if there is an error */
+    if (fds.revents & POLLERR_SET)
+	result |= events;
 
     return result;
 }

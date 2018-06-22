@@ -164,9 +164,7 @@ class Gem::RemoteFetcher
       begin
         source_uri = URI.parse(source_uri)
       rescue
-        source_uri = URI.parse(URI.const_defined?(:DEFAULT_PARSER) ?
-                               URI::DEFAULT_PARSER.escape(source_uri.to_s) :
-                               URI.escape(source_uri.to_s))
+        source_uri = URI.parse(URI::DEFAULT_PARSER.escape(source_uri.to_s))
       end
     end
 
@@ -293,7 +291,7 @@ class Gem::RemoteFetcher
 
     if data and !head and uri.to_s =~ /\.gz$/
       begin
-        data = Gem.gunzip data
+        data = Gem::Util.gunzip data
       rescue Zlib::GzipFile::Error
         raise FetchError.new("server did not return a valid file", uri.to_s)
       end

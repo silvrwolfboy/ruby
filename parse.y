@@ -59,7 +59,10 @@
 	  (Current).end_pos = YYRHSLOC(Rhs, N).end_pos;			\
 	}								\
       else								\
-	RUBY_SET_YYLLOC_OF_NONE(Current);				\
+        {                                                               \
+          (Current).beg_pos = YYRHSLOC(Rhs, 0).end_pos;                 \
+          (Current).end_pos = YYRHSLOC(Rhs, 0).end_pos;                 \
+        }                                                               \
     while (0)
 
 #define RUBY_SET_YYLLOC_FROM_STRTERM_HEREDOC(Current)			\
@@ -277,6 +280,9 @@ struct parser_params {
     VALUE parsing_thread;
 #endif
 };
+
+#define new_tmpbuf() \
+    (rb_imemo_tmpbuf_t *)add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(NULL))
 
 #define intern_cstr(n,l,en) rb_intern3(n,l,en)
 
@@ -744,6 +750,10 @@ static void token_info_warn(struct parser_params *p, const char *token, token_in
 %pure-parser
 %lex-param {struct parser_params *p}
 %parse-param {struct parser_params *p}
+%initial-action
+{
+    RUBY_SET_YYLLOC_OF_NONE(@$);
+};
 
 %union {
     VALUE val;
@@ -2511,9 +2521,10 @@ primary		: literal
 			ID id = internal_id(p);
 			NODE *m = NEW_ARGS_AUX(0, 0, &NULL_LOC);
 			NODE *args, *scope, *internal_var = NEW_DVAR(id, &@2);
+			rb_imemo_tmpbuf_t *tmpbuf = new_tmpbuf();
 			ID *tbl = ALLOC_N(ID, 2);
 			tbl[0] = 1 /* length of local var table */; tbl[1] = id /* internal id */;
-			add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(tbl));
+			tmpbuf->ptr = (VALUE *)tbl;
 
 			switch (nd_type($2)) {
 			  case NODE_LASGN:
@@ -4573,7 +4584,7 @@ token_info_pop(struct parser_params *p, const char *token, const rb_code_locatio
 
     /* indentation check of matched keywords (begin..end, if..end, etc.) */
     token_info_warn(p, token, ptinfo_beg, 1, loc);
-    xfree(ptinfo_beg);
+    ruby_sized_xfree(ptinfo_beg, sizeof(*ptinfo_beg));
 }
 
 static void
@@ -4733,7 +4744,7 @@ vtable_alloc_gen(struct parser_params *p, int line, struct vtable *prev)
     tbl->prev = prev;
 #ifndef RIPPER
     if (p->debug) {
-	rb_parser_printf(p, "vtable_alloc:%d: %p\n", line, tbl);
+	rb_parser_printf(p, "vtable_alloc:%d: %p\n", line, (void *)tbl);
     }
 #endif
     return tbl;
@@ -4746,14 +4757,14 @@ vtable_free_gen(struct parser_params *p, int line, const char *name,
 {
 #ifndef RIPPER
     if (p->debug) {
-	rb_parser_printf(p, "vtable_free:%d: %s(%p)\n", line, name, tbl);
+	rb_parser_printf(p, "vtable_free:%d: %s(%p)\n", line, name, (void *)tbl);
     }
 #endif
     if (!DVARS_TERMINAL_P(tbl)) {
 	if (tbl->tbl) {
-	    xfree(tbl->tbl);
+	    ruby_sized_xfree(tbl->tbl, tbl->capa * sizeof(ID));
 	}
-	xfree(tbl);
+	ruby_sized_xfree(tbl, sizeof(tbl));
     }
 }
 #define vtable_free(tbl) vtable_free_gen(p, __LINE__, #tbl, tbl)
@@ -4765,7 +4776,7 @@ vtable_add_gen(struct parser_params *p, int line, const char *name,
 #ifndef RIPPER
     if (p->debug) {
 	rb_parser_printf(p, "vtable_add:%d: %s(%p), %s\n",
-			 line, name, tbl, rb_id2name(id));
+			 line, name, (void *)tbl, rb_id2name(id));
     }
 #endif
     if (DVARS_TERMINAL_P(tbl)) {
@@ -4774,7 +4785,7 @@ vtable_add_gen(struct parser_params *p, int line, const char *name,
     }
     if (tbl->pos == tbl->capa) {
 	tbl->capa = tbl->capa * 2;
-	REALLOC_N(tbl->tbl, ID, tbl->capa);
+	SIZED_REALLOC_N(tbl->tbl, ID, tbl->capa, tbl->pos);
     }
     tbl->tbl[tbl->pos++] = id;
 }
@@ -4787,7 +4798,7 @@ vtable_pop_gen(struct parser_params *p, int line, const char *name,
 {
     if (p->debug) {
 	rb_parser_printf(p, "vtable_pop:%d: %s(%p), %d\n",
-			 line, name, tbl, n);
+			 line, name, (void *)tbl, n);
     }
     if (tbl->pos < n) {
 	rb_parser_fatal(p, "vtable_pop: unreachable (%d < %d)", tbl->pos, n);
@@ -9106,7 +9117,7 @@ parser_token_value_print(struct parser_params *p, enum yytokentype type, const Y
 	break;
       case tBACK_REF:
 #ifndef RIPPER
-	rb_parser_printf(p, "$%c", valp->node->nd_nth);
+	rb_parser_printf(p, "$%c", (int)valp->node->nd_nth);
 #else
 	rb_parser_printf(p, "%"PRIsVALUE, valp->val);
 #endif
@@ -9798,8 +9809,10 @@ cond0(struct parser_params *p, NODE *node, int method_op, const YYLTYPE *loc)
       case NODE_DOT3:
 	node->nd_beg = range_op(p, node->nd_beg, loc);
 	node->nd_end = range_op(p, node->nd_end, loc);
-	if (nd_type(node) == NODE_DOT2) nd_set_type(node,NODE_FLIP2);
-	else if (nd_type(node) == NODE_DOT3) nd_set_type(node, NODE_FLIP3);
+	if (nd_type(node) == NODE_DOT2 || nd_type(node) == NODE_DOT3) {
+	    nd_set_type(node, nd_type(node) == NODE_DOT2 ? NODE_FLIP2 : NODE_FLIP3);
+	    parser_warn(p, node, "flip-flop is deprecated");
+	}
 	if (!method_op && !e_option_supplied(p)) {
 	    int b = literal_node(node->nd_beg);
 	    int e = literal_node(node->nd_end);
@@ -9818,6 +9831,10 @@ cond0(struct parser_params *p, NODE *node, int method_op, const YYLTYPE *loc)
 	    if (!method_op)
 		warn_unless_e_option(p, node, "regex literal in condition");
 	    nd_set_type(node, NODE_MATCH);
+	}
+	else if (node->nd_lit == Qtrue ||
+		 node->nd_lit == Qfalse) {
+	    /* booleans are OK, e.g., while true */
 	}
 	else {
 	    if (!method_op)
@@ -9994,9 +10011,10 @@ new_args_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, ID block, 
     int saved_line = p->ruby_sourceline;
     struct rb_args_info *args;
     NODE *node;
+    rb_imemo_tmpbuf_t *tmpbuf = new_tmpbuf();
 
     args = ZALLOC(struct rb_args_info);
-    add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(args));
+    tmpbuf->ptr = (VALUE *)args;
     node = NEW_NODE(NODE_ARGS, 0, 0, args, &NULL_LOC);
     if (p->error_p) return node;
 
@@ -10254,7 +10272,11 @@ new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_els
 {
     NODE *result = head;
     if (rescue) {
-        result = NEW_RESCUE(head, rescue, rescue_else, loc);
+        NODE *tmp = rescue_else ? rescue_else : rescue;
+        YYLTYPE rescue_loc = code_loc_gen(&head->nd_loc, &tmp->nd_loc);
+
+        result = NEW_RESCUE(head, rescue, rescue_else, &rescue_loc);
+        nd_set_line(result, rescue->nd_loc.beg_pos.lineno);
     }
     else if (rescue_else) {
         result = block_append(p, result, rescue_else);
@@ -10331,7 +10353,7 @@ local_pop(struct parser_params *p)
     vtable_free(p->lvtbl->vars);
     CMDARG_POP();
     COND_POP();
-    xfree(p->lvtbl);
+    ruby_sized_xfree(p->lvtbl, sizeof(*p->lvtbl));
     p->lvtbl = local;
 }
 
@@ -10344,9 +10366,11 @@ local_tbl(struct parser_params *p)
     int cnt = cnt_args + cnt_vars;
     int i, j;
     ID *buf;
+    rb_imemo_tmpbuf_t *tmpbuf = new_tmpbuf();
 
     if (cnt <= 0) return 0;
     buf = ALLOC_N(ID, cnt + 1);
+    tmpbuf->ptr = (void *)buf;
     MEMCPY(buf+1, p->lvtbl->args->tbl, ID, cnt_args);
     /* remove IDs duplicated to warn shadowing */
     for (i = 0, j = cnt_args+1; i < cnt_vars; ++i) {
@@ -10355,10 +10379,8 @@ local_tbl(struct parser_params *p)
 	    buf[j++] = id;
 	}
     }
-    if (--j < cnt) REALLOC_N(buf, ID, (cnt = j) + 1);
+    if (--j < cnt) tmpbuf->ptr = (void *)REALLOC_N(buf, ID, (cnt = j) + 1);
     buf[0] = cnt;
-
-    add_mark_object(p, rb_imemo_tmpbuf_auto_free_pointer(buf));
 
     return buf;
 }
@@ -10460,7 +10482,7 @@ dyna_pop(struct parser_params *p, const struct vtable *lvargs)
 	dyna_pop_1(p);
 	if (!p->lvtbl->args) {
 	    struct local_vars *local = p->lvtbl->prev;
-	    xfree(p->lvtbl);
+	    ruby_sized_xfree(p->lvtbl, sizeof(*p->lvtbl));
 	    p->lvtbl = local;
 	}
     }
@@ -10808,7 +10830,7 @@ parser_free(void *ptr)
     struct local_vars *local, *prev;
 
     if (p->tokenbuf) {
-        xfree(p->tokenbuf);
+        ruby_sized_xfree(p->tokenbuf, p->toksiz);
     }
     for (local = p->lvtbl; local; local = prev) {
 	if (local->vars) xfree(local->vars);

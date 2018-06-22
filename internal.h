@@ -964,6 +964,24 @@ VALUE rb_imemo_tmpbuf_auto_free_pointer(void *buf);
 VALUE rb_imemo_tmpbuf_auto_free_maybe_mark_buffer(void *buf, size_t cnt);
 rb_imemo_tmpbuf_t *rb_imemo_tmpbuf_parser_heap(void *buf, rb_imemo_tmpbuf_t *old_heap, size_t cnt);
 
+#define RB_IMEMO_TMPBUF_PTR(v) \
+    ((void *)(((const struct rb_imemo_tmpbuf_struct *)(v))->ptr))
+
+static inline VALUE
+rb_imemo_tmpbuf_auto_free_pointer_new_from_an_RString(VALUE str)
+{
+    const void *src;
+    void *dst;
+    size_t len;
+
+    SafeStringValue(str);
+    len = RSTRING_LEN(str);
+    src = RSTRING_PTR(str);
+    dst = ruby_xmalloc(len);
+    memcpy(dst, src, len);
+    return rb_imemo_tmpbuf_auto_free_pointer(dst);
+}
+
 void rb_strterm_mark(VALUE obj);
 
 /*! MEMO
@@ -1153,6 +1171,7 @@ VALUE rb_complex_plus(VALUE, VALUE);
 VALUE rb_complex_mul(VALUE, VALUE);
 VALUE rb_complex_abs(VALUE x);
 VALUE rb_complex_sqrt(VALUE x);
+VALUE rb_dbl_complex_polar(double abs, double ang);
 
 /* cont.c */
 VALUE rb_obj_is_fiber(VALUE);
@@ -1171,7 +1190,6 @@ void Init_ext(void);
 
 /* encoding.c */
 ID rb_id_encoding(void);
-void rb_gc_mark_encodings(void);
 #ifdef RUBY_ENCODING_H
 rb_encoding *rb_enc_get_from_index(int index);
 rb_encoding *rb_enc_check_str(VALUE str1, VALUE str2);
@@ -1298,9 +1316,11 @@ void rb_copy_wb_protected_attribute(VALUE dest, VALUE obj);
 #define ruby_sized_xfree(ptr, size) ruby_xfree(ptr)
 #define SIZED_REALLOC_N(var,type,n,old_n) REALLOC_N(var, type, n)
 #else
+RUBY_SYMBOL_EXPORT_BEGIN
 void *ruby_sized_xrealloc(void *ptr, size_t new_size, size_t old_size) RUBY_ATTR_ALLOC_SIZE((2));
 void *ruby_sized_xrealloc2(void *ptr, size_t new_count, size_t element_size, size_t old_count) RUBY_ATTR_ALLOC_SIZE((2, 3));
 void ruby_sized_xfree(void *x, size_t size);
+RUBY_SYMBOL_EXPORT_END
 #define SIZED_REALLOC_N(var,type,n,old_n) ((var)=(type*)ruby_sized_xrealloc((char*)(var), (n) * sizeof(type), (old_n) * sizeof(type)))
 #endif
 
@@ -1440,6 +1460,8 @@ VALUE rb_int_lshift(VALUE x, VALUE y);
 VALUE rb_int_div(VALUE x, VALUE y);
 VALUE rb_int_abs(VALUE num);
 VALUE rb_int_odd_p(VALUE num);
+int rb_int_positive_p(VALUE num);
+int rb_int_negative_p(VALUE num);
 
 static inline VALUE
 rb_num_compare_with_zero(VALUE num, ID mid)
@@ -1679,8 +1701,17 @@ struct rb_execarg {
  * The beginning one is for /bin/sh used by exec_with_sh.
  * The last one for terminating NULL used by execve.
  * See rb_exec_fillarg() in process.c. */
-#define ARGVSTR2ARGC(argv_str) (RSTRING_LEN(argv_str) / sizeof(char *) - 2)
-#define ARGVSTR2ARGV(argv_str) ((char **)RSTRING_PTR(argv_str) + 1)
+#define ARGVSTR2ARGV(argv_str) ((char **)RB_IMEMO_TMPBUF_PTR(argv_str) + 1)
+
+static inline size_t
+ARGVSTR2ARGC(VALUE argv_str)
+{
+    size_t i = 0;
+    char *const *p = ARGVSTR2ARGV(argv_str);
+    while (p[i++])
+        ;
+    return i - 1;
+}
 
 rb_pid_t rb_fork_ruby(int *status);
 void rb_last_status_clear(void);
@@ -1708,9 +1739,6 @@ int rb_match_nth_defined(int nth, VALUE match);
 /* signal.c */
 extern int ruby_enable_coredump;
 int rb_get_next_signal(void);
-
-/* st.c */
-extern void rb_hash_bulk_insert(long, const VALUE *, VALUE);
 
 /* strftime.c */
 #ifdef RUBY_ENCODING_H
