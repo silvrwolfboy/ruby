@@ -4453,11 +4453,9 @@ gc_mark_and_pin_maybe(rb_objspace_t *objspace, VALUE obj)
     (void)VALGRIND_MAKE_MEM_DEFINED(&obj, sizeof(obj));
     if (is_pointer_to_heap(objspace, (void *)obj)) {
 	int type = BUILTIN_TYPE(obj);
-	if (type != T_MOVED) {
+	if (type != T_MOVED && type != T_ZOMBIE && type != T_NONE) {
 	    gc_pin(objspace, obj);
-	    if (type != T_ZOMBIE && type != T_NONE) {
-		gc_mark_ptr(objspace, obj);
-	    }
+	    gc_mark_ptr(objspace, obj);
 	}
     }
 }
@@ -6957,17 +6955,24 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     int marked;
     int wb_unprotected;
     int uncollectible;
+    int marking;
     RVALUE *dest = (RVALUE *)free;
     RVALUE *src = (RVALUE *)scan;
+
+#if RGENGC_CHECK_MODE >= 5
+    fprintf(stderr, "moving: %s -> ", obj_info(src));
+#endif
 
     marked = rb_objspace_marked_object_p((VALUE)src);
     wb_unprotected = RVALUE_WB_UNPROTECTED((VALUE)src);
     uncollectible = RVALUE_UNCOLLECTIBLE((VALUE)src);
+    marking = RVALUE_MARKING((VALUE)src);
 
     objspace->total_allocated_objects++;
     CLEAR_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_WB_UNPROTECTED_BITS((VALUE)src), (VALUE)src);
     CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)src), (VALUE)src);
+    CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS((VALUE)src), (VALUE)src);
 
     if (FL_TEST(src, FL_EXIVAR)) {
 	rb_mv_generic_ivar(src, dest);
@@ -6983,6 +6988,12 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 
     memcpy(dest, src, sizeof(RVALUE));
     memset(src, 0, sizeof(RVALUE));
+
+    if (marking) {
+	MARK_IN_BITMAP(GET_HEAP_MARKING_BITS((VALUE)dest), (VALUE)dest);
+    } else {
+	CLEAR_IN_BITMAP(GET_HEAP_MARKING_BITS((VALUE)dest), (VALUE)dest);
+    }
 
     if (marked) {
 	MARK_IN_BITMAP(GET_HEAP_MARK_BITS((VALUE)dest), (VALUE)dest);
@@ -7002,8 +7013,16 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)dest), (VALUE)dest);
     }
 
+    if (wb_unprotected && uncollectible) {
+	GET_HEAP_PAGE(dest)->flags.has_uncollectible_shady_objects = TRUE;
+    }
+
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
+
+#if RGENGC_CHECK_MODE >= 5
+    fprintf(stderr, "%s\n", obj_info(dest));
+#endif
 }
 
 struct heap_cursor {
@@ -7397,6 +7416,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
 {
     RVALUE *any = RANY(obj);
 
+#if RGENGC_CHECK_MODE >= 5
+    fprintf(stderr, "update-refs: %s -> ", obj_info(obj));
+#endif
+
     switch(BUILTIN_TYPE(obj)) {
 	case T_CLASS:
 	case T_MODULE:
@@ -7533,6 +7556,10 @@ gc_update_object_references(rb_objspace_t *objspace, VALUE obj)
     }
 
     UPDATE_IF_MOVED(objspace, RBASIC(obj)->klass);
+
+#if RGENGC_CHECK_MODE >= 5
+    fprintf(stderr, "%s\n", obj_info(obj));
+#endif
 }
 static int
 gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
@@ -7612,7 +7639,7 @@ rb_gc_compact(VALUE mod)
     rb_clear_method_cache_by_class(rb_cObject);
     rb_clear_constant_cache();
 
-    rgengc_mark_and_rememberset_clear(objspace, heap_eden);
+    // rgengc_mark_and_rememberset_clear(objspace, heap_eden);
 
     /* GC after compaction to eliminate T_MOVED */
     rb_gc();
@@ -10378,7 +10405,7 @@ method_type_name(rb_method_type_t type)
 static void
 rb_raw_iseq_info(char *buff, const int buff_size, const rb_iseq_t *iseq)
 {
-    if (iseq->body && iseq->body->location.label) {
+    if (iseq->body && iseq->body->location.label && !RB_TYPE_P(iseq->body->location.pathobj, T_MOVED)) {
 	VALUE path = rb_iseq_path(iseq);
 	VALUE n = iseq->body->location.first_lineno;
 	snprintf(buff, buff_size, "%s %s@%s:%d", buff,
