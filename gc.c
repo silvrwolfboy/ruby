@@ -3258,14 +3258,25 @@ rb_obj_id(VALUE obj)
     VALUE id;
 
     if (st_lookup(obj_to_id_tbl, (st_data_t)obj, &id)) {
+	if (getenv("TESTING")) {
+	    printf("Second time object_id was called on this object: %p\n", obj);
+	}
 	return id;
     } else {
 	int tries;
 	id = nonspecial_obj_id(obj);
-	for(tries = 0; tries < 500; tries += 1) {
+
+	for(tries = 0; tries < 5; tries += 1) {
+	    /* id is the object id */
 	    if (st_lookup(id_to_obj_tbl, (st_data_t)id, 0)) {
+		if (getenv("TESTING")) {
+		    printf("First time object_id was called on this object, but there was a collision\n");
+		}
 		id += 2;
 	    } else {
+		if (getenv("TESTING")) {
+		    printf("Initial insert: %p\n", obj);
+		}
 		st_insert(obj_to_id_tbl, (st_data_t)obj, id);
 		st_insert(id_to_obj_tbl, (st_data_t)id, Qtrue);
 		return id;
@@ -6979,11 +6990,15 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
     }
 
     VALUE id;
-    if(st_lookup(obj_to_id_tbl, (st_data_t)src, &id)) {
-	st_delete(obj_to_id_tbl, (st_data_t)src, 0);
-	st_insert(obj_to_id_tbl, (st_data_t)dest, id);
-	st_delete(id_to_obj_tbl, (st_data_t)id, 0);
-	st_insert(id_to_obj_tbl, (st_data_t)id, Qtrue);
+    if(st_lookup(obj_to_id_tbl, (VALUE)src, &id)) {
+	if (getenv("TESTING")) {
+	    printf("Moving insert: %p -> %p\n", src, dest);
+	}
+	st_delete(obj_to_id_tbl, (VALUE)src, &id);
+	if(st_lookup(obj_to_id_tbl, (VALUE)src, 0)) {
+	    rb_bug("wtaf");
+	}
+	st_insert(obj_to_id_tbl, (VALUE)dest, id);
     }
 
     memcpy(dest, src, sizeof(RVALUE));
@@ -10762,6 +10777,11 @@ rb_gcdebug_remove_stress_to_class(int argc, VALUE *argv, VALUE self)
  *  GC::Profiler.
  */
 
+VALUE rb_obj_location(VALUE self)
+{
+    return nonspecial_obj_id(self);
+}
+
 void
 Init_GC(void)
 {
@@ -10771,7 +10791,7 @@ Init_GC(void)
     VALUE gc_constants;
 
     id_to_obj_tbl = st_init_numtable();
-    obj_to_id_tbl = st_init_numtable();
+    obj_to_id_tbl = rb_init_identtable();
 
     rb_mGC = rb_define_module("GC");
     rb_define_singleton_method(rb_mGC, "start", gc_start_internal, -1);
@@ -10817,6 +10837,7 @@ Init_GC(void)
 
     rb_define_method(rb_cBasicObject, "__id__", rb_obj_id, 0);
     rb_define_method(rb_mKernel, "object_id", rb_obj_id, 0);
+    rb_define_method(rb_mKernel, "memory_location", rb_obj_location, 0);
 
     rb_define_module_function(rb_mObjSpace, "count_objects", count_objects, -1);
 
