@@ -7013,10 +7013,6 @@ gc_move(rb_objspace_t *objspace, VALUE scan, VALUE free)
 	CLEAR_IN_BITMAP(GET_HEAP_UNCOLLECTIBLE_BITS((VALUE)dest), (VALUE)dest);
     }
 
-    if (wb_unprotected && uncollectible) {
-	GET_HEAP_PAGE(dest)->flags.has_uncollectible_shady_objects = TRUE;
-    }
-
     src->as.moved.flags = T_MOVED;
     src->as.moved.destination = (VALUE)dest;
 
@@ -7572,13 +7568,18 @@ gc_ref_update(void *vstart, void *vend, size_t stride, void * data)
     objspace = (rb_objspace_t *)data;
     page = GET_HEAP_PAGE(v);
     page->freelist = NULL;
+    page->flags.has_uncollectible_shady_objects = FALSE;
 
+    /* For each object on the page */
     for(; v != (VALUE)vend; v += stride) {
 	if (SPECIAL_CONST_P(v)) {
 	} else if (BUILTIN_TYPE(v) == T_NONE) {
 	    heap_page_add_freeobj(objspace, page, v);
 	    free_slots++;
 	} else {
+	    if (RVALUE_WB_UNPROTECTED(v)) {
+		page->flags.has_uncollectible_shady_objects = TRUE;
+	    }
 	    gc_update_object_references(objspace, v);
 	}
     }
