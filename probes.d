@@ -152,6 +152,18 @@ provider ruby {
   probe string__create(long length, const char *filename, int lineno);
 
   /*
+     ruby:::string-capa-resize(from_capa, to_capa, filename, lineno);
+
+     This probe is fired when String capacity is changed
+
+      * `from_capa` the current capacity of the string (long)
+      * `to_capa` the new capacity of the string (long)
+      * `filename` the name of the file where the string is allocated (string)
+      * `lineno` the line number in the file where the string is allocated (int)
+  */
+  probe string__capa__resize(long from_capa, long to_capa, const char *filename, int lineno);
+
+  /*
      ruby:::symbol-create(str, filename, lineno);
 
      This probe is fired when a Symbol is about to be allocated.

@@ -132,6 +132,18 @@ VALUE rb_cSymbol;
     RESIZE_CAPA_TERM(str,capacity,termlen);\
 } while (0)
 #define RESIZE_CAPA_TERM(str,capacity,termlen) do {\
+    if (UNLIKELY(RUBY_DTRACE_STRING_CAPA_RESIZE_ENABLED())) {\
+	int dtrace_line; \
+	const char *dtrace_file = rb_source_location_cstr(&dtrace_line); \
+	long prev_capa;\
+	if (STR_EMBED_P(str)) {\
+	    prev_capa = RSTRING_EMBED_LEN_MAX + 1 - termlen;\
+	} else {\
+	    prev_capa = RSTRING(str)->as.heap.aux.capa;\
+	}\
+	if (!dtrace_file) dtrace_file = ""; \
+	RUBY_DTRACE_STRING_CAPA_RESIZE(prev_capa, capacity, dtrace_file, dtrace_line);\
+    }\
     if (STR_EMBED_P(str)) {\
 	if (!STR_EMBEDDABLE_P(capacity, termlen)) {\
 	    char *const tmp = ALLOC_N(char, (size_t)(capacity) + (termlen));\
