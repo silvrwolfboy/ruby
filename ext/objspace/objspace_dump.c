@@ -185,11 +185,6 @@ dump_append_string_content(struct dump_config *dc, VALUE obj)
     dump_append(dc, ", \"bytesize\":%ld", RSTRING_LEN(obj));
     if (!STR_EMBED_P(obj) && !STR_SHARED_P(obj) && (long)rb_str_capacity(obj) != RSTRING_LEN(obj))
 	dump_append(dc, ", \"capacity\":%"PRIuSIZE, rb_str_capacity(obj));
-
-    if (is_ascii_string(obj)) {
-	dump_append(dc, ", \"value\":");
-	dump_append_string_value(dc, obj);
-    }
 }
 
 static const char *
@@ -287,8 +282,6 @@ dump_object(VALUE obj, struct dump_config *dc)
 
       case T_CLASS:
       case T_MODULE:
-	if (dc->cur_obj_klass)
-	    dump_append(dc, ", \"name\":\"%s\"", rb_class2name(obj));
 	break;
 
       case T_DATA:
