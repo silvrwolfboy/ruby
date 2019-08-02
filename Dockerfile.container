@@ -25,9 +25,3 @@ RUN apt-get install -y libssl-dev \
   libgdbm-dev
 
 RUN apt-get install -y libjemalloc-dev
-
-ADD . .
-RUN autoconf
-RUN ./configure --disable-install-rdoc --with-jemalloc
-RUN make -s -j$(nproc)
-RUN make test
