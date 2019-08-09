@@ -25,3 +25,8 @@ RUN apt-get install -y libssl-dev \
   libgdbm-dev
 
 RUN apt-get install -y libjemalloc-dev
+RUN apt-get install -y zlib1g-dev \
+  libssl-dev \
+  libyaml-dev \
+  libgmp-dev \
+  openssl
