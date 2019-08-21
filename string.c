@@ -323,6 +323,9 @@ rb_fstring(VALUE str)
 	return str;
     }
 
+    if (!OBJ_FROZEN(str))
+        rb_str_resize_exact(str, RSTRING_LEN(str));
+
     fstr = register_fstring(str);
 
     if (!bare) {
@@ -2606,7 +2609,7 @@ VALUE
 rb_str_freeze(VALUE str)
 {
     if (OBJ_FROZEN(str)) return str;
-    rb_str_resize(str, RSTRING_LEN(str));
+    rb_str_resize_exact(str, RSTRING_LEN(str));
     return rb_obj_freeze(str);
 }
 
