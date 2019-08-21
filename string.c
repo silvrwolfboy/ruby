@@ -2692,8 +2692,8 @@ rb_str_set_len(VALUE str, long len)
     TERM_FILL(&RSTRING_PTR(str)[len], termlen);
 }
 
-VALUE
-rb_str_resize(VALUE str, long len)
+static VALUE
+rb_str_resize_internal(VALUE str, long len, bool exact)
 {
     long slen;
     int independent;
@@ -2733,6 +2733,7 @@ rb_str_resize(VALUE str, long len)
 	    str_make_independent_expand(str, slen, len - slen, termlen);
 	}
 	else if ((capa = RSTRING(str)->as.heap.aux.capa) < len ||
+		 exact ||
 		 (capa - len) > (len < 1024 ? len : 1024)) {
 	    SIZED_REALLOC_N(RSTRING(str)->as.heap.ptr, char,
 	                    (size_t)len + termlen, STR_HEAP_SIZE(str));
@@ -2744,6 +2745,19 @@ rb_str_resize(VALUE str, long len)
     }
     return str;
 }
+
+VALUE
+rb_str_resize(VALUE str, long len)
+{
+    return rb_str_resize_internal(str, len, false);
+}
+
+VALUE
+rb_str_resize_exact(VALUE str, long len)
+{
+    return rb_str_resize_internal(str, len, true);
+}
+
 
 static VALUE
 str_buf_cat(VALUE str, const char *ptr, long len)

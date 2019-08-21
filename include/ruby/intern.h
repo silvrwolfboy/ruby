@@ -774,6 +774,7 @@ void rb_str_modify_expand(VALUE, long);
 VALUE rb_str_freeze(VALUE);
 void rb_str_set_len(VALUE, long);
 VALUE rb_str_resize(VALUE, long);
+VALUE rb_str_resize_exact(VALUE, long);
 VALUE rb_str_cat(VALUE, const char*, long);
 VALUE rb_str_cat_cstr(VALUE, const char*);
 VALUE rb_str_cat2(VALUE, const char*);
