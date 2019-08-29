@@ -1333,6 +1333,7 @@ str_new_empty(VALUE str)
 }
 
 #define STR_BUF_MIN_SIZE 127
+STATIC_ASSERT(STR_BUF_MIN_SIZE, STR_BUF_MIN_SIZE > RSTRING_EMBED_LEN_MAX);
 
 VALUE
 rb_str_buf_new(long capa)
@@ -1613,7 +1614,18 @@ rb_str_init(int argc, VALUE *argv, VALUE str)
 	    }
 	    str_modifiable(str);
 	    if (STR_EMBED_P(str)) { /* make noembed always */
-		RSTRING(str)->as.heap.ptr = ALLOC_N(char, (size_t)capa + termlen);
+                char *new_ptr = ALLOC_N(char, (size_t)capa + termlen);
+                memcpy(new_ptr, RSTRING(str)->as.ary, RSTRING_EMBED_LEN_MAX + 1);
+                RSTRING(str)->as.heap.ptr = new_ptr;
+            }
+            else if (FL_TEST(str, STR_SHARED|STR_NOFREE)) {
+                const size_t size = (size_t)capa + termlen;
+                const char *const old_ptr = RSTRING_PTR(str);
+                const size_t osize = RSTRING(str)->as.heap.len + TERM_LEN(str);
+                char *new_ptr = ALLOC_N(char, (size_t)capa + termlen);
+                memcpy(new_ptr, old_ptr, osize < size ? osize : size);
+                FL_UNSET_RAW(str, STR_SHARED);
+                RSTRING(str)->as.heap.ptr = new_ptr;
 	    }
 	    else if (STR_HEAP_SIZE(str) != (size_t)capa + termlen) {
 		SIZED_REALLOC_N(RSTRING(str)->as.heap.ptr, char,
@@ -5066,7 +5078,7 @@ rb_str_sub_bang(int argc, VALUE *argv, VALUE str)
                 cr = cr2;
 	}
 	plen = end0 - beg0;
-	rp = RSTRING_PTR(repl); rlen = RSTRING_LEN(repl);
+        rlen = RSTRING_LEN(repl);
 	len = RSTRING_LEN(str);
 	if (rlen > plen) {
 	    RESIZE_CAPA(str, len + rlen - plen);
@@ -5075,7 +5087,8 @@ rb_str_sub_bang(int argc, VALUE *argv, VALUE str)
 	if (rlen != plen) {
 	    memmove(p + beg0 + rlen, p + beg0 + plen, len - beg0 - plen);
 	}
-	memcpy(p + beg0, rp, rlen);
+	rp = RSTRING_PTR(repl);
+	memmove(p + beg0, rp, rlen);
 	len += rlen - plen;
 	STR_SET_LEN(str, len);
 	TERM_FILL(&RSTRING_PTR(str)[len], TERM_LEN(str));
@@ -7937,9 +7950,13 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
 	long idx;
 	int last_null = 0;
 	struct re_registers *regs;
+        VALUE match = 0;
 
-	while ((end = rb_reg_search(spat, str, start, 0)) >= 0) {
-	    regs = RMATCH_REGS(rb_backref_get());
+        for (; (end = rb_reg_search(spat, str, start, 0)) >= 0;
+             (match ? (rb_match_unbusy(match), rb_backref_set(match)) : (void)0)) {
+            match = rb_backref_get();
+            if (!result) rb_match_busy(match);
+            regs = RMATCH_REGS(match);
 	    if (start == end && BEG(0) == END(0)) {
 		if (!ptr) {
 		    SPLIT_STR(0, 0);
@@ -7970,6 +7987,7 @@ rb_str_split_m(int argc, VALUE *argv, VALUE str)
 	    }
 	    if (!NIL_P(limit) && lim <= ++i) break;
 	}
+        if (match) rb_match_unbusy(match);
     }
     if (RSTRING_LEN(str) > 0 && (!NIL_P(limit) || RSTRING_LEN(str) > beg || lim < 0)) {
 	SPLIT_STR(beg, RSTRING_LEN(str)-beg);
@@ -8462,9 +8480,30 @@ get_reg_grapheme_cluster(rb_encoding *enc)
 	reg_grapheme_cluster = reg_grapheme_cluster_utf8;
     }
     if (!reg_grapheme_cluster) {
-	const OnigUChar source[] = "\\X";
+	const OnigUChar source_ascii[] = "\\X";
         OnigErrorInfo einfo;
-	int r = onig_new(&reg_grapheme_cluster, source, source + sizeof(source) - 1,
+        const OnigUChar *source = source_ascii;
+        size_t source_len = sizeof(source_ascii) - 1;
+        switch (encidx) {
+#define CHARS_16BE(x) (OnigUChar)((x)>>8), (OnigUChar)(x)
+#define CHARS_16LE(x) (OnigUChar)(x), (OnigUChar)((x)>>8)
+#define CHARS_32BE(x) CHARS_16BE((x)>>16), CHARS_16BE(x)
+#define CHARS_32LE(x) CHARS_16LE(x), CHARS_16LE((x)>>16)
+#define CASE_UTF(e) \
+          case ENCINDEX_UTF_##e: { \
+            static const OnigUChar source_UTF_##e[] = {CHARS_##e('\\'), CHARS_##e('X')}; \
+            source = source_UTF_##e; \
+            source_len = sizeof(source_UTF_##e); \
+            break; \
+          }
+            CASE_UTF(16BE); CASE_UTF(16LE); CASE_UTF(32BE); CASE_UTF(32LE);
+#undef CASE_UTF
+#undef CHARS_16BE
+#undef CHARS_16LE
+#undef CHARS_32BE
+#undef CHARS_32LE
+        }
+	int r = onig_new(&reg_grapheme_cluster, source, source + source_len,
                          ONIG_OPTION_DEFAULT, enc, OnigDefaultSyntax, &einfo);
 	if (r) {
             UChar message[ONIG_MAX_ERROR_MESSAGE_LEN];
