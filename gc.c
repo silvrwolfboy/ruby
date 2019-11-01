@@ -3605,38 +3605,33 @@ id2ref(VALUE obj, VALUE objid)
     VALUE orig;
     void *p0;
 
-    ptr = NUM2PTR(objid);
-    p0 = (void *)ptr;
+    if (FIXNUM_P(objid) || rb_big_size(objid) <= SIZEOF_VOIDP) {
+        ptr = NUM2PTR(objid);
+        if (ptr == Qtrue) return Qtrue;
+        if (ptr == Qfalse) return Qfalse;
+        if (ptr == Qnil) return Qnil;
+        if (FIXNUM_P(ptr)) return (VALUE)ptr;
+        if (FLONUM_P(ptr)) return (VALUE)ptr;
 
-    if (ptr == Qtrue) return Qtrue;
-    if (ptr == Qfalse) return Qfalse;
-    if (ptr == Qnil) return Qnil;
-    if (FIXNUM_P(ptr)) return (VALUE)ptr;
-    if (FLONUM_P(ptr)) return (VALUE)ptr;
-    ptr = obj_id_to_ref(objid);
+        ptr = obj_id_to_ref(objid);
+        if ((ptr % sizeof(RVALUE)) == (4 << 2)) {
+            ID symid = ptr / sizeof(RVALUE);
+            p0 = (void *)ptr;
+            if (rb_id2str(symid) == 0)
+                rb_raise(rb_eRangeError, "%p is not symbol id value", p0);
+            return ID2SYM(symid);
+        }
+    }
 
     if (st_lookup(objspace->id_to_obj_tbl, objid, &orig)) {
         return orig;
     }
 
-    if ((ptr % sizeof(RVALUE)) == (4 << 2)) {
-        ID symid = ptr / sizeof(RVALUE);
-        if (rb_id2str(symid) == 0)
-	    rb_raise(rb_eRangeError, "%p is not symbol id value", p0);
-	return ID2SYM(symid);
+    if (!rb_int_ge(objid, objspace->next_object_id)) {
+        rb_raise(rb_eRangeError, "%+"PRIsVALUE" is not id value", rb_int2str(objid, 10));
+    } else {
+        rb_raise(rb_eRangeError, "%+"PRIsVALUE" is recycled object", rb_int2str(objid, 10));
     }
-
-    if (!is_id_value(objspace, ptr)) {
-	rb_raise(rb_eRangeError, "%p is not id value", p0);
-    }
-    if (!is_live_object(objspace, ptr)) {
-	rb_raise(rb_eRangeError, "%p is recycled object", p0);
-    }
-    if (RBASIC(ptr)->klass == 0) {
-	rb_raise(rb_eRangeError, "%p is internal object", p0);
-    }
-
-    rb_raise(rb_eRangeError, "%p is unknown object_id", p0);
 }
 
 static VALUE
