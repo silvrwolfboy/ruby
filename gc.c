@@ -2848,7 +2848,7 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 
 
 #define OBJ_ID_INCREMENT (INT2FIX(20))
-#define OBJ_ID_INITIAL (INT2FIX(40))
+#define OBJ_ID_INITIAL (INT2FIX(FIXNUM_MAX / OBJ_ID_INCREMENT * OBJ_ID_INCREMENT))
 
 void
 Init_heap(void)
