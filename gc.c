@@ -2850,13 +2850,37 @@ obj_free(rb_objspace_t *objspace, VALUE obj)
 #define OBJ_ID_INCREMENT (INT2FIX(40))
 #define OBJ_ID_INITIAL (INT2FIX((FIXNUM_MAX / 40) * 40))
 
+static int
+object_id_cmp(st_data_t x, st_data_t y)
+{
+    if (RB_TYPE_P(x, T_BIGNUM)) {
+        return !rb_big_eql(x, y);
+    } else {
+        return x != y;
+    }
+}
+
+st_index_t
+object_id_hash(st_data_t n)
+{
+    if (RB_TYPE_P(n, T_BIGNUM)) {
+        return FIX2LONG(rb_big_hash(n));
+    } else {
+        return st_numhash(n);
+    }
+}
+static const struct st_hash_type object_id_hash_type = {
+    object_id_cmp,
+    object_id_hash,
+};
+
 void
 Init_heap(void)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
     objspace->next_object_id = OBJ_ID_INITIAL;
-    objspace->id_to_obj_tbl = st_init_numtable();
+    objspace->id_to_obj_tbl = st_init_table(&object_id_hash_type);
     objspace->obj_to_id_tbl = st_init_numtable();
 
 #if RGENGC_ESTIMATE_OLDMALLOC
