@@ -3287,6 +3287,8 @@ run_single_final(VALUE final, VALUE objid)
     return rb_check_funcall(cmd, idCall, 1, &objid);
 }
 
+static VALUE cached_object_id(VALUE obj);
+
 static void
 run_finalizer(rb_objspace_t *objspace, VALUE obj, VALUE table)
 {
@@ -3307,7 +3309,7 @@ run_finalizer(rb_objspace_t *objspace, VALUE obj, VALUE table)
 
     saved.safe = rb_safe_level();
     saved.errinfo = rb_errinfo();
-    saved.objid = nonspecial_obj_id(obj);
+    saved.objid = cached_object_id(obj);
     saved.cfp = ec->cfp;
     saved.finished = 0;
 
