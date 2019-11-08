@@ -2322,7 +2322,9 @@ struct rb_call_cache {
                struct rb_execution_context_struct *e,
                struct rb_control_frame_struct *,
                struct rb_calling_info *,
-               const struct rb_call_data *)))
+               const struct rb_call_data *))
+         - sizeof(size_t)                                        /* compact_count */
+         )
         / sizeof(rb_serial_t)
     ];
 
@@ -2334,6 +2336,8 @@ struct rb_call_cache {
                   struct rb_control_frame_struct *cfp,
                   struct rb_calling_info *calling,
                   struct rb_call_data *cd);
+
+    size_t compact_count;
 
     union {
         unsigned int index; /* used by ivar */
@@ -2520,6 +2524,8 @@ void rb_iv_tbl_copy(VALUE dst, VALUE src);
 /* gc.c (export) */
 VALUE rb_wb_protected_newobj_of(VALUE, VALUE);
 VALUE rb_wb_unprotected_newobj_of(VALUE, VALUE);
+void rb_gc_check_compact(size_t count);
+size_t rb_gc_compact_count(void);
 
 size_t rb_obj_memsize_of(VALUE);
 void rb_gc_verify_internal_consistency(void);
