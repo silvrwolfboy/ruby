@@ -597,6 +597,10 @@ typedef struct RVALUE {
 	    rb_env_t env;
 	    struct rb_imemo_tmpbuf_struct alloc;
 	    rb_ast_t ast;
+            struct {
+                VALUE flags;
+                struct rb_call_data * call_data;
+            } cd;
 	} imemo;
 	struct {
 	    struct RBasic basic;
@@ -2908,6 +2912,7 @@ Init_heap(void)
     init_mark_stack(&objspace->mark_stack);
 
     objspace->profile.invoke_time = getrusage_time();
+    objspace->profile.compact_count = 5;
     finalizer_table = st_init_numtable();
 }
 
@@ -8060,9 +8065,16 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
       case imemo_ast:
         rb_ast_update_references((rb_ast_t *)obj);
         break;
+      case imemo_call_data:
+        {
+            struct rb_call_data *cd = RANY(obj)->as.imemo.cd.call_data;
+
+            cd->cc.compact_count = rb_gc_compact_count();
+            UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cd.call_data->cc.me);
+            break;
+        }
       case imemo_parser_strterm:
       case imemo_tmpbuf:
-      case imemo_call_data:
         break;
       default:
         rb_bug("not reachable %d", imemo_type(obj));

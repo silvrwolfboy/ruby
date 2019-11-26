@@ -1028,6 +1028,7 @@ rb_funcallv_with_cc(struct rb_call_data *cd, VALUE recv, ID mid, int argc, const
     }
 
     *cd = (struct rb_call_data) /* reset */ { { 0, }, { mid, }, };
+    (*cd).cc.compact_count = rb_gc_compact_count();
     return rb_funcallv(recv, mid, argc, argv);
 }
 
