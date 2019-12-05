@@ -674,7 +674,7 @@ class TestRubyOptions < Test::Unit::TestCase
       %r(
         (?:--\s(?:.+\n)*\n)?
         --\sControl\sframe\sinformation\s-+\n
-        (?:c:.*\n)*
+        (?:(?:c:.*\n)|(?:^\s+.+\n))*
         \n
       )x,
       %r(
@@ -1041,6 +1041,14 @@ class TestRubyOptions < Test::Unit::TestCase
   def test_null_script
     skip "#{IO::NULL} is not a character device" unless File.chardev?(IO::NULL)
     assert_in_out_err([IO::NULL], success: true)
+  end
+
+  def test_jit_debug
+    # mswin uses prebuilt precompiled header. Thus it does not show a pch compilation log to check "-O0 -O1".
+    if JITSupport.supported? && !RUBY_PLATFORM.match?(/mswin/)
+      env = { 'MJIT_SEARCH_BUILD_DIR' => 'true' }
+      assert_in_out_err([env, "--jit-debug=-O0 -O1", "--jit-verbose=2", "" ], "", [], /-O0 -O1/)
+    end
   end
 
   private

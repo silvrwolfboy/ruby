@@ -30,7 +30,6 @@
 # * https://github.com/ruby/irb
 # * https://github.com/ruby/tracer
 # * https://github.com/ruby/forwardable
-# * https://github.com/ruby/e2mmap
 # * https://github.com/ruby/mutex_m
 # * https://github.com/ruby/racc
 # * https://github.com/ruby/singleton
@@ -49,6 +48,7 @@
 # * https://github.com/ruby/yaml
 # * https://github.com/ruby/uri
 # * https://github.com/ruby/openssl
+# * https://github.com/ruby/did_you_mean
 #
 
 require 'fileutils'
@@ -85,7 +85,6 @@ $repositories = {
   irb: 'ruby/irb',
   tracer: 'ruby/tracer',
   forwardable: "ruby/forwardable",
-  e2mmap: "ruby/e2mmap",
   mutex_m: "ruby/mutex_m",
   racc: "ruby/racc",
   singleton: "ruby/singleton",
@@ -104,6 +103,7 @@ $repositories = {
   yaml: "ruby/yaml",
   uri: "ruby/uri",
   openssl: "ruby/openssl",
+  did_you_mean: "ruby/did_you_mean"
 }
 
 def sync_default_gems(gem)
@@ -221,10 +221,6 @@ def sync_default_gems(gem)
     cp_r("#{upstream}/ext/fcntl", "ext")
     cp_r("#{upstream}/fcntl.gemspec", "ext/fcntl")
     `git checkout ext/fcntl/depend`
-  when "e2mmap"
-    rm_rf(%w[lib/e2mmap*])
-    cp_r(Dir.glob("#{upstream}/lib/*"), "lib")
-    cp_r("#{upstream}/e2mmap.gemspec", "lib/e2mmap")
   when "strscan"
     rm_rf(%w[ext/strscan test/strscan])
     cp_r("#{upstream}/ext/strscan", "ext")
@@ -268,6 +264,12 @@ def sync_default_gems(gem)
   when "readlineext"
     sync_lib "readline-ext"
     mv "lib/readline-ext.gemspec", "ext/readline"
+  when "did_you_mean"
+    rm_rf(%w[lib/did_you_mean* test/did_you_mean])
+    cp_r(Dir.glob("#{upstream}/lib/did_you_mean*"), "lib")
+    cp_r("#{upstream}/did_you_mean.gemspec", "lib/did_you_mean")
+    cp_r("#{upstream}/test", "test/did_you_mean")
+    rm_rf(%w[test/did_you_mean/tree_spell/test_explore.rb])
   else
     sync_lib gem
   end
@@ -284,6 +286,10 @@ def sync_default_gems_with_commits(gem, range)
     end
   end
   system(*%W"git fetch --no-tags #{gem}")
+
+  unless range.include?("..")
+    range = "#{range}~1..#{range}"
+  end
 
   commits = IO.popen(%W"git log --format=%H,%s #{range}") do |f|
     f.read.split("\n").reverse.map{|commit| commit.split(',', 2)}

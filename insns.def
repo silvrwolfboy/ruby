@@ -207,7 +207,7 @@ setspecial
 /* Get value of instance variable id of self. */
 DEFINE_INSN
 getinstancevariable
-(ID id, IC ic)
+(ID id, IVC ic)
 ()
 (VALUE val)
 /* "instance variable not initialized" warning can be hooked. */
@@ -219,7 +219,7 @@ getinstancevariable
 /* Set value of instance variable id of self to val. */
 DEFINE_INSN
 setinstancevariable
-(ID id, IC ic)
+(ID id, IVC ic)
 (VALUE val)
 ()
 // attr bool leaf = false; /* has rb_check_frozen_internal() */
@@ -935,8 +935,6 @@ leave
 	}
     }
 
-    RUBY_VM_CHECK_INTS(ec);
-
     if (vm_pop_frame(ec, GET_CFP(), GET_EP())) {
 #if OPT_CALL_THREADED_CODE
 	rb_ec_thread_ptr(ec)->retval = val;
@@ -963,7 +961,6 @@ throw
 /* Same discussion as leave. */
 // attr bool leaf = false; /* has rb_threadptr_execute_interrupts() */
 {
-    RUBY_VM_CHECK_INTS(ec);
     val = vm_throw(ec, GET_CFP(), throw_state, throwobj);
     THROW_EXCEPTION(val);
     /* unreachable */
@@ -1043,7 +1040,7 @@ opt_getinlinecache
 (VALUE val)
 {
     if (vm_ic_hit_p(ic, GET_EP())) {
-	val = ic->ic_value.value;
+	val = ic->value;
 	JUMP(dst);
     }
     else {

@@ -826,6 +826,10 @@ rb_include_class_new(VALUE module, VALUE super)
 {
     VALUE klass = class_alloc(T_ICLASS, rb_cClass);
 
+    RCLASS_M_TBL(OBJ_WB_UNPROTECT(klass)) =
+      RCLASS_M_TBL(OBJ_WB_UNPROTECT(module)); /* TODO: unprotected? */
+
+    RCLASS_SET_ORIGIN(klass, module == RCLASS_ORIGIN(module) ? klass : RCLASS_ORIGIN(module));
     if (BUILTIN_TYPE(module) == T_ICLASS) {
 	module = RBASIC(module)->klass;
     }
@@ -837,9 +841,6 @@ rb_include_class_new(VALUE module, VALUE super)
     }
     RCLASS_IV_TBL(klass) = RCLASS_IV_TBL(module);
     RCLASS_CONST_TBL(klass) = RCLASS_CONST_TBL(module);
-
-    RCLASS_M_TBL(OBJ_WB_UNPROTECT(klass)) =
-      RCLASS_M_TBL(OBJ_WB_UNPROTECT(RCLASS_ORIGIN(module))); /* TODO: unprotected? */
 
     RCLASS_SET_SUPER(klass, super);
     if (RB_TYPE_P(module, T_ICLASS)) {
@@ -883,6 +884,8 @@ add_refined_method_entry_i(ID key, VALUE value, void *data)
     return ID_TABLE_CONTINUE;
 }
 
+static void ensure_origin(VALUE klass);
+
 static int
 include_modules_at(const VALUE klass, VALUE c, VALUE module, int search_super)
 {
@@ -890,12 +893,14 @@ include_modules_at(const VALUE klass, VALUE c, VALUE module, int search_super)
     int method_changed = 0, constant_changed = 0;
     struct rb_id_table *const klass_m_tbl = RCLASS_M_TBL(RCLASS_ORIGIN(klass));
 
+    if (FL_TEST(module, RCLASS_REFINED_BY_ANY)) {
+        ensure_origin(module);
+    }
+
     while (module) {
 	int superclass_seen = FALSE;
 	struct rb_id_table *tbl;
 
-	if (RCLASS_ORIGIN(module) != module)
-	    goto skip;
 	if (klass_m_tbl && klass_m_tbl == RCLASS_M_TBL(module))
 	    return -1;
 	/* ignore if the module included already in superclasses */
@@ -973,15 +978,10 @@ move_refined_method(ID key, VALUE value, void *data)
     }
 }
 
-void
-rb_prepend_module(VALUE klass, VALUE module)
+static void
+ensure_origin(VALUE klass)
 {
-    VALUE origin;
-    int changed = 0;
-
-    ensure_includable(klass, module);
-
-    origin = RCLASS_ORIGIN(klass);
+    VALUE origin = RCLASS_ORIGIN(klass);
     if (origin == klass) {
 	origin = class_alloc(T_ICLASS, klass);
 	OBJ_WB_UNPROTECT(origin); /* TODO: conservative shading. Need more survey. */
@@ -992,6 +992,15 @@ rb_prepend_module(VALUE klass, VALUE module)
 	RCLASS_M_TBL_INIT(klass);
 	rb_id_table_foreach(RCLASS_M_TBL(origin), move_refined_method, (void *)klass);
     }
+}
+
+void
+rb_prepend_module(VALUE klass, VALUE module)
+{
+    int changed = 0;
+
+    ensure_includable(klass, module);
+    ensure_origin(klass);
     changed = include_modules_at(klass, klass, module, FALSE);
     if (changed < 0)
 	rb_raise(rb_eArgError, "cyclic prepend detected");
@@ -1091,10 +1100,11 @@ rb_mod_ancestors(VALUE mod)
     VALUE p, ary = rb_ary_new();
 
     for (p = mod; p; p = RCLASS_SUPER(p)) {
+        if (p != RCLASS_ORIGIN(p)) continue;
 	if (BUILTIN_TYPE(p) == T_ICLASS) {
 	    rb_ary_push(ary, RBASIC(p)->klass);
 	}
-	else if (p == RCLASS_ORIGIN(p)) {
+        else {
 	    rb_ary_push(ary, p);
 	}
     }

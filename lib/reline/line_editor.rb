@@ -776,20 +776,24 @@ class Reline::LineEditor
     @first_char = false
     completion_occurs = false
     if @config.editing_mode_is?(:emacs, :vi_insert) and key.char == "\C-i".ord
-      result = retrieve_completion_block
-      slice = result[1]
-      result = @completion_proc.(slice) if @completion_proc and slice
-      if result.is_a?(Array)
-        completion_occurs = true
-        complete(result)
+      unless @config.disable_completion
+        result = retrieve_completion_block
+        slice = result[1]
+        result = @completion_proc.(slice) if @completion_proc and slice
+        if result.is_a?(Array)
+          completion_occurs = true
+          complete(result)
+        end
       end
-    elsif @config.editing_mode_is?(:vi_insert) and ["\C-p".ord, "\C-n".ord].include?(key.char)
-      result = retrieve_completion_block
-      slice = result[1]
-      result = @completion_proc.(slice) if @completion_proc and slice
-      if result.is_a?(Array)
-        completion_occurs = true
-        move_completed_list(result, "\C-p".ord == key.char ? :up : :down)
+    elsif not @config.disable_completion and @config.editing_mode_is?(:vi_insert) and ["\C-p".ord, "\C-n".ord].include?(key.char)
+      unless @config.disable_completion
+        result = retrieve_completion_block
+        slice = result[1]
+        result = @completion_proc.(slice) if @completion_proc and slice
+        if result.is_a?(Array)
+          completion_occurs = true
+          move_completed_list(result, "\C-p".ord == key.char ? :up : :down)
+        end
       end
     elsif Symbol === key.char and respond_to?(key.char, true)
       process_key(key.char, key.char)
@@ -815,12 +819,9 @@ class Reline::LineEditor
       @line = ' ' * new_indent + @line.lstrip
 
       new_indent = nil
-      (new_lines[-2].size + 1).times do |n|
-        result = @auto_indent_proc.(new_lines[0..-2], @line_index - 1, n, false)
-        if result
-          new_indent = result
-          break
-        end
+      result = @auto_indent_proc.(new_lines[0..-2], @line_index - 1, (new_lines[-2].size + 1), false)
+      if result
+        new_indent = result
       end
       if new_indent&.>= 0
         @line = ' ' * new_indent + @line.lstrip
@@ -1145,10 +1146,12 @@ class Reline::LineEditor
   alias_method :end_of_line, :ed_move_to_end
 
   private def ed_search_prev_history(key)
-    if @is_multiline
-      @line_backup_in_history = whole_buffer
-    else
-      @line_backup_in_history = @line
+    unless @history_pointer
+      if @is_multiline
+        @line_backup_in_history = whole_buffer
+      else
+        @line_backup_in_history = @line
+      end
     end
     searcher = Fiber.new do
       search_word = String.new(encoding: @encoding)
@@ -1156,13 +1159,19 @@ class Reline::LineEditor
       last_hit = nil
       loop do
         key = Fiber.yield(search_word)
+        search_again = false
         case key
-        when "\C-h".ord, 127
+        when -1 # determined
+          Reline.last_incremental_search = search_word
+          break
+        when "\C-h".ord, "\C-?".ord
           grapheme_clusters = search_word.grapheme_clusters
           if grapheme_clusters.size > 0
             grapheme_clusters.pop
             search_word = grapheme_clusters.join
           end
+        when "\C-r".ord
+          search_again = true
         else
           multibyte_buf << key
           if multibyte_buf.dup.force_encoding(@encoding).valid_encoding?
@@ -1171,11 +1180,25 @@ class Reline::LineEditor
           end
         end
         hit = nil
-        if @line_backup_in_history.include?(search_word)
+        if not search_word.empty? and @line_backup_in_history&.include?(search_word)
           @history_pointer = nil
           hit = @line_backup_in_history
         else
-          hit_index = Reline::HISTORY.rindex { |item|
+          if search_again
+            if search_word.empty? and Reline.last_incremental_search
+              search_word = Reline.last_incremental_search
+            end
+            if @history_pointer
+              history = Reline::HISTORY[0..(@history_pointer - 1)]
+            else
+              history = Reline::HISTORY
+            end
+          elsif @history_pointer
+            history = Reline::HISTORY[0..@history_pointer]
+          else
+            history = Reline::HISTORY
+          end
+          hit_index = history.rindex { |item|
             item.include?(search_word)
           }
           if hit_index
@@ -1210,27 +1233,46 @@ class Reline::LineEditor
     @searching_prompt = "(reverse-i-search)`': "
     @waiting_proc = ->(k) {
       case k
-      when "\C-j".ord, "\C-?".ord
+      when "\C-j".ord
         if @history_pointer
-          @line = Reline::HISTORY[@history_pointer]
+          buffer = Reline::HISTORY[@history_pointer]
         else
-          @line = @line_backup_in_history
+          buffer = @line_backup_in_history
+        end
+        if @is_multiline
+          @buffer_of_lines = buffer.split("\n")
+          @buffer_of_lines = [String.new(encoding: @encoding)] if @buffer_of_lines.empty?
+          @line_index = @buffer_of_lines.size - 1
+          @line = @buffer_of_lines.last
+          @rerender_all = true
+        else
+          @line = buffer
         end
         @searching_prompt = nil
         @waiting_proc = nil
         @cursor_max = calculate_width(@line)
         @cursor = @byte_pointer = 0
+        searcher.resume(-1)
       when "\C-g".ord
-        @line = @line_backup_in_history
+        if @is_multiline
+          @buffer_of_lines = @line_backup_in_history.split("\n")
+          @buffer_of_lines = [String.new(encoding: @encoding)] if @buffer_of_lines.empty?
+          @line_index = @buffer_of_lines.size - 1
+          @line = @buffer_of_lines.last
+          @rerender_all = true
+        else
+          @line = @line_backup_in_history
+        end
         @history_pointer = nil
         @searching_prompt = nil
         @waiting_proc = nil
         @line_backup_in_history = nil
         @cursor_max = calculate_width(@line)
         @cursor = @byte_pointer = 0
+        @rerender_all = true
       else
         chr = k.is_a?(String) ? k : k.chr(Encoding::ASCII_8BIT)
-        if chr.match?(/[[:print:]]/) or k == "\C-h".ord or k == 127
+        if chr.match?(/[[:print:]]/) or k == "\C-h".ord or k == "\C-?".ord or k == "\C-r".ord
           searcher.resume(k)
         else
           if @history_pointer
@@ -1253,6 +1295,7 @@ class Reline::LineEditor
           @waiting_proc = nil
           @cursor_max = calculate_width(@line)
           @cursor = @byte_pointer = 0
+          searcher.resume(-1)
         end
       end
     }
@@ -1417,6 +1460,14 @@ class Reline::LineEditor
       @byte_pointer = @line.bytesize
       @cursor = @cursor_max = calculate_width(@line)
       @kill_ring.append(deleted)
+    elsif @is_multiline and @byte_pointer == @line.bytesize and @buffer_of_lines.size > @line_index + 1
+      @cursor = calculate_width(@line)
+      @byte_pointer = @line.bytesize
+      @line += @buffer_of_lines.delete_at(@line_index + 1)
+      @cursor_max = calculate_width(@line)
+      @buffer_of_lines[@line_index] = @line
+      @rerender_all = true
+      @rest_height += 1
     end
   end
 

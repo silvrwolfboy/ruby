@@ -11,9 +11,19 @@ class TestIO_Console < Test::Unit::TestCase
   PATHS.uniq!
 
   # FreeBSD seems to hang on TTOU when running parallel tests
-  # tested on FreeBSD 11.x
+  # tested on FreeBSD 11.x.
+  #
+  # Solaris gets stuck too, even in non-parallel mode.
+  # It occurs only in chkbuild.  It does not occur when running
+  # `make test-all` in SSH terminal.
+  #
+  # I suspect that it occurs only when having no TTY.
+  # (Parallel mode runs tests in child processes, so I guess
+  # they has no TTY.)
+  # But it does not occur in `make test-all > /dev/null`, so
+  # there should be an additional factor, I guess.
   def set_winsize_setup
-    @old_ttou = trap(:TTOU, 'IGNORE') if RUBY_PLATFORM =~ /freebsd/i
+    @old_ttou = trap(:TTOU, 'IGNORE') if RUBY_PLATFORM =~ /freebsd|solaris/i
   end
 
   def set_winsize_teardown
@@ -41,12 +51,15 @@ defined?(PTY) and defined?(IO.console) and TestIO_Console.class_eval do
   end
 
   def test_raw_minchar
+    q = Thread::Queue.new
     helper {|m, s|
       len = 0
       assert_equal([nil, 0], [s.getch(min: 0), len])
       main = Thread.current
       go = false
       th = Thread.start {
+        q.pop
+        sleep 0.01 until main.stop?
         len += 1
         m.print("a")
         m.flush
@@ -56,6 +69,8 @@ defined?(PTY) and defined?(IO.console) and TestIO_Console.class_eval do
         m.flush
       }
       begin
+        sleep 0.1
+        q.push(1)
         assert_equal(["a", 1], [s.getch(min: 1), len])
         go = true
         assert_equal(["1", 11], [s.getch, len])

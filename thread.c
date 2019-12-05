@@ -681,6 +681,7 @@ thread_do_start(rb_thread_t *th)
 	th->ec->root_svar = Qfalse;
 
         EXEC_EVENT_HOOK(th->ec, RUBY_EVENT_THREAD_BEGIN, th->self, 0, 0, 0, Qundef);
+        vm_check_ints_blocking(th->ec);
 
         if (args_len < 8) {
             /* free proc.args if the length is enough small */

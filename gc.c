@@ -3803,10 +3803,10 @@ obj_memsize_of(VALUE obj, int use_all_types)
 	break;
       case T_MODULE:
       case T_CLASS:
-	if (RCLASS_M_TBL(obj)) {
-	    size += rb_id_table_memsize(RCLASS_M_TBL(obj));
-	}
 	if (RCLASS_EXT(obj)) {
+            if (RCLASS_M_TBL(obj)) {
+                size += rb_id_table_memsize(RCLASS_M_TBL(obj));
+            }
 	    if (RCLASS_IV_TBL(obj)) {
 		size += st_memsize(RCLASS_IV_TBL(obj));
 	    }
@@ -5317,11 +5317,11 @@ gc_mark_children(rb_objspace_t *objspace, VALUE obj)
     switch (BUILTIN_TYPE(obj)) {
       case T_CLASS:
       case T_MODULE:
-	mark_m_tbl(objspace, RCLASS_M_TBL(obj));
         if (RCLASS_SUPER(obj)) {
             gc_mark(objspace, RCLASS_SUPER(obj));
         }
 	if (!RCLASS_EXT(obj)) break;
+        mark_m_tbl(objspace, RCLASS_M_TBL(obj));
         mark_tbl_no_pin(objspace, RCLASS_IV_TBL(obj));
 	mark_const_tbl(objspace, RCLASS_CONST_TBL(obj));
 	break;
@@ -11378,8 +11378,8 @@ obj_type_name(VALUE obj)
     return type_name(TYPE(obj), obj);
 }
 
-static const char *
-method_type_name(rb_method_type_t type)
+const char *
+rb_method_type_name(rb_method_type_t type)
 {
     switch (type) {
       case VM_METHOD_TYPE_ISEQ:           return "iseq";
@@ -11395,7 +11395,7 @@ method_type_name(rb_method_type_t type)
       case VM_METHOD_TYPE_UNDEF:          return "undef";
       case VM_METHOD_TYPE_NOTIMPLEMENTED: return "notimplemented";
     }
-    rb_bug("method_type_name: unreachable (type: %d)", type);
+    rb_bug("rb_method_type_name: unreachable (type: %d)", type);
 }
 
 /* from array.c */
@@ -11598,7 +11598,7 @@ rb_raw_obj_info(char *buff, const int buff_size, VALUE obj)
 		if (me->def) {
                     APPENDF((BUFF_ARGS, "(called_id: %s, type: %s, alias: %d, owner: %s, defined_class: %s)",
 			     rb_id2name(me->called_id),
-			     method_type_name(me->def->type),
+                             rb_method_type_name(me->def->type),
 			     me->def->alias_count,
 			     obj_info(me->owner),
                              obj_info(me->defined_class)));

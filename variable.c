@@ -23,6 +23,7 @@
 #include "debug_counter.h"
 #include "vm_core.h"
 #include "transient_heap.h"
+#include "variable.h"
 
 static struct rb_id_table *rb_global_tbl;
 static ID autoload, classpath, tmp_classpath;
@@ -33,12 +34,6 @@ static void setup_const_entry(rb_const_entry_t *, VALUE, VALUE, rb_const_flag_t)
 static VALUE rb_const_search(VALUE klass, ID id, int exclude, int recurse, int visibility);
 static st_table *generic_iv_tbl;
 static st_table *generic_iv_tbl_compat;
-
-/* per-object */
-struct gen_ivtbl {
-    uint32_t numiv;
-    VALUE ivptr[FLEX_ARY_LEN];
-};
 
 struct ivar_update {
     union {
@@ -802,6 +797,12 @@ gen_ivtbl_get(VALUE obj, struct gen_ivtbl **ivtbl)
 	return 1;
     }
     return 0;
+}
+
+MJIT_FUNC_EXPORTED struct st_table *
+rb_ivar_generic_ivtbl(void)
+{
+    return generic_iv_tbl;
 }
 
 static VALUE
@@ -2225,12 +2226,18 @@ rb_autoload_load(VALUE mod, ID id)
     struct autoload_data_i *ele;
     struct autoload_const *ac;
     struct autoload_state state;
+    int flag = -1;
+    rb_const_entry_t *ce;
 
     if (!autoload_defined_p(mod, id)) return Qfalse;
     load = check_autoload_required(mod, id, &loading);
     if (!load) return Qfalse;
     src = rb_sourcefile();
     if (src && loading && strcmp(src, loading) == 0) return Qfalse;
+
+    if ((ce = rb_const_lookup(mod, id))) {
+        flag = ce->flag & (CONST_DEPRECATED | CONST_VISIBILITY_MASK);
+    }
 
     /* set ele->state for a marker of autoloading thread */
     if (!(ele = get_autoload_data(load, &ac))) {
@@ -2263,6 +2270,9 @@ rb_autoload_load(VALUE mod, ID id)
     result = rb_ensure(autoload_require, (VALUE)&state,
 		       autoload_reset, (VALUE)&state);
 
+    if (flag > 0 && (ce = rb_const_lookup(mod, id))) {
+        ce->flag |= flag;
+    }
     RB_GC_GUARD(load);
     return result;
 }
@@ -3024,7 +3034,7 @@ cvar_overtaken(VALUE front, VALUE target, ID id)
     if (front && target != front) {
 	st_data_t did = (st_data_t)id;
 
-	if (RTEST(ruby_verbose)) {
+        if (RTEST(ruby_verbose) && original_module(front) != original_module(target)) {
 	    rb_warning("class variable % "PRIsVALUE" of %"PRIsVALUE" is overtaken by %"PRIsVALUE"",
 		       ID2SYM(id), rb_class_name(original_module(front)),
 		       rb_class_name(original_module(target)));

@@ -120,7 +120,7 @@ class TestEnv < Test::Unit::TestCase
     assert_equal("foo", ENV.fetch("test"))
     ENV.delete("test")
     feature8649 = '[ruby-core:56062] [Feature #8649]'
-    e = assert_raise_with_message(KeyError, 'key not found: "test"', feature8649) do
+    e = assert_raise_with_message(KeyError, /key not found: "test"/, feature8649) do
       ENV.fetch("test")
     end
     assert_same(ENV, e.receiver)
@@ -445,7 +445,7 @@ class TestEnv < Test::Unit::TestCase
     ENV.clear
     ENV["foo"] = "bar"
     ENV["baz"] = "qux"
-    ENV.update({"baz"=>"quux","a"=>"b"}) {|k, v1, v2| v1 ? k + "_" + v1 + "_" + v2 : v2 }
+    ENV.update({"baz"=>"quux","a"=>"b"}) {|k, v1, v2| k + "_" + v1 + "_" + v2 }
     check(ENV.to_hash.to_a, [%w(foo bar), %w(baz baz_qux_quux), %w(a b)])
   end
 

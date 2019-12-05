@@ -1769,7 +1769,7 @@ rb_mod_private(int argc, VALUE *argv, VALUE module)
  *  a keyword splat.  It marks the method such that if the method is called
  *  with keyword arguments, the final hash argument is marked with a special
  *  flag such that if it is the final element of a normal argument splat to
- *  another method call, and that method calls does not include explicit
+ *  another method call, and that method call does not include explicit
  *  keywords or a keyword splat, the final element is interpreted as keywords.
  *  In other words, keywords will be passed through the method to other
  *  methods.
@@ -1779,8 +1779,10 @@ rb_mod_private(int argc, VALUE *argv, VALUE module)
  *  2.7.
  *
  *  This method will probably be removed at some point, as it exists only
- *  for backwards compatibility, so always check that the module responds
- *  to this method before calling it.
+ *  for backwards compatibility. As it does not exist in Ruby versions
+ *  before 2.7, check that the module responds to this method before calling
+ *  it. Also, be aware that if this method is removed, the behavior of the
+ *  method will change so that it does not pass through keywords.
  *
  *    module Mod
  *      def foo(meth, *args, &block)
@@ -1943,6 +1945,19 @@ static VALUE
 top_private(int argc, VALUE *argv, VALUE _)
 {
     return rb_mod_private(argc, argv, rb_cObject);
+}
+
+/*
+ *  call-seq:
+ *     ruby2_keywords(method_name, ...) -> self
+ *
+ *  For the given method names, marks the method as passing keywords through
+ *  a normal argument splat.  See Module#ruby2_keywords in detail.
+ */
+static VALUE
+top_ruby2_keywords(int argc, VALUE *argv, VALUE module)
+{
+    return rb_mod_ruby2_keywords(argc, argv, rb_cObject);
 }
 
 /*
@@ -2279,6 +2294,8 @@ Init_eval_method(void)
 			     "public", top_public, -1);
     rb_define_private_method(rb_singleton_class(rb_vm_top_self()),
 			     "private", top_private, -1);
+    rb_define_private_method(rb_singleton_class(rb_vm_top_self()),
+			     "ruby2_keywords", top_ruby2_keywords, -1);
 
     {
 #define REPLICATE_METHOD(klass, id) do { \

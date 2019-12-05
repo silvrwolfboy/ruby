@@ -210,8 +210,7 @@ sufficient information, see the ChangeLog file or Redmine
 * <code>Object#{taint,untaint,trust,untrust}</code> and related functions in the C-API
   no longer have an effect (all objects are always considered untainted), and are now
   warned in verbose mode. This warning will be disabled even in non-verbose mode in
-  Ruby 3.0, and the methods and C functions will be removed in Ruby 3.2.
-  [Feature #16131]
+  Ruby 3.0, and the methods and C functions will be removed in Ruby 3.2. [Feature #16131]
 
 === Core classes updates (outstanding ones only)
 
@@ -408,6 +407,12 @@ String::
 
     * Update Unicode Emoji version to 12.1 [Feature #16272]
 
+Symbol::
+
+  New methods::
+
+    * Added Symbol#start_with? and Symbol#end_with? method.  [Feature #16348]
+
 Time::
 
   New methods::
@@ -579,6 +584,7 @@ StringScanner::
   * Shell (shell gem)
   * Synchronizer (sync gem)
   * ThreadsWait (thwait gem)
+  * E2MM (e2mmap gem)
 
 Proc::
   * Proc#to_s format was changed. [Feature #16101]

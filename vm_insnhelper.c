@@ -18,6 +18,7 @@
 #include "internal.h"
 #include "ruby/config.h"
 #include "debug_counter.h"
+#include "variable.h"
 
 extern rb_method_definition_t *rb_method_definition_create(rb_method_type_t type, ID mid);
 extern void rb_method_definition_set(const rb_method_entry_t *me, rb_method_definition_t *def, void *opts);
@@ -353,6 +354,7 @@ vm_pop_frame(rb_execution_context_t *ec, rb_control_frame_t *cfp, const VALUE *e
     if (VM_CHECK_MODE >= 4) rb_gc_verify_internal_consistency();
     if (VMDEBUG == 2)       SDR();
 
+    RUBY_VM_CHECK_INTS(ec);
     ec->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
 
     return flags & VM_FRAME_FLAG_FINISH;
@@ -1006,62 +1008,107 @@ vm_search_const_defined_class(const VALUE cbase, ID id)
     return 0;
 }
 
-ALWAYS_INLINE(static VALUE vm_getivar(VALUE, ID, IC, struct rb_call_cache *, int));
+ALWAYS_INLINE(static VALUE vm_getivar(VALUE, ID, IVC, struct rb_call_cache *, int));
 static inline VALUE
-vm_getivar(VALUE obj, ID id, IC ic, struct rb_call_cache *cc, int is_attr)
+vm_getivar(VALUE obj, ID id, IVC ic, struct rb_call_cache *cc, int is_attr)
 {
 #if OPT_IC_FOR_IVAR
-    if (LIKELY(RB_TYPE_P(obj, T_OBJECT))) {
-	VALUE val = Qundef;
-        if (LIKELY(is_attr ?
-		   RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_unset, cc->aux.index > 0) :
-		   RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_serial,
-					       ic->ic_serial == RCLASS_SERIAL(RBASIC(obj)->klass)))) {
-            st_index_t index = !is_attr ? ic->ic_value.index : (cc->aux.index - 1);
-	    if (LIKELY(index < ROBJECT_NUMIV(obj))) {
-		val = ROBJECT_IVPTR(obj)[index];
-	    }
-	}
-	else {
-            st_data_t index;
-	    struct st_table *iv_index_tbl = ROBJECT_IV_INDEX_TBL(obj);
+    VALUE val = Qundef;
 
+    if (SPECIAL_CONST_P(obj)) {
+        // frozen?
+    }
+    else if (LIKELY(is_attr ?
+                    RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_unset, cc->aux.index > 0) :
+                    RB_DEBUG_COUNTER_INC_UNLESS(ivar_get_ic_miss_serial,
+                                                ic->ic_serial == RCLASS_SERIAL(RBASIC(obj)->klass)))) {
+        st_index_t index = !is_attr ? ic->index : (cc->aux.index - 1);
+
+        RB_DEBUG_COUNTER_INC(ivar_get_ic_hit);
+
+        if (LIKELY(BUILTIN_TYPE(obj) == T_OBJECT) &&
+            LIKELY(index < ROBJECT_NUMIV(obj))) {
+            val = ROBJECT_IVPTR(obj)[index];
+        }
+        else if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+            struct gen_ivtbl *ivtbl;
+
+            if (LIKELY(st_lookup(rb_ivar_generic_ivtbl(), (st_data_t)obj, (st_data_t *)&ivtbl)) &&
+                LIKELY(index < ivtbl->numiv)) {
+                val = ivtbl->ivptr[index];
+            }
+        }
+        goto ret;
+    }
+    else {
+        struct st_table *iv_index_tbl;
+        st_index_t numiv;
+        VALUE *ivptr;
+
+        st_data_t index;
+
+        if (BUILTIN_TYPE(obj) == T_OBJECT) {
+            iv_index_tbl = ROBJECT_IV_INDEX_TBL(obj);
+            numiv = ROBJECT_NUMIV(obj);
+            ivptr = ROBJECT_IVPTR(obj);
+
+          fill:
 	    if (iv_index_tbl) {
 		if (st_lookup(iv_index_tbl, id, &index)) {
-		    if (index < ROBJECT_NUMIV(obj)) {
-			val = ROBJECT_IVPTR(obj)[index];
-		    }
                     if (!is_attr) {
-                        ic->ic_value.index = index;
+                        ic->index = index;
                         ic->ic_serial = RCLASS_SERIAL(RBASIC(obj)->klass);
                     }
                     else { /* call_info */
                         cc->aux.index = (int)index + 1;
                     }
+
+                    if (index < numiv) {
+                        val = ivptr[index];
+		    }
 		}
 	    }
 	}
-	if (UNLIKELY(val == Qundef)) {
-	    if (!is_attr && RTEST(ruby_verbose))
-		rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
-	    val = Qnil;
-	}
-	RB_DEBUG_COUNTER_INC(ivar_get_ic_hit);
-	return val;
+        else if (FL_TEST_RAW(obj, FL_EXIVAR)) {
+            struct gen_ivtbl *ivtbl;
+
+            if (LIKELY(st_lookup(rb_ivar_generic_ivtbl(), (st_data_t)obj, (st_data_t *)&ivtbl))) {
+                numiv = ivtbl->numiv;
+                ivptr = ivtbl->ivptr;
+                iv_index_tbl = RCLASS_IV_INDEX_TBL(rb_obj_class(obj));
+                goto fill;
+            }
+        }
+        else {
+            // T_CLASS / T_MODULE
+            goto general_path;
+        }
+
+      ret:
+        if (LIKELY(val != Qundef)) {
+            return val;
+        }
+        else {
+            if (!is_attr && RTEST(ruby_verbose)) {
+                rb_warning("instance variable %"PRIsVALUE" not initialized", QUOTE_ID(id));
+            }
+            return Qnil;
+        }
     }
-    else {
-	RB_DEBUG_COUNTER_INC(ivar_get_ic_miss_noobject);
-    }
+  general_path:
 #endif /* OPT_IC_FOR_IVAR */
     RB_DEBUG_COUNTER_INC(ivar_get_ic_miss);
 
-    if (is_attr)
-	return rb_attr_get(obj, id);
-    return rb_ivar_get(obj, id);
+    if (is_attr) {
+        return rb_attr_get(obj, id);
+    }
+    else {
+        return rb_ivar_get(obj, id);
+    }
 }
 
 static inline VALUE
-vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_attr)
+vm_setivar(VALUE obj, ID id, VALUE val, IVC ic, struct rb_call_cache *cc, int is_attr)
 {
 #if OPT_IC_FOR_IVAR
     rb_check_frozen_internal(obj);
@@ -1074,7 +1121,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 	    (!is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_serial, ic->ic_serial == RCLASS_SERIAL(klass))) ||
 	    ( is_attr && RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_unset, cc->aux.index > 0)))) {
 	    VALUE *ptr = ROBJECT_IVPTR(obj);
-	    index = !is_attr ? ic->ic_value.index : cc->aux.index-1;
+	    index = !is_attr ? ic->index : cc->aux.index-1;
 
 	    if (RB_DEBUG_COUNTER_INC_UNLESS(ivar_set_ic_miss_oorange, index < ROBJECT_NUMIV(obj))) {
 		RB_OBJ_WRITE(obj, &ptr[index], val);
@@ -1087,7 +1134,7 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 
 	    if (iv_index_tbl && st_lookup(iv_index_tbl, (st_data_t)id, &index)) {
                 if (!is_attr) {
-                    ic->ic_value.index = index;
+                    ic->index = index;
                     ic->ic_serial = RCLASS_SERIAL(klass);
                 }
 		else if (index >= INT_MAX) {
@@ -1109,13 +1156,13 @@ vm_setivar(VALUE obj, ID id, VALUE val, IC ic, struct rb_call_cache *cc, int is_
 }
 
 static inline VALUE
-vm_getinstancevariable(VALUE obj, ID id, IC ic)
+vm_getinstancevariable(VALUE obj, ID id, IVC ic)
 {
     return vm_getivar(obj, id, ic, NULL, FALSE);
 }
 
 static inline void
-vm_setinstancevariable(VALUE obj, ID id, VALUE val, IC ic)
+vm_setinstancevariable(VALUE obj, ID id, VALUE val, IVC ic)
 {
     vm_setivar(obj, id, val, ic, 0, 0);
 }
@@ -2277,7 +2324,6 @@ vm_call_iseq_setup_tailcall(rb_execution_context_t *ec, rb_control_frame_t *cfp,
 		  iseq->body->stack_max);
 
     cfp->sp = sp_orig;
-    RUBY_VM_CHECK_INTS(ec);
 
     return Qundef;
 }
@@ -2885,7 +2931,7 @@ vm_call_method_each_type(rb_execution_context_t *ec, rb_control_frame_t *cfp, st
       case VM_METHOD_TYPE_ATTRSET:
         CALLER_SETUP_ARG(cfp, calling, ci);
         if (calling->argc == 1 && calling->kw_splat && RHASH_EMPTY_P(cfp->sp[-1])) {
-            rb_warn_keyword_to_last_hash(calling, ci, NULL);
+            rb_warn_keyword_to_last_hash(ec, calling, ci, NULL);
         }
         else {
             CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
@@ -3223,7 +3269,7 @@ vm_callee_setup_block_arg(rb_execution_context_t *ec, struct rb_calling_info *ca
 
         CALLER_SETUP_ARG(cfp, calling, ci);
         if (calling->kw_splat && calling->argc == iseq->body->param.lead_num + iseq->body->param.post_num && RHASH_EMPTY_P(cfp->sp[-1])) {
-            rb_warn_keyword_to_last_hash(calling, ci, iseq);
+            rb_warn_keyword_to_last_hash(ec, calling, ci, iseq);
         }
         else {
             CALLER_REMOVE_EMPTY_KW_SPLAT(cfp, calling, ci);
@@ -4093,8 +4139,8 @@ vm_ic_hit_p(IC ic, const VALUE *reg_ep)
 static void
 vm_ic_update(IC ic, VALUE val, const VALUE *reg_ep)
 {
-    VM_ASSERT(ic->ic_value.value != Qundef);
-    ic->ic_value.value = val;
+    VM_ASSERT(ic->value != Qundef);
+    ic->value = val;
     ic->ic_serial = GET_GLOBAL_CONSTANT_STATE() - ruby_vm_const_missing_count;
     ic->ic_cref = vm_get_const_key_cref(reg_ep);
     ruby_vm_const_missing_count = 0;
