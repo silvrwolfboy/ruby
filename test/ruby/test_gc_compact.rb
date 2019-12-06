@@ -37,7 +37,7 @@ class TestGCCompact < Test::Unit::TestCase
   def test_complex_hash_keys
     list_of_objects = big_list
     hash = list_of_objects.hash
-    GC.verify_compaction_references(toward: :empty)
+    GC.verify_compaction_references(toward: :empty, double_heap: true)
     assert_equal hash, list_of_objects.hash
   end
 
@@ -51,13 +51,13 @@ class TestGCCompact < Test::Unit::TestCase
 
   def test_ast_compacts
     ast = RubyVM::AbstractSyntaxTree.parse_file __FILE__
-    assert GC.compact
+    assert GC.verify_compaction_references(toward: :empty, double_heap: true)
     walk_ast ast
   end
 
   def test_compact_count
     count = GC.stat(:compact_count)
-    GC.compact
+    GC.verify_compaction_references(toward: :empty, double_heap: true)
     assert_equal count + 1, GC.stat(:compact_count)
   end
 end
