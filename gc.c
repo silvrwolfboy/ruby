@@ -21,6 +21,8 @@
 #include "ruby/thread.h"
 #include "ruby/util.h"
 #include "ruby/debug.h"
+#include "vm_core.h"
+#include "vm_insnhelper.h"
 #include "internal.h"
 #include "eval_intern.h"
 #include "vm_core.h"
@@ -8070,7 +8072,13 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
             struct rb_call_data *cd = RANY(obj)->as.imemo.cd.call_data;
 
             cd->cc.compact_count = rb_gc_compact_count();
-            // UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cd.call_data->cc.me);
+            if (GET_GLOBAL_METHOD_STATE() == cd->cc.method_state) {
+                struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cd->cc.me);
+                if (nv != cd->cc.me && nv) {
+                    cd->cc.me = nv;
+                    cd->cc.def = nv->def;
+                }
+            }
             break;
         }
       case imemo_parser_strterm:
