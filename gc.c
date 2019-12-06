@@ -8070,7 +8070,7 @@ gc_ref_update_imemo(rb_objspace_t *objspace, VALUE obj)
             struct rb_call_data *cd = RANY(obj)->as.imemo.cd.call_data;
 
             cd->cc.compact_count = rb_gc_compact_count();
-            UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cd.call_data->cc.me);
+            // UPDATE_IF_MOVED(objspace, RANY(obj)->as.imemo.cd.call_data->cc.me);
             break;
         }
       case imemo_parser_strterm:

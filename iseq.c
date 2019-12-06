@@ -186,14 +186,16 @@ iseq_extract_values(VALUE *code, size_t pos, iseq_value_itr_t * func, void *data
             if (with_cache) {
                 struct rb_call_data *cd = (struct rb_call_data *)code[pos + op_no + 1];
 
-                struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)func(data, (VALUE)cd->cc.me);
+                // struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)func(data, (VALUE)cd->cc.me);
 
                 cd->cc.compact_count = rb_gc_compact_count();
 
+                /*
                 if (nv != cd->cc.me) {
                     cd->cc.me = nv;
                     cd->cc.def = nv->def;
                 }
+                */
             }
           default:
             break;
