@@ -1073,6 +1073,19 @@ rb_funcall_with_block_kw(VALUE recv, ID mid, int argc, const VALUE *argv, VALUE 
     return ret;
 }
 
+void
+rb_vm_update_cc_references(struct rb_call_data *cd)
+{
+    cd->cc.compact_count = rb_gc_compact_count();
+    if (GET_GLOBAL_METHOD_STATE() == cd->cc.method_state) {
+        struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cd->cc.me);
+        if (nv != cd->cc.me && nv) {
+            cd->cc.me = nv;
+            cd->cc.def = nv->def;
+        }
+    }
+}
+
 static VALUE *
 current_vm_stack_arg(const rb_execution_context_t *ec, const VALUE *argv)
 {

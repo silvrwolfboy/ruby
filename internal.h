@@ -2412,6 +2412,8 @@ RUBY_FUNC_NONNULL(1, bool rb_method_basic_definition_p_with_cc(struct rb_call_da
     })
 #endif
 
+void rb_vm_update_cc_references(struct rb_call_data *cd);
+
 /* miniprelude.c, prelude.c */
 void Init_prelude(void);
 

@@ -2106,7 +2106,6 @@ gc.$(OBJEXT): {$(VPATH)}thread_native.h
 gc.$(OBJEXT): {$(VPATH)}transient_heap.h
 gc.$(OBJEXT): {$(VPATH)}util.h
 gc.$(OBJEXT): {$(VPATH)}vm_core.h
-gc.$(OBJEXT): {$(VPATH)}vm_insnhelper.h
 gc.$(OBJEXT): {$(VPATH)}vm_opts.h
 golf_prelude.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 golf_prelude.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
@@ -2252,7 +2251,6 @@ iseq.$(OBJEXT): {$(VPATH)}thread_$(THREAD_MODEL).h
 iseq.$(OBJEXT): {$(VPATH)}thread_native.h
 iseq.$(OBJEXT): {$(VPATH)}util.h
 iseq.$(OBJEXT): {$(VPATH)}vm_core.h
-iseq.$(OBJEXT): {$(VPATH)}vm_insnhelper.h
 iseq.$(OBJEXT): {$(VPATH)}vm_opts.h
 load.$(OBJEXT): $(CCAN_DIR)/check_type/check_type.h
 load.$(OBJEXT): $(CCAN_DIR)/container_of/container_of.h
