@@ -948,10 +948,10 @@ module Net   #:nodoc:
     def connect
       if proxy? then
         conn_addr = proxy_address
-        conn_port    = proxy_port
+        conn_port = proxy_port
       else
         conn_addr = conn_address
-        conn_port    = port
+        conn_port = port
       end
 
       D "opening connection to #{conn_addr}:#{conn_port}..."
@@ -971,7 +971,7 @@ module Net   #:nodoc:
                                       write_timeout: @write_timeout,
                                       continue_timeout: @continue_timeout,
                                       debug_output: @debug_output)
-          buf = "CONNECT #{@address}:#{@port} HTTP/#{HTTPVersion}\r\n"
+          buf = "CONNECT #{conn_address}:#{@port} HTTP/#{HTTPVersion}\r\n"
           buf << "Host: #{@address}:#{@port}\r\n"
           if proxy_user
             credential = ["#{proxy_user}:#{proxy_pass}"].pack('m0')

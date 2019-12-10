@@ -304,35 +304,35 @@ class Logger
 
   # Returns +true+ iff the current severity level allows for the printing of
   # +DEBUG+ messages.
-  def debug?; @level <= DEBUG; end
+  def debug?; level <= DEBUG; end
 
   # Sets the severity to DEBUG.
   def debug!; self.level = DEBUG; end
 
   # Returns +true+ iff the current severity level allows for the printing of
   # +INFO+ messages.
-  def info?; @level <= INFO; end
+  def info?; level <= INFO; end
 
   # Sets the severity to INFO.
   def info!; self.level = INFO; end
 
   # Returns +true+ iff the current severity level allows for the printing of
   # +WARN+ messages.
-  def warn?; @level <= WARN; end
+  def warn?; level <= WARN; end
 
   # Sets the severity to WARN.
   def warn!; self.level = WARN; end
 
   # Returns +true+ iff the current severity level allows for the printing of
   # +ERROR+ messages.
-  def error?; @level <= ERROR; end
+  def error?; level <= ERROR; end
 
   # Sets the severity to ERROR.
   def error!; self.level = ERROR; end
 
   # Returns +true+ iff the current severity level allows for the printing of
   # +FATAL+ messages.
-  def fatal?; @level <= FATAL; end
+  def fatal?; level <= FATAL; end
 
   # Sets the severity to FATAL.
   def fatal!; self.level = FATAL; end
@@ -353,10 +353,11 @@ class Logger
   #   +STDOUT+, +STDERR+, or an open file).
   # +shift_age+::
   #   Number of old log files to keep, *or* frequency of rotation (+daily+,
-  #   +weekly+ or +monthly+). Default value is 0.
+  #   +weekly+ or +monthly+). Default value is 0, which disables log file
+  #   rotation.
   # +shift_size+::
-  #   Maximum logfile size in bytes (only applies when +shift_age+ is a number).
-  #   Defaults to +1048576+ (1MB).
+  #   Maximum logfile size in bytes (only applies when +shift_age+ is a positive
+  #   Integer). Defaults to +1048576+ (1MB).
   # +level+::
   #   Logging severity threshold. Default values is Logger::DEBUG.
   # +progname+::
@@ -456,7 +457,7 @@ class Logger
   #
   def add(severity, message = nil, progname = nil)
     severity ||= UNKNOWN
-    if @logdev.nil? or severity < @level
+    if @logdev.nil? or severity < level
       return true
     end
     if progname.nil?
