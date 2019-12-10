@@ -237,7 +237,7 @@ class Logger
     name = File.basename(__FILE__)
   end
   rev ||= "v#{VERSION}"
-  ProgName = "#{name}/#{rev}".freeze
+  ProgName = "#{name}/#{rev}"
 
   include Severity
 
@@ -366,7 +366,7 @@ class Logger
   # +datetime_format+::
   #   Date and time format. Default value is '%Y-%m-%d %H:%M:%S'.
   # +binmode+::
-  #   Use binany mode on the log device. Defaul value is false.
+  #   Use binary mode on the log device. Default value is false.
   # +shift_period_suffix+::
   #   The log file suffix format for +daily+, +weekly+ or +monthly+ rotation.
   #   Default is '%Y%m%d'.
@@ -574,7 +574,7 @@ class Logger
 private
 
   # Severity label for logging (max 5 chars).
-  SEV_LABEL = %w(DEBUG INFO WARN ERROR FATAL ANY).each(&:freeze).freeze
+  SEV_LABEL = %w(DEBUG INFO WARN ERROR FATAL ANY).freeze
 
   def format_severity(severity)
     SEV_LABEL[severity] || 'ANY'

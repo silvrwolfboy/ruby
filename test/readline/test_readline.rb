@@ -578,6 +578,53 @@ module BasetestReadline
     Readline.completer_word_break_characters = saved_completer_word_break_characters
   end
 
+  def test_simple_completion
+    skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
+    line = nil
+
+    open(IO::NULL, 'w') do |null|
+      IO.pipe do |r, w|
+        Readline.input = r
+        Readline.output = null
+        Readline.completion_proc = ->(text) do
+          ['abcde', 'abc12']
+        end
+        w.write("a\t\n")
+        w.flush
+        line = Readline.readline('> ', false)
+      end
+    end
+
+    assert_equal('abc', line)
+  end
+
+  def test_completion_with_completion_append_character
+    skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
+    skip "Reline doesn't still implement it" if defined?(Reline) and Readline == Reline
+    line = nil
+
+    append_character = Readline.completion_append_character
+    open(IO::NULL, 'w') do |null|
+      IO.pipe do |r, w|
+        Readline.input = r
+        Readline.output = null
+        Readline.completion_append_character = '!'
+        Readline.completion_proc = ->(text) do
+          ['abcde']
+        end
+        w.write("a\t\n")
+        w.flush
+        line = Readline.readline('> ', false)
+      end
+    end
+
+    assert_equal('abcde!', line)
+  ensure
+    return if /EditLine/n.match(Readline::VERSION)
+    return if defined?(Reline) and Readline == Reline
+    Readline.completion_append_character = append_character
+  end
+
   def test_completion_quote_character_completing_unquoted_argument
     return unless Readline.respond_to?(:completion_quote_character)
 
