@@ -434,6 +434,7 @@ module BasetestReadline
   def test_input_metachar
     skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
     skip("Won't pass on mingw w/readline 7.0.005 [ruby-core:45682]") if mingw?
+    skip 'Needs GNU Readline 6 or later' if windows? and kind_of?(TestReadline) and Readline::VERSION < '6.0'
     bug6601 = '[ruby-core:45682]'
     Readline::HISTORY << "hello"
     wo = nil
@@ -516,7 +517,9 @@ module BasetestReadline
       replace_stdio(stdin.path, stdout.path) do
         Readline.completion_proc = ->(text) do
           passed_text = text
-          ['completion']
+          ['completion'].map { |i|
+            i.encode(Encoding.default_external)
+          }
         end
         Readline.completer_quote_characters = '\'"'
         Readline.completer_word_break_characters = ' '
@@ -554,7 +557,9 @@ module BasetestReadline
       replace_stdio(stdin.path, stdout.path) do
         Readline.completion_proc = ->(text) do
           passed_text = text
-          ['completion']
+          ['completion'].map { |i|
+            i.encode(Encoding.default_external)
+          }
         end
         Readline.completer_quote_characters = '\'"'
         Readline.completer_word_break_characters = ' '
@@ -580,6 +585,7 @@ module BasetestReadline
 
   def test_simple_completion
     skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
+
     line = nil
 
     open(IO::NULL, 'w') do |null|
@@ -587,7 +593,9 @@ module BasetestReadline
         Readline.input = r
         Readline.output = null
         Readline.completion_proc = ->(text) do
-          ['abcde', 'abc12']
+          ['abcde', 'abc12'].map { |i|
+            i.encode(Encoding.default_external)
+          }
         end
         w.write("a\t\n")
         w.flush
@@ -610,7 +618,9 @@ module BasetestReadline
         Readline.output = null
         Readline.completion_append_character = '!'
         Readline.completion_proc = ->(text) do
-          ['abcde']
+          ['abcde'].map { |i|
+            i.encode(Encoding.default_external)
+          }
         end
         w.write("a\t\n")
         w.flush
@@ -673,6 +683,7 @@ module BasetestReadline
       # http://rubyci.s3.amazonaws.com/solaris11s-sunc/ruby-trunk/log/20181228T102505Z.fail.html.gz
       skip 'This test does not succeed on Oracle Developer Studio for now'
     end
+    skip 'Needs GNU Readline 6 or later' if windows? and kind_of?(TestReadline) and Readline::VERSION < '6.0'
 
     Readline.completion_proc = -> (_) { [] }
     Readline.completer_quote_characters = "'\""
