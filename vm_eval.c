@@ -47,8 +47,10 @@ rb_vm_call0(rb_execution_context_t *ec, VALUE recv, ID id, int argc, const VALUE
 {
     struct rb_calling_info calling = { Qundef, recv, argc, kw_splat, };
     struct rb_call_info ci = { id, (kw_splat ? VM_CALL_KW_SPLAT : 0), argc, };
-    struct rb_call_cache cc = { 0, { 0, }, me, me->def->method_serial, vm_call_general, 0, { 0, }, };
+    struct rb_call_cache cc = { 0, { 0, }, me, me->def->method_serial, vm_call_general, rb_gc_compact_count(), { 0, }, };
     struct rb_call_data cd = { cc, ci, };
+    rb_gc_check_compact(cc.compact_count);
+
     return vm_call0_body(ec, &calling, &cd, argv);
 }
 
@@ -111,6 +113,8 @@ vm_call0_body(rb_execution_context_t *ec, struct rb_calling_info *calling, struc
 {
     const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
+
+    rb_gc_check_compact(cc->compact_count);
 
     VALUE ret;
 

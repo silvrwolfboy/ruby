@@ -8114,7 +8114,11 @@ rb_gc_check_compact(size_t count)
 {
     rb_objspace_t *objspace = &rb_objspace;
 
-    assert(count == objspace->profile.compact_count);
+
+    if(count != objspace->profile.compact_count) {
+        fprintf(stderr, "compact count expected: %lu but was %lu\n", objspace->profile.compact_count, count);
+        assert(count == objspace->profile.compact_count);
+    }
 }
 
 /* Returns the new location of an object, if it moved.  Otherwise returns
