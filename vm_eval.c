@@ -1087,7 +1087,6 @@ rb_vm_update_cc_references(struct rb_call_data *cd)
             if (nv != cd->cc.me) {
                 if (nv->def) {
                     if (nv->def->method_serial == cd->cc.method_serial) {
-                        fprintf(stderr, "moved %p -> %p\n", (void*)cd->cc.me, (void*)nv);
                         cd->cc.me = nv;
                     } else {
                         fprintf(stderr, "serial doesn't match \n");
@@ -1095,8 +1094,6 @@ rb_vm_update_cc_references(struct rb_call_data *cd)
                 } else {
                     fprintf(stderr, "no def?\n");
                 }
-            } else {
-                fprintf(stderr, "didn't move %x\n", imemo_type((VALUE)nv));
             }
         } else {
             fprintf(stderr, "no nv\n");
