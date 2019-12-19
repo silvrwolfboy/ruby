@@ -673,16 +673,21 @@ static VALUE tm_from_time(VALUE klass, VALUE time);
 
 bool ruby_tz_uptodate_p;
 
+static void
+update_tz(void)
+{
+    if (ruby_tz_uptodate_p) return;
+    ruby_tz_uptodate_p = true;
+    tzset();
+}
+
 static struct tm *
 rb_localtime_r(const time_t *t, struct tm *result)
 {
 #if defined __APPLE__ && defined __LP64__
     if (*t != (time_t)(int)*t) return NULL;
 #endif
-    if (!ruby_tz_uptodate_p) {
-	ruby_tz_uptodate_p = true;
-	tzset();
-    }
+    update_tz();
 #ifdef HAVE_GMTIME_R
     result = localtime_r(t, result);
 #else
@@ -3140,9 +3145,7 @@ find_time_t(struct tm *tptr, int utc_p, time_t *tp)
     find_dst = 0 < tptr->tm_isdst;
 
     /* /etc/localtime might be changed. reload it. */
-    if (!ruby_tz_uptodate_p) {
-        tzset();
-    }
+    update_tz();
 
     tm0 = *tptr;
     if (tm0.tm_mon < 0) {
@@ -3365,12 +3368,12 @@ find_time_t(struct tm *tptr, int utc_p, time_t *tp)
 
     *tp = guess_lo +
           ((tptr->tm_year - tm_lo.tm_year) * 365 +
-           ((tptr->tm_year-69)/4) -
-           ((tptr->tm_year-1)/100) +
-           ((tptr->tm_year+299)/400) -
-           ((tm_lo.tm_year-69)/4) +
-           ((tm_lo.tm_year-1)/100) -
-           ((tm_lo.tm_year+299)/400) +
+           DIV((tptr->tm_year-69), 4) -
+           DIV((tptr->tm_year-1), 100) +
+           DIV((tptr->tm_year+299), 400) -
+           DIV((tm_lo.tm_year-69), 4) +
+           DIV((tm_lo.tm_year-1), 100) -
+           DIV((tm_lo.tm_year+299), 400) +
            tptr_tm_yday -
            tm_lo.tm_yday) * 86400 +
           (tptr->tm_hour - tm_lo.tm_hour) * 3600 +

@@ -434,7 +434,7 @@ module BasetestReadline
   def test_input_metachar
     skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
     skip("Won't pass on mingw w/readline 7.0.005 [ruby-core:45682]") if mingw?
-    skip 'Needs GNU Readline 6 or later' if windows? and kind_of?(TestReadline) and Readline::VERSION < '6.0'
+    skip 'Needs GNU Readline 6 or later' if windows? and defined?(TestReadline) and kind_of?(TestReadline) and Readline::VERSION < '6.0'
     bug6601 = '[ruby-core:45682]'
     Readline::HISTORY << "hello"
     wo = nil
@@ -608,7 +608,7 @@ module BasetestReadline
 
   def test_completion_with_completion_append_character
     skip "Skip Editline" if /EditLine/n.match(Readline::VERSION)
-    skip "Reline doesn't still implement it" if defined?(Reline) and Readline == Reline
+    skip "Readline.completion_append_character is not implemented" unless Readline.respond_to?(:completion_append_character=)
     line = nil
 
     append_character = Readline.completion_append_character
@@ -631,7 +631,7 @@ module BasetestReadline
     assert_equal('abcde!', line)
   ensure
     return if /EditLine/n.match(Readline::VERSION)
-    return if defined?(Reline) and Readline == Reline
+    return unless Readline.respond_to?(:completion_append_character=)
     Readline.completion_append_character = append_character
   end
 
@@ -683,7 +683,7 @@ module BasetestReadline
       # http://rubyci.s3.amazonaws.com/solaris11s-sunc/ruby-trunk/log/20181228T102505Z.fail.html.gz
       skip 'This test does not succeed on Oracle Developer Studio for now'
     end
-    skip 'Needs GNU Readline 6 or later' if windows? and kind_of?(TestReadline) and Readline::VERSION < '6.0'
+    skip 'Needs GNU Readline 6 or later' if windows? and defined?(TestReadline) and kind_of?(TestReadline) and Readline::VERSION < '6.0'
 
     Readline.completion_proc = -> (_) { [] }
     Readline.completer_quote_characters = "'\""
