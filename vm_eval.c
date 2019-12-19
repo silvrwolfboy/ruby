@@ -1077,6 +1077,9 @@ rb_vm_update_cc_references(struct rb_call_data *cd)
     if (GET_GLOBAL_METHOD_STATE() == cd->cc.method_state && cd->cc.me) {
         struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cd->cc.me);
         if (nv) {
+            Check_Type(nv, T_IMEMO);
+            assert(imemo_ment == imemo_type((VALUE)nv));
+
             if (nv != cd->cc.me) {
                 if (nv->def) {
                     if (nv->def->method_serial == cd->cc.method_serial) {
@@ -1089,7 +1092,7 @@ rb_vm_update_cc_references(struct rb_call_data *cd)
                     fprintf(stderr, "no def?\n");
                 }
             } else {
-                fprintf(stderr, "didn't move\n");
+                fprintf(stderr, "didn't move %x\n", imemo_type((VALUE)nv));
             }
         } else {
             fprintf(stderr, "no nv\n");
