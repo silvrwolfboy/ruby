@@ -1076,8 +1076,23 @@ rb_vm_update_cc_references(struct rb_call_data *cd)
     cd->cc.compact_count = rb_gc_compact_count();
     if (GET_GLOBAL_METHOD_STATE() == cd->cc.method_state && cd->cc.me) {
         struct rb_callable_method_entry_struct *nv = (struct rb_callable_method_entry_struct *)rb_gc_location((VALUE)cd->cc.me);
-        if (nv && nv != cd->cc.me && nv->def->method_serial == cd->cc.method_serial) {
-            cd->cc.me = nv;
+        if (nv) {
+            if (nv != cd->cc.me) {
+                if (nv->def) {
+                    if (nv->def->method_serial == cd->cc.method_serial) {
+                        fprintf(stderr, "moved %p -> %p\n", (void*)cd->cc.me, (void*)nv);
+                        cd->cc.me = nv;
+                    } else {
+                        fprintf(stderr, "serial doesn't match \n");
+                    }
+                } else {
+                    fprintf(stderr, "no def?\n");
+                }
+            } else {
+                fprintf(stderr, "didn't move\n");
+            }
+        } else {
+            fprintf(stderr, "no nv\n");
         }
     }
 }
