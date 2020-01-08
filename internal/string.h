@@ -69,7 +69,18 @@ VALUE rb_id_quote_unprintable(ID);
 VALUE rb_sym_proc_call(ID mid, int argc, const VALUE *argv, int kw_splat, VALUE passed_proc);
 MJIT_SYMBOL_EXPORT_END
 
+#ifdef __GNUC__
+#define rb_fstring_lit(str) \
+    __extension__({ \
+	static VALUE rb_fstring_cache = 0; \
+	if (!rb_fstring_cache) \
+	    rb_fstring_cache = rb_fstring_new((str), rb_strlen_lit(str));\
+	(rb_fstring_cache); \
+    })
+#else
 #define rb_fstring_lit(str) rb_fstring_new((str), rb_strlen_lit(str))
+#endif
+
 #define rb_fstring_literal(str) rb_fstring_lit(str)
 #define rb_fstring_enc_lit(str, enc) rb_fstring_enc_new((str), rb_strlen_lit(str), (enc))
 #define rb_fstring_enc_literal(str, enc) rb_fstring_enc_lit(str, enc)
