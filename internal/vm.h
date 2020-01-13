@@ -197,7 +197,7 @@ MJIT_SYMBOL_EXPORT_END
     __extension__({ \
         static struct rb_call_data rb_funcallv_data; \
         static VALUE wrapper = 0; \
-        if (UNLIKELY(!wrapper)) { \
+        if (!wrapper) { \
             SET_COMPACT_COUNT(rb_funcallv_data) \
             wrapper = rb_imemo_new(imemo_call_data, (VALUE)&rb_funcallv_data, 0, 0, (VALUE)&rb_funcallv_data); \
             rb_gc_register_mark_object(wrapper); \
@@ -208,7 +208,7 @@ MJIT_SYMBOL_EXPORT_END
     __extension__({ \
         static struct rb_call_data rb_mbdp; \
         static VALUE wrapper = 0; \
-        if (UNLIKELY(!wrapper)) { \
+        if (!wrapper) { \
             SET_COMPACT_COUNT(rb_mbdp) \
             wrapper = rb_imemo_new(imemo_call_data, (VALUE)&rb_mbdp, 0, 0, (VALUE)&rb_mbdp); \
             rb_gc_register_mark_object(wrapper); \
