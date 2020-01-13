@@ -969,7 +969,7 @@ rb_funcallv_public_kw(VALUE recv, ID mid, int argc, const VALUE *argv, int kw_sp
  * \param argv   pointer to an array of method arguments
  */
 VALUE
-rb_funcallv_with_cc(struct rb_call_data *cd, VALUE recv, ID mid, int argc, const VALUE *argv)
+rb_funcallv_with_cc(struct rb_call_data *cd, VALUE recv, ID mid, int argc, const VALUE *argv, VALUE *wrapper)
 {
     const struct rb_call_info *ci = &cd->ci;
     struct rb_call_cache *cc = &cd->cc;
@@ -990,6 +990,11 @@ rb_funcallv_with_cc(struct rb_call_data *cd, VALUE recv, ID mid, int argc, const
                 argv
             );
         }
+    }
+
+    if (UNLIKELY(!*wrapper)) {
+        *wrapper = rb_imemo_new(imemo_call_data, (VALUE)cd, 0, 0, (VALUE)cd);
+        rb_gc_register_mark_object(*wrapper);
     }
 
     *cd = (struct rb_call_data) /* reset */ { { 0, }, { mid, }, };

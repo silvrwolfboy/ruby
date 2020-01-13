@@ -163,7 +163,7 @@ MJIT_SYMBOL_EXPORT_END
 
 RUBY_SYMBOL_EXPORT_BEGIN
 /* vm_method.c */
-RUBY_FUNC_NONNULL(1, VALUE rb_funcallv_with_cc(struct rb_call_data*, VALUE, ID, int, const VALUE*));
+RUBY_FUNC_NONNULL(1, VALUE rb_funcallv_with_cc(struct rb_call_data*, VALUE, ID, int, const VALUE*, VALUE*));
 RUBY_FUNC_NONNULL(1, bool rb_method_basic_definition_p_with_cc(struct rb_call_data *, VALUE, ID));
 RUBY_SYMBOL_EXPORT_END
 
@@ -197,12 +197,7 @@ MJIT_SYMBOL_EXPORT_END
     __extension__({ \
         static struct rb_call_data rb_funcallv_data; \
         static VALUE wrapper = 0; \
-        if (!wrapper) { \
-            SET_COMPACT_COUNT(rb_funcallv_data) \
-            wrapper = rb_imemo_new(imemo_call_data, (VALUE)&rb_funcallv_data, 0, 0, (VALUE)&rb_funcallv_data); \
-            rb_gc_register_mark_object(wrapper); \
-        } \
-        rb_funcallv_with_cc(&rb_funcallv_data, recv, mid, argc, argv); \
+        rb_funcallv_with_cc(&rb_funcallv_data, recv, mid, argc, argv, &wrapper); \
     })
 # define rb_method_basic_definition_p(klass, mid) \
     __extension__({ \
